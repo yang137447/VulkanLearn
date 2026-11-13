@@ -60,6 +60,11 @@ Maps/SC_third_person/
   `FAnimNode_StateMachine` 的循环预算与首帧丢混合语义实现；Third Person 图显式
   使用 UE 类默认值 3 / true，VL 自身的默认值保持 1 / false 以保留原有预算与混合
   行为；entry 帧开始检查常规转移是与 UE 对齐的新行为。
+- Pose Graph 首组：`SaveCachedPose`/`UseCachedPose` 用实例级局部姿态快照，
+  `AdditiveClip` 按 UE `AAT_LocalSpaceBase` 的 `base * inverse(reference)` 复合，
+  `Slot` 先作为图级元数据。Third Person 的 `Land` 改为
+  `UseCachedPose = "Locomotion"` + `AdditiveClip = "MM_Land"`，与官方 ABP 的
+  `UseCachedPose + ApplyAdditive(Alpha=1)` 一致。
 - `ThirdPersonLocomotionGraph`：两层状态机；`Idle` 与 `Walk / Run`
   BlendSpace1D（Speed 轴 0 = Walk_InPlace、230 = Walk、500 = Run），以及
   `Jump`/`Fall Loop`/`Land`，共享 `To Falling` / `To Land` alias。
@@ -100,15 +105,22 @@ UE 基准来自只读 T3D 导出
 `BlendParameters(0)=(DisplayName="Speed",Max=500)`，sample 为
 `MM_Run_Fwd @ 500`、`MM_Walk_Fwd @ 230`、`MM_Walk_InPlace @ 0`。
 
+Pose Graph 的 UE 依据来自 `tool/animation/inspect_third_person_additive.py`
+（输出 `artifacts/third-person-additive-audit/additive-audit.json`）：
+根图 `SaveCachedPose` 的 `CachePoseName=""`、`Slot` 的 `SlotName="DefaultSlot"`、
+`Land` 的 `ApplyAdditive` 为 `Alpha=1.000000`；同一工程导出的
+`MM_Land.anim.json` 带 `rootMotion.additiveAnimType = "LocalSpaceBase"`。
+
 回归证据（Release，`artifacts/third-person-test-build`）：
 
-- `animation_preflight_tests`：360/360 通过，覆盖片段骨骼子集导入与
-  `SkeletalBlendSpace` 相位/端点/夹紧。
-- `script_tests --gtest_filter=ScriptLocomotionTest.*`：32/32 通过，覆盖
+- `animation_preflight_tests`：364/364 通过，覆盖片段骨骼子集导入、
+  `SkeletalBlendSpace` 相位/端点/夹紧，以及 `SkeletalAdditive`/`SkeletalCachedPose`。
+- `script_tests --gtest_filter=ScriptLocomotionTest.*`：33/33 通过，覆盖
   alias/VerticalSpeed/BlendSpace（230/365/500、端点、三 sample 区间、0.1 s 重插值）
   与 Conduit（同帧落地、入口规则回落、链、环、入口 conduit）、以及
-  `MaxTransitionsPerFrame`/`SkipFirstUpdateTransition`；校验 mask 扩展到 65535。
-- 整套 `script_tests`：511 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
+  `MaxTransitionsPerFrame`/`SkipFirstUpdateTransition` 与 Pose Graph 决策输出；
+  校验 mask 扩展到 524287。
+- 整套 `script_tests`：512 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
   `vl-build-*` 时被本机沙箱拒绝）加 1 个偶发的
   `FormalGaspFootPlacementDynamicQualityUsesFrozenRawRootStanceWindows`。
   后者曾在同一资源上出现约 11 cm 支撑误差；2026-10-24 的主干二进制通过同一用例，

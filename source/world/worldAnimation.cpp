@@ -196,7 +196,12 @@ nlohmann::json World::ScriptAnimationFeedback() const
                     {"syncDiagnostic", player.SyncDiagnosticName()},
                     {"blendSpace", {{"active", player.BlendSpaceActive()},
                         {"clip", player.BlendSpaceClipId()},
-                        {"weight", player.BlendSpaceWeight()}}}};
+                        {"weight", player.BlendSpaceWeight()}}},
+                    {"additive", {{"active", player.AdditiveActive()},
+                        {"clip", player.AdditiveClipId()},
+                        {"alpha", player.AdditiveAlpha()}}},
+                    {"cachedPose", {{"active", player.CachedPoseActive()},
+                        {"name", player.CachedPoseName()}}}};
                 const auto& rootMotion = player.RootMotionDelta();
                 feedback["rootMotion"] = nlohmann::json::array(
                     {rootMotion.x(), rootMotion.y(), rootMotion.z()});
@@ -389,7 +394,8 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
         // blendSpace 与后处理配置一样，是基于同一 batch 前一条播放命令的附加候选。
         const bool postProcessConfiguration = mode == "configureSlopeWarping" ||
             mode == "configurePoseDriver" || mode == "configurePostProcess" ||
-            mode == "configureBonePhysics" || mode == "blendSpace";
+            mode == "configureBonePhysics" || mode == "blendSpace" ||
+            mode == "additive" || mode == "cachedPose";
         if (!player || (!postProcessConfiguration && candidates.count(player)))
             throw std::invalid_argument("Script.InvalidAnimationTarget");
         const auto existing = candidates.find(player);
@@ -667,6 +673,45 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                     throw std::invalid_argument("Script.InvalidBlendSpaceRequest");
                 candidate.SetBlendSpace1D(clipA, clipB, weight);
             }
+        }
+        else if (request.value("mode", std::string()) == "additive")
+        {
+            // ApplyAdditive（LocalSpaceBase）是状态姿态的一部分：只更新叠加片段与权重，
+            // 基础时钟仍由同一 batch 的 play/transitionTo/缓存姿态决定。
+            if (!request.contains("enabled") || !request.at("enabled").is_boolean())
+                throw std::invalid_argument("Script.InvalidAdditiveRequest");
+            if (!request.at("enabled").get<bool>())
+                candidate.ClearAdditive();
+            else
+            {
+                if (!request.contains("clip") || !request.at("clip").is_string() ||
+                    !request.contains("alpha") || !request.at("alpha").is_number() ||
+                    !request.contains("loop") || !request.at("loop").is_boolean())
+                    throw std::invalid_argument("Script.InvalidAdditiveRequest");
+                const std::string clip = request.at("clip").get<std::string>();
+                const float alpha = request.at("alpha").get<float>();
+                if (clip.empty() || clip.size() > 256 || !std::isfinite(alpha))
+                    throw std::invalid_argument("Script.InvalidAdditiveRequest");
+                candidate.SetAdditive(clip, alpha, request.at("loop").get<bool>());
+            }
+        }
+        else if (request.value("mode", std::string()) == "cachedPose")
+        {
+            // SaveCachedPose/UseCachedPose：capture 在提交时保存上一帧最终姿态；
+            // use 让播放器以该快照为 Base（不推进片段时钟）。
+            if (!request.contains("enabled") || !request.at("enabled").is_boolean() ||
+                !request.contains("capture") || !request.at("capture").is_boolean() ||
+                !request.contains("name") || !request.at("name").is_string())
+                throw std::invalid_argument("Script.InvalidCachedPoseRequest");
+            const std::string name = request.at("name").get<std::string>();
+            if (name.empty() || name.size() > 128)
+                throw std::invalid_argument("Script.InvalidCachedPoseRequest");
+            if (!request.at("enabled").get<bool>())
+                candidate.ClearCachedPose();
+            else if (request.at("capture").get<bool>())
+                candidate.CaptureCachedPose(name);
+            else
+                candidate.UseCachedPose(name);
         }
         else
         {

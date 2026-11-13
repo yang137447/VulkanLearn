@@ -266,6 +266,7 @@ void SkeletalPlayback::Stop()
     playing = false;
     explicitlyPaused = false;
     ClearBlendSpace();
+    ClearCachedPose();
     ClearSyncSourceClock();
     syncDecisionValid = false;
     syncLeader.clear();
@@ -311,6 +312,77 @@ std::string SkeletalPlayback::BlendSpaceClipId() const
     const auto& animation = asset->AnimationAsset();
     if (!blendSpaceActive || blendSpaceClip >= animation.clips.size()) return {};
     return animation.clips[blendSpaceClip].id;
+}
+
+void SkeletalPlayback::SetAdditive(const std::string& clipId, float alpha, bool loop)
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!std::isfinite(alpha))
+        throw std::invalid_argument("Additive alpha must be finite");
+    size_t index = 0;
+    while (index < animation.clips.size() && animation.clips[index].id != clipId) ++index;
+    if (index == animation.clips.size())
+        throw std::invalid_argument("Unknown animation additive clip: " + clipId);
+    const auto& clip = animation.clips[index];
+    // 只有 LocalSpaceBase 增量能按 UE 的局部 TRS 复合执行；MeshSpace/RotationOffset
+    // 需要另一套数学，显式拒绝而不是静默降级。
+    if (clip.sequence.additiveAnimType != "LocalSpaceBase")
+        throw std::invalid_argument(
+            "Additive clip must be LocalSpaceBase: " + clipId);
+    // 同一片段保持自己的时钟（权重/循环可在不重启的情况下更新）。
+    if (!additiveActive || additiveClip != index)
+    {
+        additiveTime = 0;
+        additiveClip = index;
+    }
+    additiveAlpha = std::clamp(alpha, 0.0f, 1.0f);
+    additiveLoop = loop;
+    additiveActive = true;
+}
+
+void SkeletalPlayback::ClearAdditive()
+{
+    additiveActive = false;
+    additiveAlpha = 0;
+    additiveTime = 0;
+}
+
+std::string SkeletalPlayback::AdditiveClipId() const
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!additiveActive || additiveClip >= animation.clips.size()) return {};
+    return animation.clips[additiveClip].id;
+}
+
+void SkeletalPlayback::CaptureCachedPose(const std::string& name)
+{
+    if (name.empty() || name.size() > 128)
+        throw std::invalid_argument("Cached pose name is invalid");
+    // 首帧尚未求值：UE 的 SaveCachedPose 也只在有 pose 后才有内容；静默跳过，
+    // 不能让一条捕获命令把同一批播放命令整体作废。
+    if (displayedLocals.empty())
+        return;
+    // 缓存态下 displayedLocals 已包含 additive；若继续写回缓存，下一帧会把它
+    // 当成 Base 再次叠加（缩放/位移会逐帧累积）。Land 期间缓存必须保持冻结。
+    if (useCachedPoseActive)
+        return;
+    cachedPoses[name] = displayedLocals;
+}
+
+void SkeletalPlayback::UseCachedPose(const std::string& name)
+{
+    if (name.empty() || name.size() > 128)
+        throw std::invalid_argument("Cached pose name is invalid");
+    if (cachedPoses.find(name) == cachedPoses.end())
+        throw std::invalid_argument("Unknown cached pose: " + name);
+    useCachedPoseName = name;
+    useCachedPoseActive = true;
+}
+
+void SkeletalPlayback::ClearCachedPose()
+{
+    useCachedPoseActive = false;
+    useCachedPoseName.clear();
 }
 
 LocalPose SkeletalPlayback::Sample(size_t clipIndex, float sampleTime) const
@@ -424,6 +496,7 @@ void SkeletalPlayback::TransitionTo(const std::string& clipId, float seconds, bo
     candidate.blendDuration = blendSeconds;
     // 过渡开启新的目标片段；旧的混合源属于上一播放段，不能带到新时钟上。
     candidate.ClearBlendSpace();
+    candidate.ClearCachedPose();
     auto target = candidate.Sample(index, seconds);
     std::shared_ptr<const std::vector<Eigen::Matrix4f>> targetModels;
     auto targetPoses = candidate.Evaluate(target, discontinuity + (blendSeconds == 0), targetModels);
@@ -595,6 +668,7 @@ void SkeletalPlayback::Seek(float seconds)
     blendSource.clear();
     inertialization.Clear();
     ClearBlendSpace();
+    ClearCachedPose();
     time = seconds;
     selected = sampleClip;
     montageSegment = segmentIndex;
@@ -639,6 +713,7 @@ void SkeletalPlayback::Select(size_t clipIndex)
     blendSource.clear();
     inertialization.Clear();
     ClearBlendSpace();
+    ClearCachedPose();
     selected = clipIndex;
     time = 0;
     activeSyncGroup.clear();

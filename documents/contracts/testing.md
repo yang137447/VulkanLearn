@@ -401,7 +401,10 @@ inPlace 与冻结姿态所有权。`SkeletalBlendSpace` 验证 BlendSpace1D 的�
 `ScriptLocomotionTest` 验证图级 State Alias、`VerticalSpeed`、BlendSpace1D 的
 sample/权重选择，以及 Conduit 的同帧落地、入口规则回落、链、环与入口 conduit；
 `MaxTransitionsPerFrame` 预算与 `SkipFirstUpdateTransition` 的首帧不混合语义
-也在同一套件覆盖；它只证明图决策，不证明资源侧姿态观感。
+也在同一套件覆盖；Pose Graph 探针验证 `UseCachedPose`/`AdditiveClip`/`Slot` 的
+决策输出与互斥校验。它只证明图决策，不证明资源侧姿态观感。
+原生 `SkeletalAdditive` 验证 LocalSpaceBase 增量的平移/旋转/缩放复合与 alpha
+收缩，`SkeletalCachedPose` 验证快照冻结、无根位移与 additive 叠加。
 
 `EditorUiTest.MotionMatching*` 验证同代查询/代价、Selected/Continue/前五名、
 文字转义、固定槽位、展开状态的暂停静默、隐藏条件、短视口滚动/输入隔离和单行摘要；

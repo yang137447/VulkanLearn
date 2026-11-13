@@ -103,6 +103,11 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
         throw std::invalid_argument("Playback delta must be finite and nonnegative");
     rootMotionDelta.setZero();
     rootMotionYawDelta = 0;
+    if (useCachedPoseActive)
+    {
+        TickCachedPose(deltaSeconds);
+        return;
+    }
     // 同步组对齐先于本 tick 的时间推进应用：跳变本身不产生根位移，
     // 本帧根轨迹从对齐后的 time 到采样点，等价于 UE 的 follower 校正。
     bool syncJumped = false;
@@ -139,6 +144,7 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     pendingNotifies.clear();
     if (!playing || Duration() == 0 || deltaSeconds == 0) return;
     AdvanceSyncSourceClock(deltaSeconds);
+    AdvanceAdditiveClock(deltaSeconds);
     if (syncJumped)
     {
         // 与 Seek 一样，相位跳变不补发被跳过的事件；只按新位置重建活动区间，
@@ -199,6 +205,8 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
         else if (blendSpaceWeight > 0.0f)
             locals = Crossfade(locals, std::move(blendPose), blendSpaceWeight, asset->mesh);
     }
+    // ApplyAdditive 属于本状态姿态的一部分：先加在状态局部姿态上，再参与过渡混合。
+    locals = ApplyAdditive(std::move(locals));
     if (!inertialization.Empty() && elapsed < blendDuration)
     {
         const auto target = ReadKinematics(locals, asset->mesh.joints.size());
@@ -274,5 +282,72 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
 std::shared_ptr<SkeletalPlayback> SkeletalPlayback::NewInstance() const
 {
     return std::make_shared<SkeletalPlayback>(asset);
+}
+
+void SkeletalPlayback::AdvanceAdditiveClock(float deltaSeconds)
+{
+    if (!additiveActive || deltaSeconds <= 0) return;
+    const auto& animation = asset->AnimationAsset();
+    if (additiveClip >= animation.clips.size()) return;
+    const auto& clip = animation.clips[additiveClip];
+    const float duration = clip.runtime ? clip.runtime->duration() : 0.0f;
+    if (duration <= 0) return;
+    additiveTime += deltaSeconds;
+    if (additiveLoop)
+        additiveTime = std::fmod(additiveTime, duration);
+    else
+        additiveTime = std::min(additiveTime, std::max(0.0f, duration - 1e-4f));
+}
+
+LocalPose SkeletalPlayback::ApplyAdditive(LocalPose locals) const
+{
+    if (!additiveActive || additiveAlpha <= 0) return locals;
+    const auto& animation = asset->AnimationAsset();
+    if (additiveClip >= animation.clips.size()) return locals;
+    const auto rest = asset->mesh.runtime->joint_rest_poses();
+    const LocalPose reference(rest.begin(), rest.end());
+    const LocalPose sample = Sample(additiveClip, additiveTime);
+    return ApplyLocalSpaceAdditive(locals, sample, reference, additiveAlpha,
+        asset->mesh.joints.size());
+}
+
+void SkeletalPlayback::TickCachedPose(float deltaSeconds)
+{
+    firedNotifies = std::move(pendingNotifies);
+    pendingNotifies.clear();
+    const auto found = cachedPoses.find(useCachedPoseName);
+    if (found == cachedPoses.end())
+        throw std::runtime_error("Cached pose disappeared: " + useCachedPoseName);
+    AdvanceAdditiveClock(deltaSeconds);
+    auto locals = found->second;
+    locals = ApplyAdditive(std::move(locals));
+    const float elapsed = IsBlending() ? std::min(blendElapsed + deltaSeconds, blendDuration) : 0;
+    if (!inertialization.Empty() && elapsed < blendDuration)
+    {
+        const auto target = ReadKinematics(locals, asset->mesh.joints.size());
+        locals = WriteKinematics(std::move(locals), inertialization.Evaluate(target, elapsed));
+    }
+    else if (!blendSource.empty() && elapsed < blendDuration)
+        locals = Crossfade(blendSource, std::move(locals), elapsed / blendDuration, asset->mesh);
+    std::shared_ptr<const std::vector<Eigen::Matrix4f>> nextModels;
+    auto nextPoses = Evaluate(locals, discontinuity, nextModels);
+    poses.swap(nextPoses);
+    jointModels.swap(nextModels);
+    preIkModels = jointModels;
+    motionModels = jointModels;
+    visualLocals.clear();
+    slopeWarpedLocals.clear();
+    footPlacementSource.reset();
+    displayedLocals.swap(locals);
+    // 缓存姿态不推进片段时钟，也不贡献根位移；过渡混合仍按真实 delta 收尾。
+    rootMotionDelta.setZero();
+    rootMotionYawDelta = 0;
+    blendElapsed = elapsed;
+    if (IsBlending() && elapsed >= blendDuration)
+    {
+        blendSource.clear();
+        inertialization.Clear();
+        ClearSyncSourceClock();
+    }
 }
 }

@@ -587,3 +587,6 @@ nodes from AnimSequence FBXs, so VL sees a skinnable mesh plus skeleton-only
 clip hierarchies. `build_third_person_assets.py` converts the UE dump into
 `Maps/SC_third_person` skeleton, sequence sidecars, mesh and neutral PBR
 material. See `documents/rationale/third-person-template-sample-record.md`.
+`inspect_third_person_additive.py` dumps the `SaveCachedPose` / `Slot` /
+`ApplyAdditive` node properties and the Manny AnimSequence list, which pins the
+`LocalSpaceBase` additive and `DefaultSlot` facts used by the pose-graph slice.

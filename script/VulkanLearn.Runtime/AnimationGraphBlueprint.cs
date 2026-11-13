@@ -11,6 +11,11 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     private bool blendSubmitted;
     private string lastBlendClip = "";
     private float lastBlendWeight;
+    private bool additiveSubmitted;
+    private string lastAdditiveClip = "";
+    private float lastAdditiveAlpha;
+    private bool lastAdditiveLoop;
+    private bool cachedPoseSubmitted;
 
     public AnimationGraphDefinition Graph { get; private set; } = null!;
     public AnimationGraphRuntime GraphRuntime => runtime ??
@@ -39,25 +44,50 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
 
     protected virtual void SubmitDecision(in AnimationGraphDecision next)
     {
-        if (string.IsNullOrEmpty(next.Clip)) return;
         var playback = Animation.State;
-        if (next.Changed || !string.Equals(playback.Clip, next.Clip, StringComparison.Ordinal))
+        if (next.UseCachedPose.Length > 0)
         {
-            if (next.Crossfade || next.StartPosition > 0)
+            Animation.UseCachedPose(next.UseCachedPose);
+            cachedPoseSubmitted = true;
+            // 缓存姿态没有自己的片段时钟；离开缓存状态时再显式清除。
+            if (blendSubmitted)
             {
-                Animation.PlayTransition(next.Clip, next.StartPosition, next.Loop,
-                    next.BlendSeconds, InPlace, 1, next.Crossfade && next.Inertialization,
-                    next.Crossfade ? next.SyncGroup : "",
-                    next.Crossfade ? next.SyncPhase : -1);
+                Animation.ClearBlendSpace();
+                blendSubmitted = false;
             }
-            else
-            {
-                Animation.Play(next.Clip, next.Loop, 1, InPlace);
-            }
-            // 新播放段需要重新声明混合源；原生 TransitionTo/Play 已把它清空。
-            blendSubmitted = false;
+            SubmitAdditive(next);
         }
-        SubmitBlendSpace(next);
+        else
+        {
+            if (cachedPoseSubmitted)
+            {
+                Animation.ClearCachedPose();
+                cachedPoseSubmitted = false;
+            }
+            if (next.Clip.Length > 0 &&
+                (next.Changed || !string.Equals(playback.Clip, next.Clip, StringComparison.Ordinal)))
+            {
+                if (next.Crossfade || next.StartPosition > 0)
+                {
+                    Animation.PlayTransition(next.Clip, next.StartPosition, next.Loop,
+                        next.BlendSeconds, InPlace, 1, next.Crossfade && next.Inertialization,
+                        next.Crossfade ? next.SyncGroup : "",
+                        next.Crossfade ? next.SyncPhase : -1);
+                }
+                else
+                {
+                    Animation.Play(next.Clip, next.Loop, 1, InPlace);
+                }
+                // 新播放段需要重新声明混合源；原生 TransitionTo/Play 已把它清空。
+                blendSubmitted = false;
+            }
+            SubmitBlendSpace(next);
+            SubmitAdditive(next);
+        }
+        // UE 的根 SaveCachedPose 保存最终输出；命令在下一帧生效，正好对应
+        // “进入 Land 时使用上一帧姿态”的时序。
+        if (Graph.SaveCachedPose.Length > 0)
+            Animation.CaptureCachedPose(Graph.SaveCachedPose);
     }
 
     // 权重变化只提交混合候选，不重启 A 的时钟；离开混合状态时显式清除原生混合源。
@@ -78,5 +108,28 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
         blendSubmitted = true;
         lastBlendClip = next.BlendClip;
         lastBlendWeight = next.BlendWeight;
+    }
+
+    // ApplyAdditive 是状态姿态的一部分；权重/片段变化才重新提交，原生保留自己的时钟。
+    private void SubmitAdditive(in AnimationGraphDecision next)
+    {
+        if (next.AdditiveClip.Length == 0)
+        {
+            if (!additiveSubmitted) return;
+            Animation.ClearAdditive();
+            additiveSubmitted = false;
+            lastAdditiveClip = "";
+            return;
+        }
+        if (additiveSubmitted &&
+            string.Equals(lastAdditiveClip, next.AdditiveClip, StringComparison.Ordinal) &&
+            MathF.Abs(lastAdditiveAlpha - next.AdditiveAlpha) < 1e-4f &&
+            lastAdditiveLoop == next.AdditiveLoop)
+            return;
+        Animation.SetAdditive(next.AdditiveClip, next.AdditiveAlpha, next.AdditiveLoop);
+        additiveSubmitted = true;
+        lastAdditiveClip = next.AdditiveClip;
+        lastAdditiveAlpha = next.AdditiveAlpha;
+        lastAdditiveLoop = next.AdditiveLoop;
     }
 }

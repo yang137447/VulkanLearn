@@ -78,6 +78,9 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
         mask |= Catch(1024, BlendDuplicateClip());
         mask |= Catch(2048, BlendUnknownAxis());
         mask |= Catch(32768, MaxTransitionsOutOfRange());
+        mask |= Catch(65536, AdditiveOnConduit());
+        mask |= Catch(131072, AdditiveAlphaWithoutClip());
+        mask |= Catch(262144, CachedPoseWithClip());
         mask |= Catch(4096, ConduitWithClip());
         mask |= Catch(8192, EntryRuleOnContentState());
         mask |= Catch(16384, EntryConduitWithoutFlag());
@@ -308,6 +311,63 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
                 Name = "Root", EntryState = "A",
                 MaxTransitionsPerFrame = 0,
                 States = new[] { new AnimationGraphState { Name = "A", Clip = "Clip_A" } }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition AdditiveOnConduit() => new()
+    {
+        Name = "AdditiveOnConduit", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Conduit = true, AdditiveClip = "MM_Land"
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition AdditiveAlphaWithoutClip() => new()
+    {
+        Name = "AdditiveAlphaWithoutClip", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A", AdditiveAlpha = 0.5f
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition CachedPoseWithClip() => new()
+    {
+        Name = "CachedPoseWithClip", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A", UseCachedPose = "Locomotion"
+                    }
+                }
             }
         }
     };
@@ -769,6 +829,70 @@ public sealed class AnimationGraphRateProbeBlueprint : Blueprint
 
 // State Machine 设置探针：MaxTransitionsPerFrame 预算与 SkipFirstUpdateTransition 的
 // “首帧转移不混合”语义（UE AnimNode_StateMachine 类默认值 3 / true）。
+public sealed class AnimationGraphPoseGraphProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var runtime = new AnimationGraphRuntime(BuildGraph());
+        runtime.Update(Input(0));
+        var cached = runtime.Update(Input(10));
+
+        Transform.Position = new(
+            Flag(cached.UseCachedPose == "Locomotion"),
+            Flag(cached.AdditiveClip == "MM_Land" && MathF.Abs(cached.AdditiveAlpha - 0.5f) < 1e-4f),
+            Flag(cached.Slot == "DefaultSlot"));
+        Transform.Rotation = new(
+            Flag(cached.Clip.Length == 0),
+            Flag(cached.SaveCachedPose == "Locomotion"),
+            Flag(cached.LeafState == "Cached"));
+        Transform.Scale = new(
+            Flag(cached.Changed),
+            Flag(cached.Completed == false),
+            Flag(!cached.AdditiveLoop));
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => new()
+    {
+        Name = "PoseGraphProbe",
+        RootStateMachine = "Root",
+        SaveCachedPose = "Locomotion",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "MM_Idle" },
+                    new AnimationGraphState
+                    {
+                        Name = "Cached",
+                        UseCachedPose = "Locomotion",
+                        AdditiveClip = "MM_Land",
+                        AdditiveAlpha = 0.5f,
+                        Slot = "DefaultSlot"
+                    }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "Cached",
+                        Condition = AnimationGraphCondition.Speed(5,
+                            AnimationGraphComparison.GreaterThan)
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput Input(float speed) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, speed, speed, speed, 0, 1f / 60,
+            "", 0, 1, false, true, 0);
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
 public sealed class AnimationGraphSettingsProbeBlueprint : Blueprint
 {
     protected override void BeginPlay()

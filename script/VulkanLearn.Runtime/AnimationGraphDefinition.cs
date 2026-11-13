@@ -40,7 +40,7 @@ public sealed class AnimationGraphState
     public const int MaximumBlendSamples = 3;
 
     public string Name { get; init; } = "";
-    // Clip、SubStateMachine、BlendSamples 与 Conduit 必须四选一。
+    // Clip、SubStateMachine、BlendSamples、Conduit 与 UseCachedPose 必须五选一。
     public string Clip { get; init; } = "";
     public bool Loop { get; init; } = true;
     public float Rate { get; init; } = 1;
@@ -53,6 +53,14 @@ public sealed class AnimationGraphState
     public string BlendAxis { get; init; } = AnimationGraphBlendAxis.Speed;
     public IReadOnlyList<AnimationGraphBlendSample> BlendSamples { get; init; } =
         Array.Empty<AnimationGraphBlendSample>();
+    // UE UseCachedPose：以之前 SaveCachedPose 的快照作为本状态 Base（不推进片段时钟）。
+    public string UseCachedPose { get; init; } = "";
+    // UE ApplyAdditive（LocalSpaceBase）：叠加在 Clip/BlendSamples/UseCachedPose 之上。
+    public string AdditiveClip { get; init; } = "";
+    public float AdditiveAlpha { get; init; } = 1;
+    public bool AdditiveLoop { get; init; }
+    // UE Slot 元数据：本切片由宿主 montage 承担，图只记录名字。
+    public string Slot { get; init; } = "";
     // UE Conduit：无姿态的过路状态，只能作为转移目标；进入后同一帧继续求值它的出边。
     // EntryRule 为 null 表示无条件；只有 Conduit 可以声明入口规则。
     public bool Conduit { get; init; }
@@ -71,12 +79,23 @@ public sealed class AnimationGraphState
         bool hasClip = !string.IsNullOrWhiteSpace(Clip);
         bool hasMachine = !string.IsNullOrWhiteSpace(SubStateMachine);
         bool hasBlend = BlendSamples is { Count: > 0 };
+        bool hasCachedPose = !string.IsNullOrWhiteSpace(UseCachedPose);
         int declarations = (hasClip ? 1 : 0) + (hasMachine ? 1 : 0) + (hasBlend ? 1 : 0) +
-            (Conduit ? 1 : 0);
+            (Conduit ? 1 : 0) + (hasCachedPose ? 1 : 0);
         if (declarations != 1)
             throw new InvalidOperationException(
                 $"Animation graph state '{Name}' must declare exactly one of " +
-                "Clip, SubStateMachine, BlendSamples or Conduit.");
+                "Clip, SubStateMachine, BlendSamples, Conduit or UseCachedPose.");
+        if (hasCachedPose)
+        {
+            if (UseCachedPose.Trim().Length != UseCachedPose.Length ||
+                UseCachedPose.Length > 128 || UseCachedPose.Contains('\0'))
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' cached pose name is invalid.");
+        }
+        else if (UseCachedPose is null)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' UseCachedPose cannot be null.");
         if (Conduit)
         {
             EntryRule?.Validate();
@@ -94,6 +113,31 @@ public sealed class AnimationGraphState
                 throw new InvalidOperationException(
                     $"Animation graph state '{Name}' declares an entry rule without being a conduit.");
         }
+        if (AdditiveClip is null)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' AdditiveClip cannot be null.");
+        if (AdditiveClip.Length > 0)
+        {
+            if (Conduit || hasMachine)
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' cannot stack additive on a conduit or sub-state machine.");
+            if (AdditiveClip.Trim().Length != AdditiveClip.Length ||
+                AdditiveClip.Length > 128 || AdditiveClip.Contains('\0'))
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' additive clip is invalid.");
+            if (!float.IsFinite(AdditiveAlpha) || AdditiveAlpha < 0 || AdditiveAlpha > 1)
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' additive alpha must be in [0,1].");
+        }
+        else if (AdditiveAlpha != 1 || AdditiveLoop)
+        {
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' declares additive alpha/loop without AdditiveClip.");
+        }
+        if (Slot is null || Slot.Trim().Length != Slot.Length || Slot.Length > 64 ||
+            Slot.Contains('\0'))
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' slot name is invalid.");
         if (hasBlend)
         {
             ValidateBlendSamples();
@@ -389,6 +433,8 @@ public sealed class AnimationGraphDefinition
     public string Name { get; init; } = "";
     public string Version { get; init; } = "vl.anim-graph.v1";
     public string RootStateMachine { get; init; } = "";
+    // UE SaveCachedPose（根图）：非空时宿主每帧在提交后保存最终姿态。
+    public string SaveCachedPose { get; init; } = "";
     public IReadOnlyList<AnimationGraphDirectionBranch> DirectionBranches { get; init; } =
         Array.Empty<AnimationGraphDirectionBranch>();
     public IReadOnlyList<AnimationGraphStateMachine> StateMachines { get; init; } =
@@ -400,6 +446,9 @@ public sealed class AnimationGraphDefinition
             throw new InvalidOperationException("Animation graph name is required.");
         if (Version != "vl.anim-graph.v1")
             throw new InvalidOperationException($"Unsupported animation graph version: {Version}.");
+        if (SaveCachedPose is null || SaveCachedPose.Trim().Length != SaveCachedPose.Length ||
+            SaveCachedPose.Length > 128 || SaveCachedPose.Contains('\0'))
+            throw new InvalidOperationException("Animation graph cached pose name is invalid.");
         if (StateMachines is null || DirectionBranches is null)
             throw new InvalidOperationException("Animation graph collections cannot be null.");
         if (StateMachines.Count == 0 || StateMachines.Count > MaximumStateMachines)

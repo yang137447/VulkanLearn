@@ -92,7 +92,13 @@ public readonly record struct AnimationGraphDecision(
     bool InPlace = true,
     string BlendClip = "",
     float BlendWeight = 0,
-    IReadOnlyList<string>? ConduitPath = null);
+    IReadOnlyList<string>? ConduitPath = null,
+    string UseCachedPose = "",
+    string AdditiveClip = "",
+    float AdditiveAlpha = 0,
+    bool AdditiveLoop = false,
+    string Slot = "",
+    string SaveCachedPose = "");
 
 public sealed class AnimationGraphRuntime
 {
@@ -330,7 +336,13 @@ public sealed class AnimationGraphRuntime
             true,
             blendClip,
             blendWeight,
-            conduitPath.Count > 0 ? conduitPath.ToArray() : null);
+            conduitPath.Count > 0 ? conduitPath.ToArray() : null,
+            leafState.UseCachedPose,
+            leafState.AdditiveClip,
+            leafState.AdditiveClip.Length > 0 ? leafState.AdditiveAlpha : 0,
+            leafState.AdditiveLoop,
+            leafState.Slot,
+            definition.SaveCachedPose);
     }
 
     // 只读诊断入口；不会推进状态机。

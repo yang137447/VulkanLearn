@@ -204,6 +204,156 @@ TEST(SkeletalBlendSpace, ClampsWeightRejectsMismatchAndClearsOnTransition)
     EXPECT_EQ(player.BlendSpaceClipId(), "");
 }
 
+// LocalSpaceBase additive 参照：hip 的局部增量为 (+5,0,0)、绕 Y 90°、缩放 2。
+Clip MakeAdditiveClip(const std::string& id, float hipX, float yawDegrees, float scale)
+{
+    Clip clip;
+    clip.id = id;
+    clip.raw.duration = 2;
+    clip.raw.tracks.resize(3);
+    const float radians = yawDegrees * 3.14159265358979323846f / 180;
+    auto& root = clip.raw.tracks[0];
+    root.translations = {{0, {3, 2, 1}}};
+    root.rotations = {{0, ozz::math::Quaternion::identity()}};
+    root.scales = {{0, ozz::math::Float3::one()}};
+    auto& hip = clip.raw.tracks[1];
+    hip.translations = {{0, {hipX, 10, 0}}};
+    hip.rotations = {{0, {0, std::sin(radians / 2), 0, std::cos(radians / 2)}}};
+    hip.scales = {{0, {scale, scale, scale}}};
+    auto& foot = clip.raw.tracks[2];
+    foot.translations = {{0, {0, 0, 4}}};
+    foot.rotations = {{0, ozz::math::Quaternion::identity()}};
+    foot.scales = {{0, ozz::math::Float3::one()}};
+    ozz::animation::offline::AnimationBuilder builder;
+    clip.runtime = builder(clip.raw);
+    clip.sequence.additiveAnimType = "LocalSpaceBase";
+    return clip;
+}
+
+std::shared_ptr<SkeletalAsset> MakeAdditiveAsset()
+{
+    auto asset = MakeAsset();
+    asset->clips.push_back(MakeAdditiveClip("add", 5, 90, 2));
+    return asset;
+}
+
+TEST(SkeletalAdditive, LocalSpaceDeltaComposesOntoBasePose)
+{
+    auto asset = MakeAdditiveAsset();
+    SkeletalPlayback base(asset);
+    base.Play("a", true, 1, true);
+    base.Tick(0.5f);
+
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.5f);
+    player.SetAdditive("add", 1.0f, false);
+    EXPECT_TRUE(player.AdditiveActive());
+    EXPECT_EQ(player.AdditiveClipId(), "add");
+    player.Tick(1.0f / 60);
+    // hip 全局 = root(3,2,1) + hip 局部 (5,10,0)；旋转 90°、缩放 2。
+    const Eigen::Vector3f hip = player.Models()[1].block<3, 1>(0, 3);
+    EXPECT_NEAR(hip.x(), 8.0f, 1e-3f);
+    EXPECT_NEAR(hip.y(), 12.0f, 1e-3f);
+    EXPECT_NEAR(hip.z(), 1.0f, 1e-3f);
+    const Eigen::Matrix3f rotation = player.Models()[1].block<3, 3>(0, 0);
+    // 模型矩阵列含缩放：长度=2，方向是绕 Y 90° 的 X 轴。
+    const Eigen::Vector3f axis = rotation.col(0).normalized();
+    EXPECT_NEAR(axis.y(), 0.0f, 1e-3f);
+    EXPECT_NEAR(std::abs(axis.z()), 1.0f, 1e-3f);
+    EXPECT_NEAR(rotation.col(0).norm(), 2.0f, 1e-3f);
+
+    // alpha=0 与 base 逐元素一致；alpha=0.5 的增量是平移/角度/缩放的一半。
+    SkeletalPlayback zero(asset);
+    zero.Play("a", true, 1, true);
+    zero.Tick(0.5f);
+    zero.SetAdditive("add", 0.0f, false);
+    zero.Tick(1.0f / 60);
+    for (size_t joint = 0; joint < base.Models().size(); ++joint)
+        EXPECT_TRUE(base.Models()[joint].isApprox(zero.Models()[joint], 1e-5f));
+
+    SkeletalPlayback half(asset);
+    half.Play("a", true, 1, true);
+    half.Tick(0.5f);
+    half.SetAdditive("add", 0.5f, false);
+    half.Tick(1.0f / 60);
+    EXPECT_NEAR(half.Models()[1](0, 3), 5.5f, 1e-3f);
+    EXPECT_NEAR((half.Models()[1].block<3, 3>(0, 0).col(0).norm()), 1.5f, 1e-3f);
+}
+
+TEST(SkeletalAdditive, RejectsNonLocalSpaceAndClearsWithPlay)
+{
+    auto asset = MakeAdditiveAsset();
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.0f);
+    EXPECT_ANY_THROW(player.SetAdditive("b", 1.0f, false));
+    EXPECT_ANY_THROW(player.SetAdditive("missing", 1.0f, false));
+    player.SetAdditive("add", 1.0f, true);
+    player.Play("b", true, 1, true);
+    // additive 是节点级修饰，Play 不隐式清除；显式 Clear 才关闭。
+    EXPECT_TRUE(player.AdditiveActive());
+    player.ClearAdditive();
+    EXPECT_FALSE(player.AdditiveActive());
+}
+
+TEST(SkeletalCachedPose, CaptureThenUseHoldsPoseWithoutClockAdvance)
+{
+    auto asset = MakeAdditiveAsset();
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.5f);
+    const auto capturedModels = player.Models();
+    player.CaptureCachedPose("Locomotion");
+    // 切到另一个片段后仍能用同一实例的缓存快照。
+    player.Play("b", true, 1, true);
+    player.Tick(0.5f);
+    player.UseCachedPose("Locomotion");
+    EXPECT_TRUE(player.CachedPoseActive());
+    EXPECT_EQ(player.CachedPoseName(), "Locomotion");
+    const float timeBefore = player.Time();
+    player.Tick(0.25f);
+    // 缓存姿态不推进片段时钟、不产生根位移。
+    EXPECT_FLOAT_EQ(player.Time(), timeBefore);
+    EXPECT_NEAR(player.RootMotionDelta().norm(), 0.0f, 1e-6f);
+    for (size_t joint = 0; joint < capturedModels.size(); ++joint)
+        EXPECT_TRUE(capturedModels[joint].isApprox(player.Models()[joint], 1e-4f));
+
+    // 缓存姿态可以再叠加 additive。
+    player.SetAdditive("add", 1.0f, false);
+    player.Tick(1.0f / 60);
+    EXPECT_NEAR(player.Models()[1](0, 3), 8.0f, 1e-3f);
+
+    player.ClearCachedPose();
+    EXPECT_FALSE(player.CachedPoseActive());
+    EXPECT_ANY_THROW(player.UseCachedPose("missing"));
+}
+
+TEST(SkeletalCachedPose, CaptureDuringCachedPoseDoesNotAccumulateAdditive)
+{
+    auto asset = MakeAdditiveAsset();
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.5f);
+    player.CaptureCachedPose("Locomotion");
+    player.UseCachedPose("Locomotion");
+    player.SetAdditive("add", 1.0f, false);
+    player.Tick(1.0f / 60);
+    const auto expected = player.Models();
+    // 宿主每帧都会无条件发送根 SaveCachedPose；缓存态下必须忽略，
+    // 否则 display(缓存+additive) 会作为下一帧 Base 再次叠加（缩放逐帧翻倍）。
+    for (int frame = 0; frame < 30; ++frame)
+    {
+        player.Tick(1.0f / 60);
+        player.CaptureCachedPose("Locomotion");
+        for (size_t joint = 0; joint < expected.size(); ++joint)
+            EXPECT_TRUE(expected[joint].isApprox(player.Models()[joint], 1e-4f))
+                << "frame " << frame << " joint " << joint;
+    }
+    const float scale = player.Models()[1].block<3, 3>(0, 0).col(0).norm();
+    EXPECT_NEAR(scale, 2.0f, 1e-3f);
+}
+
 TEST(SkeletalBlend, BlendsLocalTrsBeforeHierarchyWithQuaternionNormalization)
 {
     SkeletalPlayback player(MakeAsset());

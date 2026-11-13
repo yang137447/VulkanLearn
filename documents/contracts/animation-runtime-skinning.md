@@ -595,6 +595,13 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   - `Conduit = true` 表示 UE 的无姿态过路状态；`EntryRule`（仅 conduit 可用，null =
     恒真）决定这次是否允许借它转移。conduit 不能声明 clip/blend/子状态机，也不能
     覆盖 rate、start position、sync group 或 direction branch
+  - `UseCachedPose`（string）表示以之前 `SaveCachedPose` 的快照作为本状态 Base；
+    与 Clip/SubStateMachine/BlendSamples/Conduit 互斥，缓存姿态没有自己的片段时钟
+  - `AdditiveClip` / `AdditiveAlpha` / `AdditiveLoop`：UE `ApplyAdditive`
+    （仅 `LocalSpaceBase`）叠加在 Clip/BlendSamples/UseCachedPose 之上；不能叠在
+    conduit 或子状态机上。alpha 范围 [0,1]
+  - `Slot`（string）是 UE Slot 的图级元数据：本切片由宿主 montage 承担，
+    不做骨骼 mask
   - `BlendSamples[]`（`Clip` + `Threshold`）表示 1D BlendSpace；`BlendAxis` 目前只接受
     `Speed`（取 `AnimationGraphInput.PlanarSpeed`），2..3 个 sample，阈值有限且严格递增，
     sample 片段不得重复（成对原生混合见下方 BlendSpace1D）
@@ -697,12 +704,36 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 - `ReinitializeOnBecomingRelevant`：VL 没有“状态机停止 tick 后重新变为相关”的
   概念，该 UE 设置不实现；VL 的图宿主每帧都会求值。
 
+### Pose Graph：Cached Pose / Additive / Slot
+
+- `SaveCachedPose` / `UseCachedPose`：原生播放器按名字保存当前最终局部姿态
+  （含关节数的快照）。`UseCachedPose` 状态下不推进原片段时钟、不产生根位移与
+  notify，只把快照作为 Base；随后仍可叠加 additive。缓存是**实例级**的，
+  同名缓存重复捕获会覆盖，`Play`/`Select`/`TransitionTo`/`Seek`/`Stop` 会退出
+  使用状态但保留快照。首帧尚无姿态时捕获是静默 no-op，不会让同一批命令失败。
+  处于 `UseCachedPose` 状态时捕获被忽略：此时最终姿态已含 additive，写回缓存
+  会让下一帧把它当 Base 重复叠加（缩放/位移逐帧累积）。
+- `AdditiveClip`：只接受 `additiveAnimType = LocalSpaceBase` 的片段；增量按
+  `delta = additive * inverse(reference)` 计算，再以 `base * delta` 复合，权重
+  按 UE `BlendFromIdentityAndAccumulate` 把平移/旋转/缩放向 identity 收缩。
+  additive 有独立时钟（rate 1、按 loop 或 clamp），不产生根位移/notify；它叠加
+  在状态姿态上、参与过渡混合之前。
+- `Slot`：只作为图级元数据输出（`AnimationGraphDecision.Slot`）。VL 的整身
+  montage 仍由宿主 `PlayAction`/`PlayMontage` 承担，不支持 UE 的骨骼 mask 插槽。
+- 批量命令：`animationCommands` 新增 `additive`（`enabled`/`clip`/`alpha`/`loop`）
+  与 `cachedPose`（`enabled`/`capture`/`name`）候选；反馈发布
+  `additive = { active, clip, alpha }` 与 `cachedPose = { active, name }`。
+- 限制：缓存是“保存时的局部姿态快照”，不是 UE 同一帧内多分支共享的 pose 图；
+  根图 `SaveCachedPose` 每帧捕获并有一帧延迟。additive 不改变 Actor/胶囊，
+  也不写曲线；暂不支持 MeshSpace/RotationOffset additive。
+
 ### 校验与边界
 
 - `Validate()` 拒绝：重复状态机/状态/方向分支、未知 transition 目标或子状态机、
   状态机嵌套环、从 Entry 不可达的状态、空 clip、非有限或越界阈值、非法 yaw 区间、
-  空条件组合、SyncPhase 缺少 SyncGroup、`MaxTransitionsPerFrame` 越界，以及
-  状态机/状态/transition/条件预算超限。
+  空条件组合、SyncPhase 缺少 SyncGroup、`MaxTransitionsPerFrame` 越界、
+  additive 搭配 conduit/子状态机、additive alpha 越界、无 clip 的 additive
+  alpha/loop、UseCachedPose 与其它输出类型并存，以及状态机/状态/transition/条件预算超限。
   状态迁移本身允许成环（Idle↔Walk 必须成环）；“循环”校验只针对嵌套状态机引用。
 - 当前节点子集覆盖 StateMachine + SequencePlayer 语义、State Alias、
   SyncGroup/MarkerSync 数据、曲线条件、`VerticalSpeed`、Inertialization 标记与
@@ -740,3 +771,6 @@ CPU 导入空间与数据边界见 [导入契约](animation-asset-import.md)。
 `SkeletalBlend` 的三关节手算夹具覆盖局部平移/四元数/缩放和父链、
 中断、端点、Pause/0dt、完整根 TRS、epoch、失败保持及旧快照；
 测试存在不代替正式 GASP 起停/转向的行为与实景验收。
+- `AnimationGraphDefinition`
+  - `SaveCachedPose`（string）：根图每帧在提交后保存最终局部姿态；空串关闭。
+    当前实现是“下一帧生效”的快照，进入 Land 时正好读到上一帧姿态

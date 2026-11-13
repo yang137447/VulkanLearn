@@ -14,6 +14,7 @@
 #include "inertialization.h"
 #include "rootOffset.h"
 #include <algorithm>
+#include <map>
 #include <memory>
 #include <optional>
 #include <string>
@@ -163,6 +164,21 @@ public:
     bool BlendSpaceActive() const { return blendSpaceActive; }
     float BlendSpaceWeight() const { return blendSpaceActive ? blendSpaceWeight : 0.0f; }
     std::string BlendSpaceClipId() const;
+    // UE ApplyAdditive（LocalSpaceBase）：additive 片段相对自身参考姿态求局部 TRS 增量，
+    // 叠加到当前基础姿态上。独占时钟，不产生根位移/notify；非 LocalSpaceBase 拒绝。
+    void SetAdditive(const std::string& clipId, float alpha, bool loop);
+    void ClearAdditive();
+    bool AdditiveActive() const { return additiveActive; }
+    std::string AdditiveClipId() const;
+    float AdditiveAlpha() const { return additiveActive ? additiveAlpha : 0.0f; }
+    float AdditiveTime() const { return additiveTime; }
+    // UE SaveCachedPose/UseCachedPose 的单机近似：保存当前最终局部姿态，
+    // 之后以该快照为 Base（不推进片段时钟、不产生根位移/notify），可再叠加 additive。
+    void CaptureCachedPose(const std::string& name);
+    void UseCachedPose(const std::string& name);
+    void ClearCachedPose();
+    bool CachedPoseActive() const { return useCachedPoseActive; }
+    std::string CachedPoseName() const { return useCachedPoseActive ? useCachedPoseName : std::string(); }
     // 只调节唯一目标时钟，不重采样或重启混合；混合时长仍按实际 delta 推进。
     void SetRate(float speed);
     // 模式只作用于后续过渡；切换不重采样当前姿态或重启唯一时钟。
@@ -423,6 +439,19 @@ private:
     bool blendSpaceActive = false;
     size_t blendSpaceClip = 0;
     float blendSpaceWeight = 0;
+    // Additive 来源与缓存姿态；缓存按名字保存当前最终局部姿态。
+    bool additiveActive = false;
+    size_t additiveClip = 0;
+    float additiveAlpha = 0;
+    bool additiveLoop = false;
+    float additiveTime = 0;
+    std::map<std::string, LocalPose> cachedPoses;
+    bool useCachedPoseActive = false;
+    std::string useCachedPoseName;
+    // 缓存姿态以快照为 Base：不推进片段时钟，也不产生根位移/notify。
+    void TickCachedPose(float deltaSeconds);
+    void AdvanceAdditiveClock(float deltaSeconds);
+    LocalPose ApplyAdditive(LocalPose locals) const;
     size_t selected = 0;
     float time = 0;
     Eigen::Vector3f rootMotionDelta = Eigen::Vector3f::Zero();

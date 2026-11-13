@@ -124,4 +124,39 @@ inline LocalPose Crossfade(const LocalPose& source, LocalPose target, float alph
     if (!blend.Run()) throw std::runtime_error("Animation local pose blending failed");
     return mixed;
 }
+
+// UE AAT_LocalSpaceBase：delta = additive * inverse(reference)，结果 = base * delta。
+// 权重按 UE 的 BlendFromIdentityAndAccumulate 语义把增量向 identity 收缩：
+// translation *= w、rotation = slerp(identity, delta, w)、scale = 1 + (delta-1)*w。
+inline LocalPose ApplyLocalSpaceAdditive(const LocalPose& base, const LocalPose& additive,
+    const LocalPose& reference, float alpha, size_t jointCount)
+{
+    if (alpha <= 0 || jointCount == 0) return base;
+    auto target = ReadKinematics(base, jointCount);
+    const auto add = ReadKinematics(additive, jointCount);
+    const auto ref = ReadKinematics(reference, jointCount);
+    const Eigen::Vector3f identityScale = Eigen::Vector3f::Ones();
+    for (size_t joint = 0; joint < jointCount; ++joint)
+    {
+        const Eigen::Quaternionf referenceInverse = ref[joint].rotation.conjugate().normalized();
+        const Eigen::Vector3f referenceTranslationInverse = -(referenceInverse * ref[joint].translation);
+        const Eigen::Vector3f referenceScaleInverse =
+            ref[joint].scale.cwiseAbs().cwiseMax(Eigen::Vector3f::Constant(1e-6f)).cwiseInverse();
+        const Eigen::Quaternionf deltaRotation =
+            (add[joint].rotation * referenceInverse).normalized();
+        const Eigen::Vector3f deltaTranslation =
+            add[joint].translation + add[joint].rotation * referenceTranslationInverse;
+        const Eigen::Vector3f deltaScale = add[joint].scale.cwiseProduct(referenceScaleInverse);
+        // 逐通道向 identity 收缩；旋转用球面插值，避免平移/缩放被旋转耦合。
+        const Eigen::Quaternionf weightedRotation =
+            Eigen::Quaternionf::Identity().slerp(alpha, deltaRotation).normalized();
+        const Eigen::Vector3f weightedTranslation = deltaTranslation * alpha;
+        const Eigen::Vector3f weightedScale =
+            identityScale + (deltaScale - identityScale) * alpha;
+        target[joint].translation += target[joint].rotation * weightedTranslation;
+        target[joint].rotation = (target[joint].rotation * weightedRotation).normalized();
+        target[joint].scale = target[joint].scale.cwiseProduct(weightedScale);
+    }
+    return WriteKinematics(base, target);
+}
 }

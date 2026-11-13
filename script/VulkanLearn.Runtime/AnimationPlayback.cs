@@ -11,7 +11,8 @@ public readonly record struct AnimationState(string Clip, float Time, float Dura
     string SyncMarker = "", float SyncMarkerAlpha = 0, bool SyncActive = false,
     string SyncLeader = "", string SyncRole = "", string SyncMethod = "",
     string SyncEffectiveMethod = "", string SyncScope = "", string SyncDiagnostic = "",
-    int MontageSegment = 0, string MontageSegmentId = "", string BlendClip = "", float BlendWeight = 0);
+    int MontageSegment = 0, string MontageSegmentId = "", string BlendClip = "", float BlendWeight = 0,
+    string AdditiveClip = "", float AdditiveAlpha = 0, string CachedPose = "");
 public readonly record struct AnimationSyncMarker(string Name, float Time);
 public readonly record struct AnimationPlayerInfo(string SyncGroup, string SyncRole, string SyncMethod,
     float StartPosition, bool Loop, string SyncGroupScope = "Local");
@@ -90,6 +91,15 @@ internal sealed record BlendSpaceCommand(bool Enabled, string ClipA, string Clip
 {
     public static readonly BlendSpaceCommand Disabled = new(false, "", "", 0);
 }
+// ApplyAdditive（LocalSpaceBase）与 Save/UseCachedPose 的附加候选。
+internal sealed record AdditiveCommand(bool Enabled, string Clip, float Alpha, bool Loop)
+{
+    public static readonly AdditiveCommand Disabled = new(false, "", 0, false);
+}
+internal sealed record CachedPoseCommand(bool Enabled, bool Capture, string Name)
+{
+    public static readonly CachedPoseCommand Disabled = new(false, false, "");
+}
 
 // catalog 曲线键：times/values 等长且已按时间排序；C# 只在本地做线性 clamp 采样。
 internal sealed class AnimationCurve(float[] times, float[] values)
@@ -126,6 +136,8 @@ public sealed class AnimationPlayback
     internal BonePhysicsCommand? PendingBonePhysics;
     internal BonePhysicsCommand? ActiveBonePhysics;
     internal BlendSpaceCommand? PendingBlendSpace;
+    internal AdditiveCommand? PendingAdditive;
+    internal CachedPoseCommand? PendingCachedPose;
     internal bool BonePhysicsDebugRequested;
     internal readonly Dictionary<string, MontageInfo> Montages = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationPlayerInfo[]> ClipPlayers = new(StringComparer.Ordinal);
@@ -304,6 +316,46 @@ public sealed class AnimationPlayback
     {
         CheckRequest();
         PendingBlendSpace = BlendSpaceCommand.Disabled;
+    }
+
+    // UE ApplyAdditive（LocalSpaceBase）：clip 必须是 LocalSpaceBase 片段，原生负责
+    // 增量数学与独立时钟；alpha 夹到 [0,1]，loop 决定叠加片段是否循环。
+    public void SetAdditive(string clip, float alpha, bool loop = false)
+    {
+        CheckRequest();
+        if (!ClipIds.Contains(clip, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown animation clip: {clip}", nameof(clip));
+        if (!float.IsFinite(alpha)) throw new ArgumentOutOfRangeException(nameof(alpha));
+        PendingAdditive = new(true, clip, Math.Clamp(alpha, 0, 1), loop);
+    }
+
+    public void ClearAdditive()
+    {
+        CheckRequest();
+        PendingAdditive = AdditiveCommand.Disabled;
+    }
+
+    // 缓存姿态：capture 保存当前最终姿态，use 以该快照为 Base；名字为空由调用方拒绝。
+    public void CaptureCachedPose(string name)
+    {
+        CheckRequest();
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 128 || name.Contains('\0'))
+            throw new ArgumentException("Cached pose name is invalid.", nameof(name));
+        PendingCachedPose = new(true, true, name);
+    }
+
+    public void UseCachedPose(string name)
+    {
+        CheckRequest();
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 128 || name.Contains('\0'))
+            throw new ArgumentException("Cached pose name is invalid.", nameof(name));
+        PendingCachedPose = new(true, false, name);
+    }
+
+    public void ClearCachedPose()
+    {
+        CheckRequest();
+        PendingCachedPose = CachedPoseCommand.Disabled;
     }
 
     // 任意时刻曲线采样：秒、clip-local、键间线性、区间外 clamp 到首/末值、单键常量。
@@ -786,6 +838,25 @@ public static partial class NativeBridge
                 if (blendSpace.TryGetProperty("weight", out var blendWeightNode))
                     blendWeight = blendWeightNode.GetSingle();
             }
+            var additiveClip = "";
+            var additiveAlpha = 0.0f;
+            if (value.TryGetProperty("additive", out var additiveNode) &&
+                additiveNode.ValueKind == JsonValueKind.Object &&
+                additiveNode.TryGetProperty("active", out var additiveActive) &&
+                additiveActive.GetBoolean())
+            {
+                if (additiveNode.TryGetProperty("clip", out var additiveClipNode))
+                    additiveClip = additiveClipNode.GetString()!;
+                if (additiveNode.TryGetProperty("alpha", out var additiveAlphaNode))
+                    additiveAlpha = additiveAlphaNode.GetSingle();
+            }
+            var cachedPoseName = "";
+            if (value.TryGetProperty("cachedPose", out var cachedPoseNode) &&
+                cachedPoseNode.ValueKind == JsonValueKind.Object &&
+                cachedPoseNode.TryGetProperty("active", out var cachedActive) &&
+                cachedActive.GetBoolean() &&
+                cachedPoseNode.TryGetProperty("name", out var cachedNameNode))
+                cachedPoseName = cachedNameNode.GetString()!;
             component.Animation.Feedback = new(value.GetProperty("clip").GetString()!,
                 value.GetProperty("time").GetSingle(), value.GetProperty("duration").GetSingle(),
                 value.GetProperty("completed").GetBoolean(), value.GetProperty("playing").GetBoolean(),
@@ -809,7 +880,8 @@ public static partial class NativeBridge
                 value.TryGetProperty("syncScope", out var syncScope) ? syncScope.GetString()! : "",
                 value.TryGetProperty("syncDiagnostic", out var syncDiagnostic) ?
                     syncDiagnostic.GetString()! : "",
-                montageSegment, montageSegmentId, blendClip, blendWeight);
+                montageSegment, montageSegmentId, blendClip, blendWeight,
+                additiveClip, additiveAlpha, cachedPoseName);
             component.Animation.FootPlacementFeedback = value.TryGetProperty("footPlacement", out var placement)
                 ? new(placement.GetProperty("enabled").GetBoolean(), placement.GetProperty("active").GetBoolean(),
                     placement.GetProperty("pelvisOffset").GetSingle(), ReadFootPlacementFoot(placement.GetProperty("feet")[0]),
@@ -967,6 +1039,20 @@ public static partial class NativeBridge
                     enabled = blendSpace.Enabled, clipA = blendSpace.ClipA,
                     clipB = blendSpace.ClipB, weight = blendSpace.Weight });
                 mesh.Animation.PendingBlendSpace = null;
+            }
+            if (mesh.Animation.PendingAdditive is { } additive)
+            {
+                commands.Add(new { component = mesh.Id, mode = "additive",
+                    enabled = additive.Enabled, clip = additive.Clip,
+                    alpha = additive.Alpha, loop = additive.Loop });
+                mesh.Animation.PendingAdditive = null;
+            }
+            if (mesh.Animation.PendingCachedPose is { } cachedPose)
+            {
+                commands.Add(new { component = mesh.Id, mode = "cachedPose",
+                    enabled = cachedPose.Enabled, capture = cachedPose.Capture,
+                    name = cachedPose.Name });
+                mesh.Animation.PendingCachedPose = null;
             }
             // 斜率配置放在主命令之后：非 slope 命令仍保持“同一 batch 只允许一条”的
             // 旧边界，slope 作为后续候选组合应用到刚提交的播放状态上。
