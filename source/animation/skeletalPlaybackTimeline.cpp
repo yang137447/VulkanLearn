@@ -410,6 +410,65 @@ std::string SkeletalPlayback::LayeredClipId() const
     return animation.clips[layeredClip].id;
 }
 
+void SkeletalPlayback::PlaySlotMontage(const std::string& clipId, float alpha, bool loop,
+    float rate, const std::vector<std::string>& boneMask)
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!std::isfinite(alpha) || !std::isfinite(rate) || rate <= 0 || rate > 4)
+        throw std::invalid_argument("Slot montage alpha/rate is invalid");
+    if (boneMask.size() > 64)
+        throw std::invalid_argument("Slot montage bone mask exceeds 64 names");
+    size_t index = 0;
+    while (index < animation.clips.size() && animation.clips[index].id != clipId) ++index;
+    if (index == animation.clips.size())
+        throw std::invalid_argument("Unknown slot montage clip: " + clipId);
+    const auto jointCount = asset->mesh.joints.size();
+    std::vector<uint8_t> mask(jointCount, 0);
+    if (boneMask.empty())
+        std::fill(mask.begin(), mask.end(), static_cast<uint8_t>(1));
+    else
+        for (const auto& name : boneMask)
+        {
+            size_t joint = 0;
+            while (joint < jointCount && asset->mesh.joints[joint].name != name) ++joint;
+            if (joint == jointCount)
+                throw std::invalid_argument("Unknown slot montage bone: " + name);
+            mask[joint] = 1;
+        }
+    slotMontageClip = index;
+    slotMontageAlpha = std::clamp(alpha, 0.0f, 1.0f);
+    slotMontageLoop = loop;
+    slotMontageRate = rate;
+    slotMontageTime = 0;
+    slotMontageCompleted = false;
+    slotMontageMask = std::move(mask);
+    slotMontageMaskBones = boneMask.empty() ? jointCount : boneMask.size();
+    // 换 overlay 片段前结束上一段的 notifyState，再按新片段重建事件表。
+    EndActiveSlotNotifyStates(slotMontageTime, true);
+    slotMontageActive = true;
+    RebuildSlotNotifyEvents();
+}
+
+void SkeletalPlayback::StopSlotMontage()
+{
+    EndActiveSlotNotifyStates(slotMontageTime, true);
+    slotMontageActive = false;
+    slotMontageAlpha = 0;
+    slotMontageTime = 0;
+    slotMontageCompleted = false;
+    slotMontageMask.clear();
+    slotMontageMaskBones = 0;
+    slotNotifyEvents.clear();
+    slotNotifyActive.clear();
+}
+
+std::string SkeletalPlayback::SlotMontageClipId() const
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!slotMontageActive || slotMontageClip >= animation.clips.size()) return {};
+    return animation.clips[slotMontageClip].id;
+}
+
 void SkeletalPlayback::CaptureCachedPose(const std::string& name)
 {
     if (name.empty() || name.size() > 128)

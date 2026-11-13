@@ -290,6 +290,12 @@ sourceInputs（loader 追加，按加载顺序）
   entryTime 起积分；warp 窗口用 `previousPosition=entryTime` 门控，**结束时间早于
   entryTime 的窗口不再激活**，包含 entryTime 的窗口从 entryTime 算 total。多 section
   链只截短第一段，后续段仍按 `nextSection` 推进。
+- **Slot overlay**：请求额外携带 `slotMask`（骨骼名数组，≤64）与 `slotAlpha` 时，
+  montage 不再接管整身播放器，而是在当前基础姿态上按 mask 叠加（`PlaySlotMontage`）。
+  该模式只使用 montage 的 `derivedClipId`（单段）或第一段的 `derivedClipId`，忽略
+  section 链接与 warp；overlay 片段的 Sequence notify 按 overlay 自己的时钟触发并
+  进入同一 `FiredNotifies` 缓冲；基础片段的时钟、根位移与 notify 保持。
+  不带 `slotMask` 时行为与旧路径完全相同。
 - 提交顺序固定为 `Play(derivedClipId, false, rate, inPlace)` →（多 section 时）
   `SetMontageSections(sections)` 或（单 section）`SetPlaybackRange(first.start, first.end)` →
   `SetMontageNotifies(notifies, id, length)` → `Seek(entryTime)` →

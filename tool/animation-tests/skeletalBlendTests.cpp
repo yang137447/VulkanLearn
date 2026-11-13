@@ -448,6 +448,99 @@ TEST(SkeletalLayered, AppliesAfterAdditiveAndKeepsUntilCleared)
     EXPECT_FALSE(player.LayeredActive());
 }
 
+TEST(SkeletalSlotMontage, MaskedOverlayKeepsUnmaskedJointsOnBase)
+{
+    auto asset = MakeAsset();
+    SkeletalPlayback base(asset);
+    base.Play("a", true, 1, true);
+    base.Tick(0.5f);
+
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.5f);
+    player.PlaySlotMontage("b", 1.0f, true, 1.0f, {"hip"});
+    EXPECT_TRUE(player.SlotMontageActive());
+    EXPECT_EQ(player.SlotMontageClipId(), "b");
+    EXPECT_EQ(player.SlotMontageMaskCount(), 1u);
+    base.Tick(1.0f / 60);
+    player.Tick(1.0f / 60);
+    // root 未命中 mask，保持 base；hip 命中 mask，取 overlay；foot 的局部姿态
+    // 两段相同但父级换成 overlay 的 hip，因此模型矩阵跟随 overlay。
+    EXPECT_TRUE(base.Models()[0].isApprox(player.Models()[0], 1e-5f));
+    SkeletalPlayback overlay(asset);
+    overlay.Play("b", true, 1, true);
+    overlay.Tick(1.0f / 60);
+    EXPECT_TRUE(overlay.Models()[1].isApprox(player.Models()[1], 1e-4f));
+    EXPECT_TRUE(overlay.Models()[2].isApprox(player.Models()[2], 1e-4f));
+    // slot montage 不推进基础片段时钟。
+    EXPECT_FLOAT_EQ(player.Time(), 0.5f + 1.0f / 60);
+}
+
+TEST(SkeletalSlotMontage, AlphaScalesMaskedBlendAndCompletes)
+{
+    auto asset = MakeAsset();
+    SkeletalPlayback half(asset);
+    half.Play("a", true, 1, true);
+    half.Tick(0.5f);
+    half.PlaySlotMontage("b", 0.5f, false, 1.0f, {});
+    half.Tick(1.0f / 60);
+    SkeletalPlayback base(asset);
+    base.Play("a", true, 1, true);
+    base.Tick(0.5f);
+    base.Tick(1.0f / 60);
+    SkeletalPlayback overlay(asset);
+    overlay.Play("b", true, 1, true);
+    overlay.Tick(1.0f / 60);
+    const Eigen::Vector3f midpoint =
+        (base.Models()[1].block<3, 1>(0, 3) + overlay.Models()[1].block<3, 1>(0, 3)) * 0.5f;
+    EXPECT_NEAR((half.Models()[1].block<3, 1>(0, 3) - midpoint).norm(), 0.0f, 1e-3f);
+
+    SkeletalPlayback done(asset);
+    done.Play("a", true, 1, true);
+    done.PlaySlotMontage("b", 1.0f, false, 1.0f, {"hip"});
+    done.Tick(5.0f);
+    EXPECT_TRUE(done.SlotMontageCompleted());
+    done.StopSlotMontage();
+    EXPECT_FALSE(done.SlotMontageActive());
+    done.Tick(1.0f / 60);
+    SkeletalPlayback plain(asset);
+    plain.Play("a", true, 1, true);
+    plain.Tick(5.0f + 1.0f / 60);
+    EXPECT_TRUE(plain.Models()[1].isApprox(done.Models()[1], 1e-4f));
+}
+
+TEST(SkeletalSlotMontage, RejectsUnknownBoneAndOversizedMask)
+{
+    auto asset = MakeAsset();
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    EXPECT_ANY_THROW(player.PlaySlotMontage("b", 1.0f, true, 1.0f, {"missing"}));
+    std::vector<std::string> tooMany(65, "hip");
+    EXPECT_ANY_THROW(player.PlaySlotMontage("b", 1.0f, true, 1.0f, tooMany));
+    EXPECT_ANY_THROW(player.PlaySlotMontage("missing", 1.0f, true, 1.0f, {}));
+}
+
+TEST(SkeletalSlotMontage, OverlayFiresItsNotifiesWhileBaseClockAdvances)
+{
+    auto asset = MakeAsset();
+    asset->clips[1].sequence.notifies.push_back({"", "Attack", 0.4f, 0.0f});
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.1f);
+    const float baseTime = player.Time();
+    player.PlaySlotMontage("b", 1.0f, false, 1.0f, {});
+    bool fired = false;
+    for (int frame = 0; frame < 45 && !fired; ++frame)
+    {
+        player.Tick(1.0f / 60);
+        for (const auto& notify : player.FiredNotifies())
+            if (notify.name == "Attack" && notify.phase == "instant") fired = true;
+    }
+    EXPECT_TRUE(fired);
+    EXPECT_GT(player.Time(), baseTime);
+    EXPECT_TRUE(player.SlotMontageActive());
+}
+
 TEST(SkeletalBlend, BlendsLocalTrsBeforeHierarchyWithQuaternionNormalization)
 {
     SkeletalPlayback player(MakeAsset());

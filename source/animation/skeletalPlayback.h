@@ -181,6 +181,17 @@ public:
     std::string LayeredClipId() const;
     float LayeredAlpha() const { return layeredActive ? layeredAlpha : 0.0f; }
     size_t LayeredMaskCount() const { return layeredMaskBones; }
+    // Masked Slot Montage：montage 片段作为 overlay 叠在基础姿态上，按骨骼 mask
+    // 只覆盖对应关节；基础时钟/根位移/notify 仍归基础姿态。独立时钟，非循环到末帧
+    // 后置 completed（宿主可据此清理）。空 mask = 全身，未知骨骼名拒绝。
+    void PlaySlotMontage(const std::string& clipId, float alpha, bool loop, float rate,
+        const std::vector<std::string>& boneMask);
+    void StopSlotMontage();
+    bool SlotMontageActive() const { return slotMontageActive; }
+    std::string SlotMontageClipId() const;
+    float SlotMontageAlpha() const { return slotMontageActive ? slotMontageAlpha : 0.0f; }
+    size_t SlotMontageMaskCount() const { return slotMontageMaskBones; }
+    bool SlotMontageCompleted() const { return slotMontageCompleted; }
     // UE SaveCachedPose/UseCachedPose 的单机近似：保存当前最终局部姿态，
     // 之后以该快照为 Base（不推进片段时钟、不产生根位移/notify），可再叠加 additive。
     void CaptureCachedPose(const std::string& name);
@@ -380,6 +391,12 @@ private:
     // 事件留到下一 tick，避免同一 tick 重复触发）；end 含上界（到达区间末尾当 tick 结束）。
     // includeTerminalEnd 只用于一次性播放到达范围末尾的那一 tick：瞬时 notify 允许 time==to。
     void ScanNotifySegment(double from, double to, bool includeTerminalEnd);
+    // montage slot overlay 的事件表与主播放器独立；扫描逻辑共用，避免两套语义漂移。
+    void ScanNotifyTable(double from, double to, bool includeTerminalEnd,
+        const std::vector<NotifyEvent>& events, std::vector<uint8_t>& active);
+    void RebuildSlotNotifyEvents();
+    void ScanSlotNotifies(double from, double to, bool includeTerminalEnd);
+    void EndActiveSlotNotifyStates(float atTime, bool interrupted);
     // 结束所有活动区间；interrupted=true 时标记中断。deferToNextTick=true 用于控制面
     // （Stop/切片段/更换 notify 源），让事件在紧随其后的 Tick 重建后仍可被反馈读到。
     void EndActiveNotifyStates(float atTime, bool interrupted, bool deferToNextTick);
@@ -462,6 +479,17 @@ private:
     // 逐关节 mask；空输入 mask 会展开为全身。
     std::vector<uint8_t> layeredMask;
     size_t layeredMaskBones = 0;
+    bool slotMontageActive = false;
+    size_t slotMontageClip = 0;
+    float slotMontageAlpha = 0;
+    bool slotMontageLoop = false;
+    float slotMontageRate = 1;
+    float slotMontageTime = 0;
+    bool slotMontageCompleted = false;
+    std::vector<uint8_t> slotMontageMask;
+    size_t slotMontageMaskBones = 0;
+    std::vector<NotifyEvent> slotNotifyEvents;
+    std::vector<uint8_t> slotNotifyActive;
     std::map<std::string, LocalPose> cachedPoses;
     bool useCachedPoseActive = false;
     std::string useCachedPoseName;
@@ -471,6 +499,8 @@ private:
     LocalPose ApplyAdditive(LocalPose locals) const;
     void AdvanceLayerClock(float deltaSeconds);
     LocalPose ApplyLayered(LocalPose locals) const;
+    void AdvanceSlotMontageClock(float deltaSeconds);
+    LocalPose ApplySlotMontage(LocalPose locals) const;
     size_t selected = 0;
     float time = 0;
     Eigen::Vector3f rootMotionDelta = Eigen::Vector3f::Zero();

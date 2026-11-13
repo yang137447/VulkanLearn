@@ -735,8 +735,25 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 - 限制：缓存是“保存时的局部姿态快照”，不是 UE 同一帧内多分支共享的 pose 图；
   根图 `SaveCachedPose` 每帧捕获并有一帧延迟。additive 不改变 Actor/胶囊，
   也不写曲线；暂不支持 MeshSpace/RotationOffset additive。
-  LayeredBoneBlend 只有单一 mask 与统一 alpha，没有 per-bone 权重曲线；
-  `Slot` 的 masked montage 仍未实现（montage 仍是整身覆盖）。
+
+### Masked Slot Montage
+
+- 图级：`AnimationGraphState.Slot` + `SlotMask`（骨骼名，≤64）+ `SlotAlpha`；
+  `SlotMask` 为空表示整身覆盖（旧行为），非空时宿主对该状态调用
+  `SetMontageSlotMask(mask, alpha)`，离开状态后清除。
+- 播放：带 `slotMask` 的 `playMontage` 走 `SkeletalPlayback::PlaySlotMontage`，
+  montage 片段作为 overlay 叠在基础姿态上（base → additive → layered → slot），
+  按 mask 命中关节混合；基础片段的时钟、根位移/根 yaw 与 notify 仍归基础播放段。
+- overlay 有自己的时钟（rate/loop），非循环到末帧后 `completed` 置真；宿主可
+  `StopSlotMontage` 或等待下一次基础片段切换。空 mask 等价整身。
+- overlay 片段的 Sequence notify 按自己的时钟触发（瞬时与 notifyState 的
+  begin/end、循环回绕“先尾后头”），事件进入同一 `FiredNotifies` 缓冲；
+  基础片段的 notify 仍按基础时钟触发，两套事件互不覆盖。结束/Stop 会对
+  仍活动的 overlay notifyState 补 `end(interrupted=true)`。
+- 限制：当前只取 montage 的 `derivedClipId`（或第一段），忽略 section 链接、
+  与 warp；单一 mask + 统一 alpha，无 per-bone 权重曲线；
+  不支持 UE 的 BlendProfile。`Slot` 仍是单槽位，不支持多槽位叠加。
+  LayeredBoneBlend 只有单一 mask 与统一 alpha，没有 per-bone 权重曲线。
 
 ### 校验与边界
 
@@ -744,13 +761,15 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   状态机嵌套环、从 Entry 不可达的状态、空 clip、非有限或越界阈值、非法 yaw 区间、
   空条件组合、SyncPhase 缺少 SyncGroup、`MaxTransitionsPerFrame` 越界、
   additive 搭配 conduit/子状态机、additive alpha 越界、无 clip 的 additive
-  alpha/loop、UseCachedPose 与其它输出类型并存，以及状态机/状态/transition/条件预算超限。
+  alpha/loop、UseCachedPose 与其它输出类型并存、slot mask 缺少 Slot/重复/超限、
+  slot alpha 越界，以及状态机/状态/transition/条件预算超限。
   状态迁移本身允许成环（Idle↔Walk 必须成环）；“循环”校验只针对嵌套状态机引用。
 - 当前节点子集覆盖 StateMachine + SequencePlayer 语义、State Alias、
   SyncGroup/MarkerSync 数据、曲线条件、`VerticalSpeed`、Inertialization 标记与
   单层 pose 输出、1D BlendSpace 与 Conduit；
-  R4 的 Slot/Montage 动作层由宿主 `PlayAction` + 原生 `PlayMontage` 提供，仍是整身
-  `DefaultSlot` 覆盖，不做骨骼 mask 分层。AimOffset、TurnInPlace、Pivot、
+  R4 的 Slot/Montage 动作层由宿主 `PlayAction` + 原生 `PlayMontage` 提供；
+  声明 `SlotMask` 时按骨骼 mask 叠在基础姿态上，未声明时仍是整身覆盖。
+  AimOffset、TurnInPlace、Pivot、
   LayeredBoneBlend、FootPlacement、additive 仍未实现；SlopeWarping 是图后的
   原生姿态后处理，不进入图节点。曲线驱动骨骼/AimOffset 仍归后续阶段。
 

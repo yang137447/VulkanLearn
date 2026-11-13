@@ -64,8 +64,11 @@ public sealed class AnimationGraphState
     public float LayerAlpha { get; init; } = 1;
     public bool LayerLoop { get; init; }
     public IReadOnlyList<string> LayerMask { get; init; } = Array.Empty<string>();
-    // UE Slot 元数据：本切片由宿主 montage 承担，图只记录名字。
+    // UE Slot：名字 + 可选骨骼 mask。mask 非空时，宿主用 slot montage 把动作
+    // 叠在基础姿态上；空 mask 表示整身覆盖（旧行为）。
     public string Slot { get; init; } = "";
+    public IReadOnlyList<string> SlotMask { get; init; } = Array.Empty<string>();
+    public float SlotAlpha { get; init; } = 1;
     // UE Conduit：无姿态的过路状态，只能作为转移目标；进入后同一帧继续求值它的出边。
     // EntryRule 为 null 表示无条件；只有 Conduit 可以声明入口规则。
     public bool Conduit { get; init; }
@@ -181,6 +184,28 @@ public sealed class AnimationGraphState
             Slot.Contains('\0'))
             throw new InvalidOperationException(
                 $"Animation graph state '{Name}' slot name is invalid.");
+        if (SlotMask is null)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' slot mask cannot be null.");
+        if (!float.IsFinite(SlotAlpha) || SlotAlpha < 0 || SlotAlpha > 1)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' slot alpha must be in [0,1].");
+        if (Slot.Length == 0 && (SlotMask.Count > 0 || SlotAlpha != 1))
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' declares a slot mask without a slot.");
+        if (SlotMask.Count > 64)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' slot mask exceeds 64 bones.");
+        var slotNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var bone in SlotMask)
+        {
+            if (string.IsNullOrWhiteSpace(bone) || bone.Length > 128 || bone.Contains('\0'))
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' has an invalid slot mask bone.");
+            if (!slotNames.Add(bone))
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' has duplicate slot mask bone '{bone}'.");
+        }
         if (hasBlend)
         {
             ValidateBlendSamples();

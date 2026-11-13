@@ -84,6 +84,7 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
         mask |= Catch(1048576, LayerOnConduit());
         mask |= Catch(2097152, LayerAlphaWithoutClip());
         mask |= Catch(4194304, LayerMaskDuplicate());
+        mask |= Catch(8388608, SlotMaskWithoutSlot());
         mask |= Catch(4096, ConduitWithClip());
         mask |= Catch(8192, EntryRuleOnContentState());
         mask |= Catch(16384, EntryConduitWithoutFlag());
@@ -389,6 +390,26 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
                     {
                         Name = "A", Clip = "Clip_A", LayerClip = "Clip_B",
                         LayerMask = new[] { "hip", "hip" }
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition SlotMaskWithoutSlot() => new()
+    {
+        Name = "SlotMaskWithoutSlot", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A",
+                        SlotMask = new[] { "hip" }
                     }
                 }
             }
@@ -1080,7 +1101,11 @@ public sealed class AnimationGraphLayerProbeBlueprint : Blueprint
                 decision.LayerMask[0] == "hip" ? 1 : 0,
             decision.LayerMask is { Count: 2 } &&
                 decision.LayerMask[1] == "spine_01" ? 1 : 0);
-        Transform.Scale = new(1, 1, 1);
+        Transform.Scale = new(
+            decision.Slot == "DefaultSlot" ? 1 : 0,
+            decision.SlotMask is { Count: 2 } &&
+                decision.SlotMask[0] == "hip" ? 1 : 0,
+            MathF.Abs(decision.SlotAlpha - 0.5f) < 1e-4f ? 1 : 0);
     }
 
     private static AnimationGraphDefinition Build() => new()
@@ -1098,7 +1123,10 @@ public sealed class AnimationGraphLayerProbeBlueprint : Blueprint
                     {
                         Name = "A", Clip = "Clip_A",
                         LayerClip = "Clip_B", LayerAlpha = 0.25f, LayerLoop = true,
-                        LayerMask = new[] { "hip", "spine_01" }
+                        LayerMask = new[] { "hip", "spine_01" },
+                        Slot = "DefaultSlot",
+                        SlotMask = new[] { "hip", "spine_01" },
+                        SlotAlpha = 0.5f
                     }
                 }
             }

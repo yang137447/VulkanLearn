@@ -9,6 +9,7 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     private AnimationGraphRuntime? runtime;
     private AnimationGraphDecision decision;
     private bool blendSubmitted;
+    private bool slotMaskSubmitted;
     private string lastBlendClip = "";
     private float lastBlendWeight;
     private bool additiveSubmitted;
@@ -20,6 +21,8 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     private float lastLayerAlpha;
     private bool lastLayerLoop;
     private string lastLayerMask = "";
+    private string lastSlotMask = "";
+    private float lastSlotAlpha = 1;
     private bool cachedPoseSubmitted;
 
     public AnimationGraphDefinition Graph { get; private set; } = null!;
@@ -95,6 +98,30 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
         // “进入 Land 时使用上一帧姿态”的时序。
         if (Graph.SaveCachedPose.Length > 0)
             Animation.CaptureCachedPose(Graph.SaveCachedPose);
+        SubmitSlotMask(next);
+    }
+
+    // Slot mask 只在状态声明 mask 时生效；离开该状态后清空，后续 PlayMontage
+    // 回到整身覆盖。
+    private void SubmitSlotMask(in AnimationGraphDecision next)
+    {
+        string mask = next.Slot.Length > 0 && next.SlotMask is { Count: > 0 }
+            ? string.Join("|", next.SlotMask) : "";
+        if (mask.Length == 0)
+        {
+            if (!slotMaskSubmitted) return;
+            Animation.ClearMontageSlotMask();
+            slotMaskSubmitted = false;
+            lastSlotMask = "";
+            return;
+        }
+        if (slotMaskSubmitted && string.Equals(lastSlotMask, mask, StringComparison.Ordinal) &&
+            MathF.Abs(lastSlotAlpha - next.SlotAlpha) < 1e-4f)
+            return;
+        Animation.SetMontageSlotMask(next.SlotMask, next.SlotAlpha);
+        slotMaskSubmitted = true;
+        lastSlotMask = mask;
+        lastSlotAlpha = next.SlotAlpha;
     }
 
     // 权重变化只提交混合候选，不重启 A 的时钟；离开混合状态时显式清除原生混合源。

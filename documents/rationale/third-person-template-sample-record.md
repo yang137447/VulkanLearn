@@ -116,9 +116,10 @@ Pose Graph 的 UE 依据来自 `tool/animation/inspect_third_person_additive.py`
 
 回归证据（Release，`artifacts/third-person-test-build`）：
 
-- `animation_preflight_tests`：367/367 通过，覆盖片段骨骼子集导入、
+- `animation_preflight_tests`：371/371 通过，覆盖片段骨骼子集导入、
   `SkeletalBlendSpace` 相位/端点/夹紧、`SkeletalAdditive`/`SkeletalCachedPose`，
-  以及 `SkeletalLayered` 的 mask/alpha/顺序。
+  `SkeletalLayered` 的 mask/alpha/顺序，以及 `SkeletalSlotMontage` 的
+  masked overlay/完成语义。
 - `script_tests --gtest_filter=ScriptLocomotionTest.*`：34/34 通过，覆盖
   alias/VerticalSpeed/BlendSpace（230/365/500、端点、三 sample 区间、0.1 s 重插值）
   与 Conduit（同帧落地、入口规则回落、链、环、入口 conduit）、以及

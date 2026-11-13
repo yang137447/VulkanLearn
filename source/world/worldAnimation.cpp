@@ -205,7 +205,12 @@ nlohmann::json World::ScriptAnimationFeedback() const
                         {"alpha", player.LayeredAlpha()},
                         {"maskCount", player.LayeredMaskCount()}}},
                     {"cachedPose", {{"active", player.CachedPoseActive()},
-                        {"name", player.CachedPoseName()}}}};
+                        {"name", player.CachedPoseName()}}},
+                    {"slotMontage", {{"active", player.SlotMontageActive()},
+                        {"clip", player.SlotMontageClipId()},
+                        {"alpha", player.SlotMontageAlpha()},
+                        {"maskCount", player.SlotMontageMaskCount()},
+                        {"completed", player.SlotMontageCompleted()}}}};
                 const auto& rootMotion = player.RootMotionDelta();
                 feedback["rootMotion"] = nlohmann::json::array(
                     {rootMotion.x(), rootMotion.y(), rootMotion.z()});
@@ -613,12 +618,44 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             const float rate = request.value("rate", 1.0f);
             const bool inPlace = request.value("inPlace", true);
             const float startTime = ParseMontageStartTime(request);
-            candidate.SetFootPlacementEnabled(false);
-            candidate.SetInertializationEnabled(false);
-            candidate.SetRootOffsetEnabled(false);
-            Animation::PlayMontage(candidate, *montage, targets, loop, rate, inPlace, startTime);
-            // Montage 播放段不属于 Motion Matching；旧搜索绑定不能继续驱动同一组件。
-            runtimeCandidates.erase(identity);
+            // 带 slotMask 的 montage 是叠加层：基础时钟/根位移/notify 继续由当前
+            // 播放段拥有，montage 只按 mask 覆盖对应关节。
+            if (request.contains("slotMask"))
+            {
+                const auto& values = request.at("slotMask");
+                if (!values.is_array() || values.size() > 64)
+                    throw std::invalid_argument("Script.InvalidSlotMontage");
+                std::vector<std::string> mask;
+                mask.reserve(values.size());
+                for (const auto& value : values)
+                {
+                    if (!value.is_string())
+                        throw std::invalid_argument("Script.InvalidSlotMontage");
+                    const std::string bone = value.get<std::string>();
+                    if (bone.empty() || bone.size() > 128)
+                        throw std::invalid_argument("Script.InvalidSlotMontage");
+                    mask.push_back(bone);
+                }
+                const float slotAlpha = request.value("slotAlpha", 1.0f);
+                if (!std::isfinite(slotAlpha))
+                    throw std::invalid_argument("Script.InvalidSlotMontage");
+                std::string clipId = montage->derivedClipId;
+                if (clipId.empty() && !montage->segments.empty())
+                    clipId = montage->segments.front().derivedClipId;
+                if (clipId.empty())
+                    throw std::invalid_argument("Script.InvalidSlotMontage");
+                candidate.PlaySlotMontage(clipId, slotAlpha, loop, rate, mask);
+                runtimeCandidates.erase(identity);
+            }
+            else
+            {
+                candidate.SetFootPlacementEnabled(false);
+                candidate.SetInertializationEnabled(false);
+                candidate.SetRootOffsetEnabled(false);
+                Animation::PlayMontage(candidate, *montage, targets, loop, rate, inPlace, startTime);
+                // Montage 播放段不属于 Motion Matching；旧搜索绑定不能继续驱动同一组件。
+                runtimeCandidates.erase(identity);
+            }
         }
         else if (request.value("mode", std::string()) == "transitionTo")
         {

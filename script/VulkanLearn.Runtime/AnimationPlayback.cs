@@ -13,7 +13,9 @@ public readonly record struct AnimationState(string Clip, float Time, float Dura
     string SyncEffectiveMethod = "", string SyncScope = "", string SyncDiagnostic = "",
     int MontageSegment = 0, string MontageSegmentId = "", string BlendClip = "", float BlendWeight = 0,
     string AdditiveClip = "", float AdditiveAlpha = 0, string CachedPose = "",
-    string LayerClip = "", float LayerAlpha = 0, int LayerMaskCount = 0);
+    string LayerClip = "", float LayerAlpha = 0, int LayerMaskCount = 0,
+    string SlotMontageClip = "", float SlotMontageAlpha = 0, int SlotMontageMaskCount = 0,
+    bool SlotMontageCompleted = false);
 public readonly record struct AnimationSyncMarker(string Name, float Time);
 public readonly record struct AnimationPlayerInfo(string SyncGroup, string SyncRole, string SyncMethod,
     float StartPosition, bool Loop, string SyncGroupScope = "Local");
@@ -147,6 +149,8 @@ public sealed class AnimationPlayback
     internal AdditiveCommand? PendingAdditive;
     internal CachedPoseCommand? PendingCachedPose;
     internal LayeredPoseCommand? PendingLayeredPose;
+    internal string[] MontageSlotMask = [];
+    internal float MontageSlotAlpha = 1;
     internal bool BonePhysicsDebugRequested;
     internal readonly Dictionary<string, MontageInfo> Montages = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationPlayerInfo[]> ClipPlayers = new(StringComparer.Ordinal);
@@ -387,6 +391,35 @@ public sealed class AnimationPlayback
     {
         CheckRequest();
         PendingLayeredPose = LayeredPoseCommand.Disabled;
+    }
+
+    // Slot montage 的骨骼 mask：非空时，后续 PlayMontage 以 overlay 方式只覆盖
+    // mask 命中的关节；空 mask = 全身（等价旧行为）。alpha 在播放开始时固化。
+    public void SetMontageSlotMask(IReadOnlyList<string>? mask, float alpha = 1)
+    {
+        CheckRequest();
+        if (!float.IsFinite(alpha)) throw new ArgumentOutOfRangeException(nameof(alpha));
+        var bones = mask is null ? Array.Empty<string>() : mask.ToArray();
+        if (bones.Length == 0)
+        {
+            MontageSlotMask = [];
+            MontageSlotAlpha = 1;
+            return;
+        }
+        if (bones.Length > 64)
+            throw new ArgumentException("Slot mask exceeds 64 bones.", nameof(mask));
+        foreach (var bone in bones)
+            if (string.IsNullOrWhiteSpace(bone) || bone.Length > 128 || bone.Contains('\0'))
+                throw new ArgumentException("Slot mask contains an invalid bone name.", nameof(mask));
+        MontageSlotMask = bones;
+        MontageSlotAlpha = Math.Clamp(alpha, 0, 1);
+    }
+
+    public void ClearMontageSlotMask()
+    {
+        CheckRequest();
+        MontageSlotMask = [];
+        MontageSlotAlpha = 1;
     }
 
     // 任意时刻曲线采样：秒、clip-local、键间线性、区间外 clamp 到首/末值、单键常量。
@@ -903,6 +936,24 @@ public static partial class NativeBridge
                 if (layeredNode.TryGetProperty("maskCount", out var layerMaskNode))
                     layerMaskCount = layerMaskNode.GetInt32();
             }
+            var slotClip = "";
+            var slotAlpha = 0.0f;
+            var slotMaskCount = 0;
+            var slotCompleted = false;
+            if (value.TryGetProperty("slotMontage", out var slotNode) &&
+                slotNode.ValueKind == JsonValueKind.Object &&
+                slotNode.TryGetProperty("active", out var slotActive) &&
+                slotActive.GetBoolean())
+            {
+                if (slotNode.TryGetProperty("clip", out var slotClipNode))
+                    slotClip = slotClipNode.GetString()!;
+                if (slotNode.TryGetProperty("alpha", out var slotAlphaNode))
+                    slotAlpha = slotAlphaNode.GetSingle();
+                if (slotNode.TryGetProperty("maskCount", out var slotMaskNode))
+                    slotMaskCount = slotMaskNode.GetInt32();
+                if (slotNode.TryGetProperty("completed", out var slotCompletedNode))
+                    slotCompleted = slotCompletedNode.GetBoolean();
+            }
             component.Animation.Feedback = new(value.GetProperty("clip").GetString()!,
                 value.GetProperty("time").GetSingle(), value.GetProperty("duration").GetSingle(),
                 value.GetProperty("completed").GetBoolean(), value.GetProperty("playing").GetBoolean(),
@@ -928,7 +979,8 @@ public static partial class NativeBridge
                     syncDiagnostic.GetString()! : "",
                 montageSegment, montageSegmentId, blendClip, blendWeight,
                 additiveClip, additiveAlpha, cachedPoseName,
-                layerClip, layerAlpha, layerMaskCount);
+                layerClip, layerAlpha, layerMaskCount,
+                slotClip, slotAlpha, slotMaskCount, slotCompleted);
             component.Animation.FootPlacementFeedback = value.TryGetProperty("footPlacement", out var placement)
                 ? new(placement.GetProperty("enabled").GetBoolean(), placement.GetProperty("active").GetBoolean(),
                     placement.GetProperty("pelvisOffset").GetSingle(), ReadFootPlacementFoot(placement.GetProperty("feet")[0]),
@@ -1061,12 +1113,26 @@ public static partial class NativeBridge
                         inertialization = request.Inertialization, rootOffset = request.RootOffset,
                         footLock = request.FootLock });
                 else if (request.Montage.Length > 0)
-                    commands.Add(new { component = mesh.Id, mode = "playMontage", montage = request.Montage,
-                        loop = request.Loop, rate = request.Rate, inPlace = request.InPlace,
-                        startTime = request.MontageStartTime,
-                        targets = request.MontageTargets?.ToDictionary(pair => pair.Key,
+                {
+                    // 当前状态声明了 SlotMask 时，montage 以 overlay 方式播放，
+                    // 基础时钟/根位移继续由图状态拥有。
+                    var command = new Dictionary<string, object?>
+                    {
+                        ["component"] = mesh.Id, ["mode"] = "playMontage",
+                        ["montage"] = request.Montage, ["loop"] = request.Loop,
+                        ["rate"] = request.Rate, ["inPlace"] = request.InPlace,
+                        ["startTime"] = request.MontageStartTime,
+                        ["targets"] = request.MontageTargets?.ToDictionary(pair => pair.Key,
                             pair => DescribeWarpTarget(pair.Value),
-                            StringComparer.Ordinal) ?? new Dictionary<string, float[]>() });
+                            StringComparer.Ordinal) ?? new Dictionary<string, float[]>()
+                    };
+                    if (mesh.Animation.MontageSlotMask.Length > 0)
+                    {
+                        command["slotMask"] = mesh.Animation.MontageSlotMask;
+                        command["slotAlpha"] = mesh.Animation.MontageSlotAlpha;
+                    }
+                    commands.Add(command);
+                }
                 else if (request.Transition)
                     commands.Add(new { component = mesh.Id, mode = "transitionTo", clip = request.Clip,
                         startTime = request.TransitionStartTime, loop = request.Loop, rate = request.Rate,

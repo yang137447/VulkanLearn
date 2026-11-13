@@ -424,7 +424,8 @@ TEST_F(ScriptLocomotionTest, AnimationGraphValidationRejectsInvalidDefinitions)
     // 131072 additive alpha without clip, 262144 cached pose with clip,
     // 1048576 layer on conduit, 2097152 layer alpha without clip,
     // 4194304 duplicate layer mask bone.
-    EXPECT_NEAR(State()["position"][0].get<float>(), 7864319.0f, 0.001f);
+    // 8388608 adds a slot mask without a slot name.
+    EXPECT_NEAR(State()["position"][0].get<float>(), 16252927.0f, 0.001f);
 }
 
 TEST_F(ScriptLocomotionTest, PoseGraphReportsCachedPoseAdditiveAndSlot)
@@ -451,6 +452,7 @@ TEST_F(ScriptLocomotionTest, LayeredPoseDecisionFieldsAndValidation)
         SCOPED_TRACE(axis);
         EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
         EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
     }
 }
 

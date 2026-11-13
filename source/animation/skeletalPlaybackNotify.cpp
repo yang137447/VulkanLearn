@@ -132,7 +132,8 @@ void SkeletalPlayback::PushFired(const NotifyEvent& notify, const char* phase, f
     firedNotifies.push_back(std::move(event));
 }
 
-void SkeletalPlayback::ScanNotifySegment(double from, double to, bool includeTerminalEnd)
+void SkeletalPlayback::ScanNotifyTable(double from, double to, bool includeTerminalEnd,
+    const std::vector<NotifyEvent>& events, std::vector<uint8_t>& active)
 {
     if (!(to >= from)) return;
     struct Point
@@ -142,10 +143,10 @@ void SkeletalPlayback::ScanNotifySegment(double from, double to, bool includeTer
         bool end = false;
     };
     std::vector<Point> points;
-    points.reserve(notifyEvents.size() * 2);
-    for (size_t index = 0; index < notifyEvents.size(); ++index)
+    points.reserve(events.size() * 2);
+    for (size_t index = 0; index < events.size(); ++index)
     {
-        const NotifyEvent& notify = notifyEvents[index];
+        const NotifyEvent& notify = events[index];
         const double start = static_cast<double>(notify.time);
         if (!notify.IsState())
         {
@@ -166,29 +167,70 @@ void SkeletalPlayback::ScanNotifySegment(double from, double to, bool includeTer
         // end 含上界：到达作者 EndTime 的那一 tick 结束，不需要再等下一 tick。
         // 若“起点和终点同一 tick 内”（大 delta 跨过整个区间），begin/end 都会进点表，
         // 按时间排序后依次执行，回调方仍能看到完整的 begin→end。
-        if ((notifyActive[index] || beginsHere) && end <= to)
+        if ((active[index] || beginsHere) && end <= to)
             points.push_back({std::max(end, from), index, true});
     }
     std::stable_sort(points.begin(), points.end(),
         [](const Point& left, const Point& right) { return left.time < right.time; });
     for (const Point& point : points)
     {
-        const NotifyEvent& notify = notifyEvents[point.index];
+        const NotifyEvent& notify = events[point.index];
         if (point.end)
         {
-            if (!notifyActive[point.index]) continue;
-            notifyActive[point.index] = 0;
+            if (!active[point.index]) continue;
+            active[point.index] = 0;
             PushFired(notify, "end", static_cast<float>(point.time), false);
         }
         else if (!notify.IsState())
         {
             PushFired(notify, "instant", static_cast<float>(point.time), false);
         }
-        else if (!notifyActive[point.index])
+        else if (!active[point.index])
         {
-            notifyActive[point.index] = 1;
+            active[point.index] = 1;
             PushFired(notify, "begin", static_cast<float>(point.time), false);
         }
+    }
+}
+
+void SkeletalPlayback::ScanNotifySegment(double from, double to, bool includeTerminalEnd)
+{
+    ScanNotifyTable(from, to, includeTerminalEnd, notifyEvents, notifyActive);
+}
+
+void SkeletalPlayback::RebuildSlotNotifyEvents()
+{
+    slotNotifyEvents.clear();
+    slotNotifyActive.clear();
+    const auto& animation = asset->AnimationAsset();
+    if (!slotMontageActive || slotMontageClip >= animation.clips.size()) return;
+    for (const auto& notify : animation.clips.at(slotMontageClip).sequence.notifies)
+    {
+        NotifyEvent event;
+        event.name = notify.name;
+        event.track = notify.track;
+        event.kind = notify.duration > 0 ? "notifyState" : "notify";
+        event.time = notify.time;
+        event.duration = notify.duration;
+        slotNotifyEvents.push_back(std::move(event));
+    }
+    std::stable_sort(slotNotifyEvents.begin(), slotNotifyEvents.end(),
+        [](const NotifyEvent& left, const NotifyEvent& right) { return left.time < right.time; });
+    slotNotifyActive.assign(slotNotifyEvents.size(), 0);
+}
+
+void SkeletalPlayback::ScanSlotNotifies(double from, double to, bool includeTerminalEnd)
+{
+    ScanNotifyTable(from, to, includeTerminalEnd, slotNotifyEvents, slotNotifyActive);
+}
+
+void SkeletalPlayback::EndActiveSlotNotifyStates(float atTime, bool interrupted)
+{
+    for (size_t index = 0; index < slotNotifyEvents.size(); ++index)
+    {
+        if (!slotNotifyActive[index]) continue;
+        slotNotifyActive[index] = 0;
+        PushFired(slotNotifyEvents[index], "end", atTime, interrupted);
     }
 }
 

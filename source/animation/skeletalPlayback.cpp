@@ -146,6 +146,7 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     AdvanceSyncSourceClock(deltaSeconds);
     AdvanceAdditiveClock(deltaSeconds);
     AdvanceLayerClock(deltaSeconds);
+    AdvanceSlotMontageClock(deltaSeconds);
     if (syncJumped)
     {
         // 与 Seek 一样，相位跳变不补发被跳过的事件；只按新位置重建活动区间，
@@ -210,6 +211,8 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     locals = ApplyAdditive(std::move(locals));
     // LayeredBoneBlend 只改 mask 命中的关节，顺序固定在 additive 之后。
     locals = ApplyLayered(std::move(locals));
+    // Masked Slot Montage 叠在基础姿态上，只覆盖 mask 命中的关节。
+    locals = ApplySlotMontage(std::move(locals));
     if (!inertialization.Empty() && elapsed < blendDuration)
     {
         const auto target = ReadKinematics(locals, asset->mesh.joints.size());
@@ -339,6 +342,58 @@ LocalPose SkeletalPlayback::ApplyLayered(LocalPose locals) const
         asset->mesh.joints.size());
 }
 
+void SkeletalPlayback::AdvanceSlotMontageClock(float deltaSeconds)
+{
+    if (!slotMontageActive || slotMontageCompleted || deltaSeconds <= 0) return;
+    const auto& animation = asset->AnimationAsset();
+    if (slotMontageClip >= animation.clips.size()) return;
+    const auto& clip = animation.clips[slotMontageClip];
+    const float duration = clip.runtime ? clip.runtime->duration() : 0.0f;
+    if (duration <= 0) return;
+    const float previousTime = slotMontageTime;
+    float nextTime = previousTime + deltaSeconds * slotMontageRate;
+    if (slotMontageLoop)
+    {
+        if (nextTime >= duration)
+        {
+            nextTime = std::fmod(nextTime, duration);
+            // 回绕：先扫尾部，再扫新循环头部；与主播放器的“先尾后头”一致。
+            ScanSlotNotifies(previousTime, duration, false);
+            ScanSlotNotifies(0.0, nextTime, false);
+        }
+        else ScanSlotNotifies(previousTime, nextTime, false);
+        slotMontageTime = nextTime;
+    }
+    else if (slotMontageTime >= duration)
+    {
+        slotMontageTime = std::max(0.0f, duration - 1e-4f);
+        slotMontageCompleted = true;
+    }
+    else if (nextTime >= duration)
+    {
+        // 一次性 overlay 到末帧：允许 time==duration 的瞬时 notify，并结束活动区间。
+        ScanSlotNotifies(previousTime, duration, true);
+        EndActiveSlotNotifyStates(duration, false);
+        slotMontageTime = std::max(0.0f, duration - 1e-4f);
+        slotMontageCompleted = true;
+    }
+    else
+    {
+        ScanSlotNotifies(previousTime, nextTime, false);
+        slotMontageTime = nextTime;
+    }
+}
+
+LocalPose SkeletalPlayback::ApplySlotMontage(LocalPose locals) const
+{
+    if (!slotMontageActive || slotMontageAlpha <= 0) return locals;
+    const auto& animation = asset->AnimationAsset();
+    if (slotMontageClip >= animation.clips.size()) return locals;
+    const LocalPose sample = Sample(slotMontageClip, slotMontageTime);
+    return ApplyLayeredPose(locals, sample, slotMontageMask, slotMontageAlpha,
+        asset->mesh.joints.size());
+}
+
 void SkeletalPlayback::TickCachedPose(float deltaSeconds)
 {
     firedNotifies = std::move(pendingNotifies);
@@ -348,9 +403,11 @@ void SkeletalPlayback::TickCachedPose(float deltaSeconds)
         throw std::runtime_error("Cached pose disappeared: " + useCachedPoseName);
     AdvanceAdditiveClock(deltaSeconds);
     AdvanceLayerClock(deltaSeconds);
+    AdvanceSlotMontageClock(deltaSeconds);
     auto locals = found->second;
     locals = ApplyAdditive(std::move(locals));
     locals = ApplyLayered(std::move(locals));
+    locals = ApplySlotMontage(std::move(locals));
     const float elapsed = IsBlending() ? std::min(blendElapsed + deltaSeconds, blendDuration) : 0;
     if (!inertialization.Empty() && elapsed < blendDuration)
     {
