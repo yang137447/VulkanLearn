@@ -393,6 +393,46 @@ void SkeletalPlayback::SetLayeredPose(const std::string& clipId, float alpha, bo
     layeredLoop = loop;
     layeredMask = std::move(mask);
     layeredMaskBones = boneMask.empty() ? jointCount : boneMask.size();
+    layeredWeights.clear();
+    layeredActive = true;
+}
+
+void SkeletalPlayback::SetLayeredPoseWeights(const std::string& clipId, float alpha, bool loop,
+    const std::vector<BlendProfileBone>& boneWeights)
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!std::isfinite(alpha))
+        throw std::invalid_argument("Layered alpha must be finite");
+    if (boneWeights.size() > 256)
+        throw std::invalid_argument("Layered blend profile exceeds 256 bones");
+    size_t index = 0;
+    while (index < animation.clips.size() && animation.clips[index].id != clipId) ++index;
+    if (index == animation.clips.size())
+        throw std::invalid_argument("Unknown animation layered clip: " + clipId);
+    const auto jointCount = asset->mesh.joints.size();
+    // VL 白名单语义：未列出的骨骼权重 0（UE BlendProfile 未列出按 1.0；这里更接近
+    // mask，避免局部动作意外覆盖全身）。契约写明这一有意差异。
+    std::vector<float> weights(jointCount, 0.0f);
+    for (const BlendProfileBone& bone : boneWeights)
+    {
+        if (!std::isfinite(bone.weight))
+            throw std::invalid_argument("Layered blend profile weight must be finite");
+        size_t joint = 0;
+        while (joint < jointCount && asset->mesh.joints[joint].name != bone.name) ++joint;
+        if (joint == jointCount)
+            throw std::invalid_argument("Unknown layered bone: " + bone.name);
+        weights[joint] = std::clamp(bone.weight, 0.0f, 1.0f);
+    }
+    if (!layeredActive || layeredClip != index)
+    {
+        layeredTime = 0;
+        layeredClip = index;
+    }
+    layeredAlpha = std::clamp(alpha, 0.0f, 1.0f);
+    layeredLoop = loop;
+    layeredMask.clear();
+    layeredMaskBones = boneWeights.size();
+    layeredWeights = std::move(weights);
     layeredActive = true;
 }
 
@@ -403,6 +443,7 @@ void SkeletalPlayback::ClearLayeredPose()
     layeredTime = 0;
     layeredMask.clear();
     layeredMaskBones = 0;
+    layeredWeights.clear();
 }
 
 std::string SkeletalPlayback::LayeredClipId() const
@@ -445,7 +486,46 @@ void SkeletalPlayback::PlaySlotMontage(const std::string& clipId, float alpha, b
     slotMontageCompleted = false;
     slotMontageMask = std::move(mask);
     slotMontageMaskBones = boneMask.empty() ? jointCount : boneMask.size();
+    slotMontageWeights.clear();
     // 换 overlay 片段前结束上一段的 notifyState，再按新片段重建事件表。
+    EndActiveSlotNotifyStates(slotMontageTime, true);
+    slotMontageActive = true;
+    RebuildSlotNotifyEvents();
+}
+
+void SkeletalPlayback::PlaySlotMontageWeights(const std::string& clipId, float alpha, bool loop,
+    float rate, const std::vector<BlendProfileBone>& boneWeights)
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!std::isfinite(alpha) || !std::isfinite(rate) || rate <= 0 || rate > 4)
+        throw std::invalid_argument("Slot montage alpha/rate is invalid");
+    if (boneWeights.size() > 256)
+        throw std::invalid_argument("Slot montage blend profile exceeds 256 bones");
+    size_t index = 0;
+    while (index < animation.clips.size() && animation.clips[index].id != clipId) ++index;
+    if (index == animation.clips.size())
+        throw std::invalid_argument("Unknown slot montage clip: " + clipId);
+    const auto jointCount = asset->mesh.joints.size();
+    std::vector<float> weights(jointCount, 0.0f);
+    for (const BlendProfileBone& bone : boneWeights)
+    {
+        if (!std::isfinite(bone.weight))
+            throw std::invalid_argument("Slot montage blend profile weight must be finite");
+        size_t joint = 0;
+        while (joint < jointCount && asset->mesh.joints[joint].name != bone.name) ++joint;
+        if (joint == jointCount)
+            throw std::invalid_argument("Unknown slot montage bone: " + bone.name);
+        weights[joint] = std::clamp(bone.weight, 0.0f, 1.0f);
+    }
+    slotMontageClip = index;
+    slotMontageAlpha = std::clamp(alpha, 0.0f, 1.0f);
+    slotMontageLoop = loop;
+    slotMontageRate = rate;
+    slotMontageTime = 0;
+    slotMontageCompleted = false;
+    slotMontageMask.clear();
+    slotMontageMaskBones = boneWeights.size();
+    slotMontageWeights = std::move(weights);
     EndActiveSlotNotifyStates(slotMontageTime, true);
     slotMontageActive = true;
     RebuildSlotNotifyEvents();
@@ -460,6 +540,7 @@ void SkeletalPlayback::StopSlotMontage()
     slotMontageCompleted = false;
     slotMontageMask.clear();
     slotMontageMaskBones = 0;
+    slotMontageWeights.clear();
     slotNotifyEvents.clear();
     slotNotifyActive.clear();
 }

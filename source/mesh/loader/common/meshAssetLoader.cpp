@@ -459,6 +459,25 @@ MeshAssetImportResult MeshAssetLoader::ImportSections(const MeshAssetLoadRequest
             asset->blendSpaces.push_back(std::move(space));
         }
 
+        // BlendProfile 依赖网格关节：在 mesh 与 clips 就绪后解析，名称必须唯一。
+        for (MeshBlendProfilePlan& profilePlan : plan.animationBlendProfiles)
+        {
+            std::string profileDigest;
+            const nlohmann::json profileJson = LoadBoundedJsonFile(
+                profilePlan.path, "BlendProfile asset", MaxSkeletonJsonBytes, profileDigest);
+            BlendProfileAsset profile = ParseBlendProfile(profileJson, profilePlan.path);
+            ValidateBlendProfileBones(profile, *asset, profilePlan.path);
+            for (const BlendProfileAsset& existing : asset->blendProfiles)
+                if (existing.name == profile.name)
+                    throw std::runtime_error(
+                        "Duplicate skeletal blend profile name: " + profile.name);
+            profilePlan.digest = profileDigest;
+            plan.modelCacheKey +=
+                "|blendProfileBlake3=" + profile.name + ":" + profileDigest;
+            asset->sourceInputs.emplace_back(profilePlan.path, profileDigest);
+            asset->blendProfiles.push_back(std::move(profile));
+        }
+
         // Assimp 读取期间源可能被替换；只有整份清单仍一致才发布导入后的不可变资产。
         for (const auto& input : asset->sourceInputs)
             if (VL::ContentHasher::HashFile(CommonFunction::Path(input.first)).ToHex() != input.second)

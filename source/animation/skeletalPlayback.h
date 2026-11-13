@@ -40,6 +40,19 @@ struct BlendSpaceAsset
     std::string interpolation = "EaseInOut";
 };
 
+// BP_*.json 的逐骨权重；未列出的骨骼按 1.0（UE BlendProfile 语义）。
+struct BlendProfileBone
+{
+    std::string name;
+    float weight = 1;
+};
+
+struct BlendProfileAsset
+{
+    std::string name;
+    std::vector<BlendProfileBone> bones;
+};
+
 struct SkeletalAsset
 {
     SkeletonMesh mesh;
@@ -53,6 +66,8 @@ struct SkeletalAsset
     // SM skinning.blendSpaces 导入的 1D BlendSpace 资产；C# 图按 name 引用并展开为
     // 运行期 BlendSamples，原生播放器仍只消费展开后的片段对。
     std::vector<BlendSpaceAsset> blendSpaces;
+    // SKM skinning.blendProfiles 导入的逐骨权重；layered/slot 按名字解析成关节权重。
+    std::vector<BlendProfileAsset> blendProfiles;
     // 正式加载时捕获源字节身份；MM 绑定统计前核对同一代模型和片段。
     std::vector<std::pair<std::string, std::string>> sourceInputs;
     // 可选的动画源资产。目标资产拥有最终渲染 mesh；动作源只提供 clips、
@@ -198,6 +213,9 @@ public:
     // 空 mask 视为全身；未知骨骼名拒绝。顺序固定为 base → additive → layered。
     void SetLayeredPose(const std::string& clipId, float alpha, bool loop,
         const std::vector<std::string>& boneMask);
+    // BlendProfile 重载：未列出的骨骼按 1.0，权重 × alpha 得到每关节权重。
+    void SetLayeredPoseWeights(const std::string& clipId, float alpha, bool loop,
+        const std::vector<BlendProfileBone>& boneWeights);
     void ClearLayeredPose();
     bool LayeredActive() const { return layeredActive; }
     std::string LayeredClipId() const;
@@ -208,6 +226,8 @@ public:
     // 后置 completed（宿主可据此清理）。空 mask = 全身，未知骨骼名拒绝。
     void PlaySlotMontage(const std::string& clipId, float alpha, bool loop, float rate,
         const std::vector<std::string>& boneMask);
+    void PlaySlotMontageWeights(const std::string& clipId, float alpha, bool loop, float rate,
+        const std::vector<BlendProfileBone>& boneWeights);
     void StopSlotMontage();
     bool SlotMontageActive() const { return slotMontageActive; }
     std::string SlotMontageClipId() const;
@@ -518,6 +538,8 @@ private:
     // 逐关节 mask；空输入 mask 会展开为全身。
     std::vector<uint8_t> layeredMask;
     size_t layeredMaskBones = 0;
+    // 非空时优先于 layeredMask：每关节原始权重（未列出 1.0）。
+    std::vector<float> layeredWeights;
     bool slotMontageActive = false;
     size_t slotMontageClip = 0;
     float slotMontageAlpha = 0;
@@ -527,6 +549,7 @@ private:
     bool slotMontageCompleted = false;
     std::vector<uint8_t> slotMontageMask;
     size_t slotMontageMaskBones = 0;
+    std::vector<float> slotMontageWeights;
     std::vector<NotifyEvent> slotNotifyEvents;
     std::vector<uint8_t> slotNotifyActive;
     std::unordered_map<std::string, float> frameCurves;

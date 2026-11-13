@@ -41,6 +41,9 @@ public readonly record struct MontageWindowInfo(string Target, float Start, floa
 public readonly record struct AnimationBlendSpaceSample(string Clip, float Threshold);
 public sealed record AnimationBlendSpaceDefinition(string Name, float WeightSpeedPerSec,
     string Interpolation, IReadOnlyList<AnimationBlendSpaceSample> Samples);
+// BP_*.json 的逐骨权重；未列出的骨骼按 1.0（UE BlendProfile 语义）。
+public readonly record struct AnimationBoneWeight(string Bone, float Weight);
+public sealed record AnimationBlendProfile(string Name, IReadOnlyList<AnimationBoneWeight> Bones);
 // 多 AnimSegment Montage 的一段；Start/End 是 Montage 时间轴，ClipStart/ClipEnd 是
 // sidecar 本地时间。C# 只读 catalog/feedback，不维护第二份段时钟。
 public readonly record struct MontageSegmentInfo(int Index, string SegmentId, string SequencePath,
@@ -109,10 +112,10 @@ internal sealed record CachedPoseCommand(bool Enabled, bool Capture, string Name
 }
 // LayeredBoneBlend：overlay 片段按骨骼 mask 混合到当前姿态。
 internal sealed record LayeredPoseCommand(bool Enabled, string Clip, float Alpha, bool Loop,
-    string[] Mask)
+    string[] Mask, AnimationBoneWeight[] Weights)
 {
     public static readonly LayeredPoseCommand Disabled =
-        new(false, "", 0, false, Array.Empty<string>());
+        new(false, "", 0, false, Array.Empty<string>(), Array.Empty<AnimationBoneWeight>());
 }
 // 图级命名 pose 分支：每帧在主状态之前求值，UseCachedPose 同帧读取。
 public readonly record struct CachedPoseBranchSample(string Clip, float Threshold);
@@ -161,10 +164,12 @@ public sealed class AnimationPlayback
     internal readonly Dictionary<string, float> PendingCachedPoseAxes = new(StringComparer.Ordinal);
     internal LayeredPoseCommand? PendingLayeredPose;
     internal string[] MontageSlotMask = [];
+    internal AnimationBoneWeight[] MontageSlotWeights = [];
     internal float MontageSlotAlpha = 1;
     internal bool BonePhysicsDebugRequested;
     internal readonly Dictionary<string, MontageInfo> Montages = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationBlendSpaceDefinition> BlendSpaces = new(StringComparer.Ordinal);
+    internal readonly Dictionary<string, AnimationBlendProfile> BlendProfiles = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationPlayerInfo[]> ClipPlayers = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationSyncMarker[]> ClipSyncMarkers = new(StringComparer.Ordinal);
     public IReadOnlyList<string> Clips { get { CheckAccess(); return Array.AsReadOnly(ClipIds); } }
@@ -441,7 +446,32 @@ public sealed class AnimationPlayback
         foreach (var bone in bones)
             if (string.IsNullOrWhiteSpace(bone) || bone.Length > 128 || bone.Contains('\0'))
                 throw new ArgumentException("Layer mask contains an invalid bone name.", nameof(mask));
-        PendingLayeredPose = new(true, clip, Math.Clamp(alpha, 0, 1), loop, bones);
+        PendingLayeredPose = new(true, clip, Math.Clamp(alpha, 0, 1), loop, bones,
+            Array.Empty<AnimationBoneWeight>());
+    }
+
+    // BlendProfile 重载：未列出的骨骼按 1.0；未知骨骼由原生拒绝。
+    public void SetLayeredPose(string clip, float alpha, bool loop,
+        IReadOnlyList<AnimationBoneWeight>? weights)
+    {
+        CheckRequest();
+        if (!ClipIds.Contains(clip, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown animation clip: {clip}", nameof(clip));
+        if (!float.IsFinite(alpha)) throw new ArgumentOutOfRangeException(nameof(alpha));
+        var bones = weights is null ? Array.Empty<AnimationBoneWeight>() : weights.ToArray();
+        if (bones.Length > 256)
+            throw new ArgumentException("Layer blend profile exceeds 256 bones.", nameof(weights));
+        foreach (var bone in bones)
+        {
+            if (string.IsNullOrWhiteSpace(bone.Bone) || bone.Bone.Length > 128 || bone.Bone.Contains('\0'))
+                throw new ArgumentException(
+                    "Layer blend profile contains an invalid bone name.", nameof(weights));
+            if (!float.IsFinite(bone.Weight) || bone.Weight < 0 || bone.Weight > 1)
+                throw new ArgumentException(
+                    "Layer blend profile weight must be in [0,1].", nameof(weights));
+        }
+        PendingLayeredPose = new(true, clip, Math.Clamp(alpha, 0, 1), loop,
+            Array.Empty<string>(), bones);
     }
 
     public void ClearLayeredPose()
@@ -460,6 +490,7 @@ public sealed class AnimationPlayback
         if (bones.Length == 0)
         {
             MontageSlotMask = [];
+            MontageSlotWeights = [];
             MontageSlotAlpha = 1;
             return;
         }
@@ -469,6 +500,35 @@ public sealed class AnimationPlayback
             if (string.IsNullOrWhiteSpace(bone) || bone.Length > 128 || bone.Contains('\0'))
                 throw new ArgumentException("Slot mask contains an invalid bone name.", nameof(mask));
         MontageSlotMask = bones;
+        MontageSlotWeights = [];
+        MontageSlotAlpha = Math.Clamp(alpha, 0, 1);
+    }
+
+    public void SetMontageSlotWeights(IReadOnlyList<AnimationBoneWeight>? weights, float alpha = 1)
+    {
+        CheckRequest();
+        if (!float.IsFinite(alpha)) throw new ArgumentOutOfRangeException(nameof(alpha));
+        var bones = weights is null ? Array.Empty<AnimationBoneWeight>() : weights.ToArray();
+        if (bones.Length == 0)
+        {
+            MontageSlotWeights = [];
+            MontageSlotMask = [];
+            MontageSlotAlpha = 1;
+            return;
+        }
+        if (bones.Length > 256)
+            throw new ArgumentException("Slot blend profile exceeds 256 bones.", nameof(weights));
+        foreach (var bone in bones)
+        {
+            if (string.IsNullOrWhiteSpace(bone.Bone) || bone.Bone.Length > 128 || bone.Bone.Contains('\0'))
+                throw new ArgumentException(
+                    "Slot blend profile contains an invalid bone name.", nameof(weights));
+            if (!float.IsFinite(bone.Weight) || bone.Weight < 0 || bone.Weight > 1)
+                throw new ArgumentException(
+                    "Slot blend profile weight must be in [0,1].", nameof(weights));
+        }
+        MontageSlotWeights = bones;
+        MontageSlotMask = [];
         MontageSlotAlpha = Math.Clamp(alpha, 0, 1);
     }
 
@@ -476,6 +536,7 @@ public sealed class AnimationPlayback
     {
         CheckRequest();
         MontageSlotMask = [];
+        MontageSlotWeights = [];
         MontageSlotAlpha = 1;
     }
 
@@ -797,6 +858,7 @@ public static partial class NativeBridge
         animation.CurveData.Clear();
         animation.Montages.Clear();
         animation.BlendSpaces.Clear();
+        animation.BlendProfiles.Clear();
         animation.ClipPlayers.Clear();
         animation.ClipSyncMarkers.Clear();
         if (!context.AnimationAssets.TryGetValue(path, out var assets) ||
@@ -852,6 +914,15 @@ public static partial class NativeBridge
                     space.Value.TryGetProperty("interpolation", out var interpolation)
                         ? interpolation.GetString() ?? "EaseInOut" : "EaseInOut",
                     samples);
+            }
+        if (assets.TryGetProperty("blendProfiles", out var blendProfiles) &&
+            blendProfiles.ValueKind == JsonValueKind.Object)
+            foreach (var profile in blendProfiles.EnumerateObject())
+            {
+                var bones = profile.Value.GetProperty("bones").EnumerateObject()
+                    .Select(bone => new AnimationBoneWeight(bone.Name, bone.Value.GetSingle()))
+                    .ToArray();
+                animation.BlendProfiles[profile.Name] = new AnimationBlendProfile(profile.Name, bones);
             }
     }
 
@@ -1212,6 +1283,12 @@ public static partial class NativeBridge
                         command["slotMask"] = mesh.Animation.MontageSlotMask;
                         command["slotAlpha"] = mesh.Animation.MontageSlotAlpha;
                     }
+                    else if (mesh.Animation.MontageSlotWeights.Length > 0)
+                    {
+                        command["slotWeights"] = mesh.Animation.MontageSlotWeights
+                            .Select(bone => new { bone = bone.Bone, weight = bone.Weight }).ToArray();
+                        command["slotAlpha"] = mesh.Animation.MontageSlotAlpha;
+                    }
                     commands.Add(command);
                 }
                 else if (request.Transition)
@@ -1271,7 +1348,10 @@ public static partial class NativeBridge
             {
                 commands.Add(new { component = mesh.Id, mode = "layeredPose",
                     enabled = layered.Enabled, clip = layered.Clip,
-                    alpha = layered.Alpha, loop = layered.Loop, mask = layered.Mask });
+                    alpha = layered.Alpha, loop = layered.Loop, mask = layered.Mask,
+                    weights = layered.Weights.Length > 0
+                        ? layered.Weights.Select(bone => new { bone = bone.Bone, weight = bone.Weight }).ToArray()
+                        : null });
                 mesh.Animation.PendingLayeredPose = null;
             }
             // 斜率配置放在主命令之后：非 slope 命令仍保持“同一 batch 只允许一条”的

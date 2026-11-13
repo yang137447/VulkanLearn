@@ -54,7 +54,9 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     {
         if (runtime is not null) return true;
         if (HasBlendSpaceReferences(Graph) && Animation.BlendSpaces.Count == 0) return false;
-        Graph = Graph.ResolveBlendSpaces(Animation.BlendSpaces).Validate();
+        if (HasBlendProfileReferences(Graph) && Animation.BlendProfiles.Count == 0) return false;
+        Graph = Graph.ResolveBlendSpaces(Animation.BlendSpaces)
+            .ResolveBlendProfiles(Animation.BlendProfiles).Validate();
         runtime = new AnimationGraphRuntime(Graph);
         OnGraphCreated();
         return true;
@@ -73,6 +75,16 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
         foreach (var machine in graph.StateMachines)
             foreach (var state in machine.States)
                 if (!string.IsNullOrWhiteSpace(state.BlendSpace)) return true;
+        return false;
+    }
+
+    private static bool HasBlendProfileReferences(AnimationGraphDefinition graph)
+    {
+        foreach (var machine in graph.StateMachines)
+            foreach (var state in machine.States)
+                if (!string.IsNullOrWhiteSpace(state.LayerBlendProfile) ||
+                    !string.IsNullOrWhiteSpace(state.SlotBlendProfile))
+                    return true;
         return false;
     }
 
@@ -170,7 +182,10 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     private void SubmitSlotMask(in AnimationGraphDecision next)
     {
         string mask = next.Slot.Length > 0 && next.SlotMask is { Count: > 0 }
-            ? string.Join("|", next.SlotMask) : "";
+            ? string.Join("|", next.SlotMask)
+            : next.Slot.Length > 0 && next.SlotWeights is { Count: > 0 }
+                ? string.Join("|", next.SlotWeights.Select(w => $"{w.Bone}:{w.Weight:F3}"))
+                : "";
         if (mask.Length == 0)
         {
             if (!slotMaskSubmitted) return;
@@ -182,7 +197,11 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
         if (slotMaskSubmitted && string.Equals(lastSlotMask, mask, StringComparison.Ordinal) &&
             MathF.Abs(lastSlotAlpha - next.SlotAlpha) < 1e-4f)
             return;
-        Animation.SetMontageSlotMask(next.SlotMask, next.SlotAlpha);
+        if (next.SlotWeights is { Count: > 0 })
+            Animation.SetMontageSlotWeights(next.SlotWeights
+                .Select(w => new AnimationBoneWeight(w.Bone, w.Weight)).ToArray(), next.SlotAlpha);
+        else
+            Animation.SetMontageSlotMask(next.SlotMask, next.SlotAlpha);
         slotMaskSubmitted = true;
         lastSlotMask = mask;
         lastSlotAlpha = next.SlotAlpha;
@@ -244,15 +263,22 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
             return;
         }
         string mask = next.LayerMask is { Count: > 0 }
-            ? string.Join("|", next.LayerMask) : "";
+            ? string.Join("|", next.LayerMask)
+            : next.LayerWeights is { Count: > 0 }
+                ? string.Join("|", next.LayerWeights.Select(w => $"{w.Bone}:{w.Weight:F3}"))
+                : "";
         if (layerSubmitted &&
             string.Equals(lastLayerClip, next.LayerClip, StringComparison.Ordinal) &&
             MathF.Abs(lastLayerAlpha - next.LayerAlpha) < 1e-4f &&
             lastLayerLoop == next.LayerLoop &&
             string.Equals(lastLayerMask, mask, StringComparison.Ordinal))
             return;
-        Animation.SetLayeredPose(next.LayerClip, next.LayerAlpha, next.LayerLoop,
-            next.LayerMask);
+        if (next.LayerWeights is { Count: > 0 })
+            Animation.SetLayeredPose(next.LayerClip, next.LayerAlpha, next.LayerLoop,
+                next.LayerWeights.Select(w => new AnimationBoneWeight(w.Bone, w.Weight)).ToArray());
+        else
+            Animation.SetLayeredPose(next.LayerClip, next.LayerAlpha, next.LayerLoop,
+                next.LayerMask);
         layerSubmitted = true;
         lastLayerClip = next.LayerClip;
         lastLayerAlpha = next.LayerAlpha;

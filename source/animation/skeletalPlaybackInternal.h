@@ -224,4 +224,26 @@ inline LocalPose ApplyMeshSpaceRotationAdditive(const LocalPose& base, const Loc
     }
     return WriteKinematics(base, kinematics);
 }
+
+// BlendProfile：weights 是每关节原始权重（未列出的骨骼 1.0），最终权重 = alpha * weight。
+inline LocalPose ApplyLayeredWeights(const LocalPose& base, const LocalPose& overlay,
+    const std::vector<float>& weights, float alpha, size_t jointCount)
+{
+    if (alpha <= 0 || jointCount == 0) return base;
+    auto target = ReadKinematics(base, jointCount);
+    const auto layer = ReadKinematics(overlay, jointCount);
+    for (size_t joint = 0; joint < jointCount; ++joint)
+    {
+        const float weight = std::clamp(
+            alpha * (joint < weights.size() ? weights[joint] : 1.0f), 0.0f, 1.0f);
+        if (weight <= 0) continue;
+        target[joint].translation =
+            target[joint].translation * (1.0f - weight) + layer[joint].translation * weight;
+        target[joint].rotation =
+            target[joint].rotation.slerp(weight, layer[joint].rotation).normalized();
+        target[joint].scale =
+            target[joint].scale * (1.0f - weight) + layer[joint].scale * weight;
+    }
+    return WriteKinematics(base, target);
+}
 }

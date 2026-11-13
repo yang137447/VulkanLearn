@@ -633,7 +633,37 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             const float startTime = ParseMontageStartTime(request);
             // 带 slotMask 的 montage 是叠加层：基础时钟/根位移/notify 继续由当前
             // 播放段拥有，montage 只按 mask 覆盖对应关节。
-            if (request.contains("slotMask"))
+            if (request.contains("slotWeights") && request.at("slotWeights").is_array())
+            {
+                const auto& values = request.at("slotWeights");
+                if (values.size() > 256)
+                    throw std::invalid_argument("Script.InvalidSlotMontage");
+                std::vector<Animation::BlendProfileBone> weights;
+                weights.reserve(values.size());
+                for (const auto& value : values)
+                {
+                    if (!value.is_object() || !value.contains("bone") ||
+                        !value.at("bone").is_string() || !value.contains("weight") ||
+                        !value.at("weight").is_number())
+                        throw std::invalid_argument("Script.InvalidSlotMontage");
+                    const std::string bone = value.at("bone").get<std::string>();
+                    const float weight = value.at("weight").get<float>();
+                    if (bone.empty() || bone.size() > 128 || !std::isfinite(weight))
+                        throw std::invalid_argument("Script.InvalidSlotMontage");
+                    weights.push_back({bone, weight});
+                }
+                const float slotAlpha = request.value("slotAlpha", 1.0f);
+                if (!std::isfinite(slotAlpha))
+                    throw std::invalid_argument("Script.InvalidSlotMontage");
+                std::string clipId = montage->derivedClipId;
+                if (clipId.empty() && !montage->segments.empty())
+                    clipId = montage->segments.front().derivedClipId;
+                if (clipId.empty())
+                    throw std::invalid_argument("Script.InvalidSlotMontage");
+                candidate.PlaySlotMontageWeights(clipId, slotAlpha, loop, rate, weights);
+                runtimeCandidates.erase(identity);
+            }
+            else if (request.contains("slotMask"))
             {
                 const auto& values = request.at("slotMask");
                 if (!values.is_array() || values.size() > 64)
@@ -817,27 +847,54 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             {
                 if (!request.contains("clip") || !request.at("clip").is_string() ||
                     !request.contains("alpha") || !request.at("alpha").is_number() ||
-                    !request.contains("loop") || !request.at("loop").is_boolean() ||
-                    !request.contains("mask") || !request.at("mask").is_array())
+                    !request.contains("loop") || !request.at("loop").is_boolean())
                     throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
                 const std::string clip = request.at("clip").get<std::string>();
                 const float alpha = request.at("alpha").get<float>();
-                if (clip.empty() || clip.size() > 256 || !std::isfinite(alpha) ||
-                    request.at("mask").size() > 64)
+                if (clip.empty() || clip.size() > 256 || !std::isfinite(alpha))
                     throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
-                std::vector<std::string> mask;
-                mask.reserve(request.at("mask").size());
-                for (const auto& entry : request.at("mask"))
+                const bool hasWeights = request.contains("weights") &&
+                    request.at("weights").is_array() && !request.at("weights").empty();
+                if (hasWeights)
                 {
-                    if (!entry.is_string()) throw std::invalid_argument(
-                        "Script.InvalidLayeredPoseRequest");
-                    const std::string bone = entry.get<std::string>();
-                    if (bone.empty() || bone.size() > 128) throw std::invalid_argument(
-                        "Script.InvalidLayeredPoseRequest");
-                    mask.push_back(bone);
+                    if (request.at("weights").size() > 256)
+                        throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+                    std::vector<Animation::BlendProfileBone> weights;
+                    weights.reserve(request.at("weights").size());
+                    for (const auto& entry : request.at("weights"))
+                    {
+                        if (!entry.is_object() || !entry.contains("bone") ||
+                            !entry.at("bone").is_string() || !entry.contains("weight") ||
+                            !entry.at("weight").is_number())
+                            throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+                        const std::string bone = entry.at("bone").get<std::string>();
+                        const float weight = entry.at("weight").get<float>();
+                        if (bone.empty() || bone.size() > 128 || !std::isfinite(weight))
+                            throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+                        weights.push_back({bone, weight});
+                    }
+                    candidate.SetLayeredPoseWeights(clip, alpha,
+                        request.at("loop").get<bool>(), weights);
                 }
-                candidate.SetLayeredPose(clip, alpha,
-                    request.at("loop").get<bool>(), mask);
+                else
+                {
+                    if (!request.contains("mask") || !request.at("mask").is_array() ||
+                        request.at("mask").size() > 64)
+                        throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+                    std::vector<std::string> mask;
+                    mask.reserve(request.at("mask").size());
+                    for (const auto& entry : request.at("mask"))
+                    {
+                        if (!entry.is_string()) throw std::invalid_argument(
+                            "Script.InvalidLayeredPoseRequest");
+                        const std::string bone = entry.get<std::string>();
+                        if (bone.empty() || bone.size() > 128) throw std::invalid_argument(
+                            "Script.InvalidLayeredPoseRequest");
+                        mask.push_back(bone);
+                    }
+                    candidate.SetLayeredPose(clip, alpha,
+                        request.at("loop").get<bool>(), mask);
+                }
             }
         }
         else

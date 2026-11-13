@@ -782,6 +782,19 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 
 ### Masked Slot Montage
 
+#### BlendProfile（逐骨权重）
+
+- 资产：`BP_*.json`（`type: "blendProfile"`）由 SKM 的 `skinning.blendProfiles`
+  引用；字段 `name`、`description`、`bones { boneName: weight }`。权重有限且
+  ∈ [0,1]，最多 256 根骨骼，骨名必须存在于同一 SKM。
+- 图：`LayerBlendProfile` / `SlotBlendProfile` 与 `LayerMask`/`SlotMask` 互斥；
+  资产名在 catalog 绑定后解析成 `LayerWeights`/`SlotWeights`（未解析时校验失败）。
+- 权重语义：每关节 `w = alpha * profileWeight`；**未列出的骨骼权重为 0**
+  （VL 采用白名单语义。UE BlendProfile 未列出默认 1.0，这是有意的差异，
+  避免局部动作意外覆盖腿/脚）。
+- 限制：不支持 BlendProfile 曲线、virtual bones 或 per-bone 插值曲线；
+  profile 只服务 layer/slot，不参与普通状态混合。
+
 - 图级：`AnimationGraphState.Slot` + `SlotMask`（骨骼名，≤64）+ `SlotAlpha`；
   `SlotMask` 为空表示整身覆盖（旧行为），非空时宿主对该状态调用
   `SetMontageSlotMask(mask, alpha)`，离开状态后清除。
@@ -795,9 +808,23 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   基础片段的 notify 仍按基础时钟触发，两套事件互不覆盖。结束/Stop 会对
   仍活动的 overlay notifyState 补 `end(interrupted=true)`。
 - 限制：当前只取 montage 的 `derivedClipId`（或第一段），忽略 section 链接、
-  与 warp；单一 mask + 统一 alpha，无 per-bone 权重曲线；
+  与 warp；支持二值 mask 或 BP_*.json 逐骨权重，二者互斥；
   不支持 UE 的 BlendProfile。`Slot` 仍是单槽位，不支持多槽位叠加。
-  LayeredBoneBlend 只有单一 mask 与统一 alpha，没有 per-bone 权重曲线。
+  LayeredBoneBlend 支持二值 mask 或 BP_*.json 逐骨权重，尚未实现 profile 曲线。
+
+### BlendProfile（BP_*.json）
+
+- 资产：`BP_*.json`（`type: "blendProfile"`）由 SKM 的 `skinning.blendProfiles`
+  引用；字段为 `name`、`description`、`bones { 骨名: weight }`。骨名必须属于该
+  SKM 的关节，权重有限且 ∈ [0,1]，最多 256 项；内容摘要进入 cache key/sourceInputs。
+- 语义：`LayerBlendProfile` / `SlotBlendProfile` 在 catalog 绑定后由
+  `ResolveBlendProfiles()` 展开成逐骨权重；运行期每关节权重 = `alpha * weight`，
+  **未列出的骨骼按 1.0**（UE BlendProfile 语义）。与 `LayerMask`/`SlotMask`
+  互斥，不能同时声明。
+- 解析时机与 BlendSpace 相同：prepare 阶段 catalog 未绑定时延迟到首次求值；
+  未解析的 profile 引用在 `Validate()` 中明确报错。
+- 限制：只有逐骨标量权重，不支持 virtual bones、profile 曲线、per-bone 插值或
+  UE 的 BlendProfile 编辑器；layer 与 slot 各自只接受一个 profile。
 
 ### 校验与边界
 

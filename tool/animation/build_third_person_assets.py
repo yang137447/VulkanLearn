@@ -432,6 +432,9 @@ def main():
             "blendSpaces": [{
                 "path": "Maps/SC_third_person/BlendSpaces/BS_MM_WalkRun.json",
             }],
+            "blendProfiles": [{
+                "path": "Maps/SC_third_person/BlendProfiles/BP_UpperBody.json",
+            }],
             "clips": [{
                 "id": str(clip["name"]),
                 "path": "Maps/SC_third_person/Source/" + str(clip["name"]) + ".fbx",

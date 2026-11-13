@@ -95,6 +95,9 @@ SamplingJob 的 RcpEst 插值系数会放大长位移误差，根作为轨迹输
   ],
   "blendSpaces": [
     { "path": "Maps/SC_third_person/BlendSpaces/BS_MM_WalkRun.json" }
+  ],
+  "blendProfiles": [
+    { "path": "Maps/SC_third_person/BlendProfiles/BP_UpperBody.json" }
   ]
 }
 ```
@@ -103,6 +106,9 @@ SamplingJob 的 RcpEst 插值系数会放大长位移误差，根作为轨迹输
 `BS_*.json` 自己拥有。导入期校验：路径非空、不得重复、文件摘要进入模型缓存键；
 资产内部的 1D 轴/Speed 限制、2..3 个 sample、阈值严格递增、clip 必须存在于
 同一 SKM 的 clips 见 [动画播放契约](animation-runtime-skinning.md) 的 BlendSpace1D。
+`blendProfiles` 同样是可选路径清单：每项只声明资源相对 `path`，名称与逐骨权重
+由 `BP_*.json` 拥有；导入期校验路径非空/不重复、权重有限且 ∈ [0,1]、骨名属于
+同一 SKM、最多 256 项，摘要进入模型缓存键。
 
 Sequence sidecar 的同步元数据分两层，均由 `ParseSequence` 校验：
 

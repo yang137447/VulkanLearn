@@ -14,6 +14,8 @@ public static class AnimationGraphBlendAxis
 
 // 每个 sample 是一个片段坐标；阈值必须严格递增，顺序即混合邻接顺序。
 public readonly record struct AnimationGraphBlendSample(string Clip, float Threshold);
+// BP_*.json 解析后的逐骨权重；未列出的骨骼按 1.0。
+public readonly record struct AnimationGraphBoneWeight(string Bone, float Weight);
 
 // 方向分支是图级数据：runtime 只按顺序匹配第一个包含相对 yaw 的区间。
 public sealed class AnimationGraphDirectionBranch
@@ -68,10 +70,17 @@ public sealed class AnimationGraphState
     public float LayerAlpha { get; init; } = 1;
     public bool LayerLoop { get; init; }
     public IReadOnlyList<string> LayerMask { get; init; } = Array.Empty<string>();
+    // BP_*.json 资产名；解析后填入 LayerWeights，与 LayerMask 互斥。
+    public string LayerBlendProfile { get; init; } = "";
+    public IReadOnlyList<AnimationGraphBoneWeight> LayerWeights { get; init; } =
+        Array.Empty<AnimationGraphBoneWeight>();
     // UE Slot：名字 + 可选骨骼 mask。mask 非空时，宿主用 slot montage 把动作
     // 叠在基础姿态上；空 mask 表示整身覆盖（旧行为）。
     public string Slot { get; init; } = "";
     public IReadOnlyList<string> SlotMask { get; init; } = Array.Empty<string>();
+    public string SlotBlendProfile { get; init; } = "";
+    public IReadOnlyList<AnimationGraphBoneWeight> SlotWeights { get; init; } =
+        Array.Empty<AnimationGraphBoneWeight>();
     public float SlotAlpha { get; init; } = 1;
     // UE Conduit：无姿态的过路状态，只能作为转移目标；进入后同一帧继续求值它的出边。
     // EntryRule 为 null 表示无条件；只有 Conduit 可以声明入口规则。
@@ -173,7 +182,8 @@ public sealed class AnimationGraphState
                 throw new InvalidOperationException(
                     $"Animation graph state '{Name}' layer alpha must be in [0,1].");
         }
-        else if (LayerAlpha != 1 || LayerLoop || (LayerMask is { Count: > 0 }))
+        else if (LayerAlpha != 1 || LayerLoop || (LayerMask is { Count: > 0 }) ||
+                 (LayerWeights is { Count: > 0 }) || LayerBlendProfile.Length > 0)
         {
             throw new InvalidOperationException(
                 $"Animation graph state '{Name}' declares layer alpha/loop/mask without LayerClip.");
@@ -195,6 +205,8 @@ public sealed class AnimationGraphState
                 throw new InvalidOperationException(
                     $"Animation graph state '{Name}' has duplicate layer mask bone '{bone}'.");
         }
+        ValidateBlendProfileBinding("layer", LayerBlendProfile, LayerWeights, LayerMask,
+            maxBones: 256);
         if (Slot is null || Slot.Trim().Length != Slot.Length || Slot.Length > 64 ||
             Slot.Contains('\0'))
             throw new InvalidOperationException(
@@ -205,7 +217,8 @@ public sealed class AnimationGraphState
         if (!float.IsFinite(SlotAlpha) || SlotAlpha < 0 || SlotAlpha > 1)
             throw new InvalidOperationException(
                 $"Animation graph state '{Name}' slot alpha must be in [0,1].");
-        if (Slot.Length == 0 && (SlotMask.Count > 0 || SlotAlpha != 1))
+        if (Slot.Length == 0 && (SlotMask.Count > 0 || SlotAlpha != 1 ||
+                                 SlotWeights is { Count: > 0 } || SlotBlendProfile.Length > 0))
             throw new InvalidOperationException(
                 $"Animation graph state '{Name}' declares a slot mask without a slot.");
         if (SlotMask.Count > 64)
@@ -221,6 +234,8 @@ public sealed class AnimationGraphState
                 throw new InvalidOperationException(
                     $"Animation graph state '{Name}' has duplicate slot mask bone '{bone}'.");
         }
+        ValidateBlendProfileBinding("slot", SlotBlendProfile, SlotWeights, SlotMask,
+            maxBones: 256);
         if (hasBlend)
         {
             ValidateBlendSamples();
@@ -274,14 +289,92 @@ public sealed class AnimationGraphState
         LayerAlpha = LayerAlpha,
         LayerLoop = LayerLoop,
         LayerMask = LayerMask,
+        LayerBlendProfile = LayerBlendProfile,
+        LayerWeights = LayerWeights,
         Slot = Slot,
         SlotMask = SlotMask,
+        SlotBlendProfile = SlotBlendProfile,
+        SlotWeights = SlotWeights,
         SlotAlpha = SlotAlpha,
         Conduit = Conduit,
         EntryRule = EntryRule,
         DirectionBranch = DirectionBranch,
         Interruptible = Interruptible
     };
+
+    // 把 BP_*.json 解析后的逐骨权重填入 layer/slot；profile 名清空，保持运行期不可变。
+    internal AnimationGraphState WithBlendProfileWeights(
+        IReadOnlyList<AnimationGraphBoneWeight> layerWeights,
+        IReadOnlyList<AnimationGraphBoneWeight> slotWeights) => new()
+    {
+        Name = Name,
+        Clip = Clip,
+        Loop = Loop,
+        Rate = Rate,
+        SyncGroup = SyncGroup,
+        StartPosition = StartPosition,
+        Mode = Mode,
+        SubStateMachine = SubStateMachine,
+        BlendAxis = BlendAxis,
+        BlendSpace = BlendSpace,
+        BlendSamples = BlendSamples,
+        BlendWeightSpeedPerSec = BlendWeightSpeedPerSec,
+        UseCachedPose = UseCachedPose,
+        AdditiveClip = AdditiveClip,
+        AdditiveAlpha = AdditiveAlpha,
+        AdditiveLoop = AdditiveLoop,
+        LayerClip = LayerClip,
+        LayerAlpha = LayerAlpha,
+        LayerLoop = LayerLoop,
+        LayerMask = LayerMask,
+        LayerBlendProfile = "",
+        LayerWeights = layerWeights,
+        Slot = Slot,
+        SlotMask = SlotMask,
+        SlotBlendProfile = "",
+        SlotWeights = slotWeights,
+        SlotAlpha = SlotAlpha,
+        Conduit = Conduit,
+        EntryRule = EntryRule,
+        DirectionBranch = DirectionBranch,
+        Interruptible = Interruptible
+    };
+
+    private void ValidateBlendProfileBinding(string kind, string profile,
+        IReadOnlyList<AnimationGraphBoneWeight> weights, IReadOnlyList<string> mask, int maxBones)
+    {
+        if (profile is null || profile.Trim().Length != profile.Length ||
+            profile.Length > 128 || profile.Contains('\0'))
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' {kind} blend profile name is invalid.");
+        if (profile.Length > 0)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' {kind} blend profile '{profile}' was not resolved; " +
+                "call ResolveBlendProfiles before Validate.");
+        if (profile.Length > 0 && mask.Count > 0)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' cannot combine {kind} blend profile and mask.");
+        if (weights is null)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' {kind} weights cannot be null.");
+        if (weights.Count > maxBones)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' {kind} blend profile exceeds {maxBones} bones.");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var bone in weights)
+        {
+            if (string.IsNullOrWhiteSpace(bone.Bone) || bone.Bone.Trim().Length != bone.Bone.Length ||
+                bone.Bone.Length > 128 || bone.Bone.Contains('\0'))
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' has an invalid {kind} weight bone.");
+            if (!float.IsFinite(bone.Weight) || bone.Weight < 0 || bone.Weight > 1)
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' {kind} weight must be in [0,1].");
+            if (!seen.Add(bone.Bone))
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' has duplicate {kind} weight bone '{bone.Bone}'.");
+        }
+    }
 
     private void ValidateBlendSamples()
     {
@@ -729,6 +822,83 @@ public sealed class AnimationGraphDefinition
             DirectionBranches = DirectionBranches,
             StateMachines = machines
         };
+    }
+
+    // 把 BP_*.json 资产名展开成 layer/slot 的逐骨权重；没有引用时原样返回。
+    public AnimationGraphDefinition ResolveBlendProfiles(
+        IReadOnlyDictionary<string, AnimationBlendProfile> blendProfiles)
+    {
+        ArgumentNullException.ThrowIfNull(blendProfiles);
+        if (StateMachines is null) return this;
+        bool any = StateMachines.Any(machine => machine?.States is not null &&
+            machine.States.Any(state => state is not null &&
+                (!string.IsNullOrWhiteSpace(state.LayerBlendProfile) ||
+                 !string.IsNullOrWhiteSpace(state.SlotBlendProfile))));
+        if (!any) return this;
+
+        var machines = new AnimationGraphStateMachine[StateMachines.Count];
+        for (int index = 0; index < StateMachines.Count; ++index)
+        {
+            var machine = StateMachines[index];
+            var states = new AnimationGraphState[machine.States.Count];
+            for (int stateIndex = 0; stateIndex < machine.States.Count; ++stateIndex)
+            {
+                var state = machine.States[stateIndex];
+                if (string.IsNullOrWhiteSpace(state.LayerBlendProfile) &&
+                    string.IsNullOrWhiteSpace(state.SlotBlendProfile))
+                {
+                    states[stateIndex] = state;
+                    continue;
+                }
+                var layer = ResolveProfileWeights(machine, state, state.LayerBlendProfile,
+                    "layer", blendProfiles);
+                var slot = ResolveProfileWeights(machine, state, state.SlotBlendProfile,
+                    "slot", blendProfiles);
+                states[stateIndex] = state.WithBlendProfileWeights(layer, slot);
+            }
+            machines[index] = new AnimationGraphStateMachine
+            {
+                Name = machine.Name,
+                EntryState = machine.EntryState,
+                DirectionCurve = machine.DirectionCurve,
+                AllowConduitEntryStates = machine.AllowConduitEntryStates,
+                MaxTransitionsPerFrame = machine.MaxTransitionsPerFrame,
+                SkipFirstUpdateTransition = machine.SkipFirstUpdateTransition,
+                States = states,
+                Aliases = machine.Aliases,
+                EntryTransitions = machine.EntryTransitions,
+                Transitions = machine.Transitions
+            };
+        }
+        return new AnimationGraphDefinition
+        {
+            Name = Name,
+            Version = Version,
+            RootStateMachine = RootStateMachine,
+            SaveCachedPose = SaveCachedPose,
+            CachedPoseBranches = CachedPoseBranches,
+            DirectionBranches = DirectionBranches,
+            StateMachines = machines
+        };
+    }
+
+    private static AnimationGraphBoneWeight[] ResolveProfileWeights(
+        AnimationGraphStateMachine machine, AnimationGraphState state, string profileName,
+        string kind, IReadOnlyDictionary<string, AnimationBlendProfile> blendProfiles)
+    {
+        if (string.IsNullOrWhiteSpace(profileName)) return Array.Empty<AnimationGraphBoneWeight>();
+        var mask = kind == "layer" ? state.LayerMask : state.SlotMask;
+        if (mask is { Count: > 0 })
+            throw new InvalidOperationException(
+                $"Animation graph state '{machine.Name}/{state.Name}' cannot combine {kind} " +
+                "blend profile and mask.");
+        if (!blendProfiles.TryGetValue(profileName, out var profile))
+            throw new InvalidOperationException(
+                $"Animation graph state '{machine.Name}/{state.Name}' references unknown " +
+                $"{kind} blend profile '{profileName}'.");
+        return profile.Bones
+            .Select(bone => new AnimationGraphBoneWeight(bone.Bone, bone.Weight))
+            .ToArray();
     }
 
     public AnimationGraphDefinition Validate()

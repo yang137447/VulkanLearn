@@ -386,6 +386,9 @@ LocalPose SkeletalPlayback::ApplyLayered(LocalPose locals) const
     const auto& animation = asset->AnimationAsset();
     if (layeredClip >= animation.clips.size()) return locals;
     const LocalPose sample = Sample(layeredClip, layeredTime);
+    if (!layeredWeights.empty())
+        return ApplyLayeredWeights(locals, sample, layeredWeights, layeredAlpha,
+            asset->mesh.joints.size());
     return ApplyLayeredPose(locals, sample, layeredMask, layeredAlpha,
         asset->mesh.joints.size());
 }
@@ -438,6 +441,9 @@ LocalPose SkeletalPlayback::ApplySlotMontage(LocalPose locals) const
     const auto& animation = asset->AnimationAsset();
     if (slotMontageClip >= animation.clips.size()) return locals;
     const LocalPose sample = Sample(slotMontageClip, slotMontageTime);
+    if (!slotMontageWeights.empty())
+        return ApplyLayeredWeights(locals, sample, slotMontageWeights, slotMontageAlpha,
+            asset->mesh.joints.size());
     return ApplyLayeredPose(locals, sample, slotMontageMask, slotMontageAlpha,
         asset->mesh.joints.size());
 }

@@ -532,14 +532,14 @@ TEST(SkeletalLayered, AlphaEmptyMaskAndRejections)
     SkeletalPlayback full(asset);
     full.Play("a", true, 1, true);
     full.Tick(0.5f);
-    full.SetLayeredPose("foot9", 1.0f, false, {});
+    full.SetLayeredPose("foot9", 1.0f, false, std::vector<std::string>{});
     full.Tick(1.0f / 60);
     EXPECT_EQ(full.LayeredMaskCount(), 3u);
     EXPECT_NEAR(full.Models()[2](2, 3), base.Models()[2](2, 3) + 5.0f, 1e-3f);
 
     SkeletalPlayback invalid(asset);
     invalid.Play("a", true, 1, true);
-    EXPECT_ANY_THROW(invalid.SetLayeredPose("missing", 0.5f, false, {}));
+    EXPECT_ANY_THROW(invalid.SetLayeredPose("missing", 0.5f, false, std::vector<std::string>{}));
     EXPECT_ANY_THROW(invalid.SetLayeredPose("foot9", 0.5f, false, {"missing"}));
     std::vector<std::string> tooMany(65, "foot");
     EXPECT_ANY_THROW(invalid.SetLayeredPose("foot9", 0.5f, false, tooMany));
@@ -600,7 +600,7 @@ TEST(SkeletalSlotMontage, AlphaScalesMaskedBlendAndCompletes)
     SkeletalPlayback half(asset);
     half.Play("a", true, 1, true);
     half.Tick(0.5f);
-    half.PlaySlotMontage("b", 0.5f, false, 1.0f, {});
+    half.PlaySlotMontage("b", 0.5f, false, 1.0f, std::vector<std::string>{});
     half.Tick(1.0f / 60);
     SkeletalPlayback base(asset);
     base.Play("a", true, 1, true);
@@ -635,7 +635,8 @@ TEST(SkeletalSlotMontage, RejectsUnknownBoneAndOversizedMask)
     EXPECT_ANY_THROW(player.PlaySlotMontage("b", 1.0f, true, 1.0f, {"missing"}));
     std::vector<std::string> tooMany(65, "hip");
     EXPECT_ANY_THROW(player.PlaySlotMontage("b", 1.0f, true, 1.0f, tooMany));
-    EXPECT_ANY_THROW(player.PlaySlotMontage("missing", 1.0f, true, 1.0f, {}));
+    EXPECT_ANY_THROW(player.PlaySlotMontage("missing", 1.0f, true, 1.0f,
+        std::vector<std::string>{}));
 }
 
 TEST(SkeletalSlotMontage, OverlayFiresItsNotifiesWhileBaseClockAdvances)
@@ -646,7 +647,7 @@ TEST(SkeletalSlotMontage, OverlayFiresItsNotifiesWhileBaseClockAdvances)
     player.Play("a", true, 1, true);
     player.Tick(0.1f);
     const float baseTime = player.Time();
-    player.PlaySlotMontage("b", 1.0f, false, 1.0f, {});
+    player.PlaySlotMontage("b", 1.0f, false, 1.0f, std::vector<std::string>{});
     bool fired = false;
     for (int frame = 0; frame < 45 && !fired; ++frame)
     {
@@ -657,6 +658,52 @@ TEST(SkeletalSlotMontage, OverlayFiresItsNotifiesWhileBaseClockAdvances)
     EXPECT_TRUE(fired);
     EXPECT_GT(player.Time(), baseTime);
     EXPECT_TRUE(player.SlotMontageActive());
+}
+
+TEST(SkeletalLayered, BlendProfileWeightsAreWhitelisted)
+{
+    auto asset = MakeAsset();
+    SkeletalPlayback base(asset);
+    base.Play("a", true, 1, true);
+    base.Tick(0.5f);
+    base.Tick(1.0f / 60);
+
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.5f);
+    // 只列 hip 的 0.5 权重：hip 取 a/b 中点，root 未列出保持 base。
+    player.SetLayeredPoseWeights("b", 1.0f, false, {{"hip", 0.5f}});
+    player.Tick(1.0f / 60);
+    EXPECT_TRUE(base.Models()[0].isApprox(player.Models()[0], 1e-4f));
+    EXPECT_NEAR(player.Models()[1](0, 3), 7.0f, 1e-2f);
+    const float scale = player.Models()[1].block<3, 3>(0, 0).col(0).norm();
+    EXPECT_NEAR(scale, 1.5f, 1e-2f);
+}
+
+TEST(SkeletalSlotMontage, BlendProfileWeightsScaleListedAndDefaultUnlistedToOne)
+{
+    auto asset = MakeAsset();
+    SkeletalPlayback base(asset);
+    base.Play("a", true, 1, true);
+    base.Tick(0.5f);
+    base.Tick(1.0f / 60);
+
+    SkeletalPlayback overlay(asset);
+    overlay.Play("b", true, 1, true);
+    overlay.Tick(0.5f);
+    overlay.Tick(1.0f / 60);
+
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.5f);
+    player.PlaySlotMontageWeights("b", 1.0f, true, 1.0f, {{"hip", 0.5f}});
+    player.Tick(1.0f / 60);
+    EXPECT_NEAR(player.Models()[1](0, 3),
+        (base.Models()[1](0, 3) + overlay.Models()[1](0, 3)) * 0.5f, 1e-2f);
+    const Eigen::Matrix4f playerFoot = player.Models()[1].inverse() * player.Models()[2];
+    const Eigen::Matrix4f overlayFoot = overlay.Models()[1].inverse() * overlay.Models()[2];
+    EXPECT_TRUE(playerFoot.isApprox(overlayFoot, 1e-4f));
+    EXPECT_EQ(player.SlotMontageMaskCount(), 1u);
 }
 
 TEST(SkeletalBlend, BlendsLocalTrsBeforeHierarchyWithQuaternionNormalization)

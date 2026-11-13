@@ -104,7 +104,9 @@ public readonly record struct AnimationGraphDecision(
     string LayerClip = "",
     float LayerAlpha = 0,
     bool LayerLoop = false,
-    IReadOnlyList<string>? LayerMask = null);
+    IReadOnlyList<string>? LayerMask = null,
+    IReadOnlyList<AnimationGraphBoneWeight>? LayerWeights = null,
+    IReadOnlyList<AnimationGraphBoneWeight>? SlotWeights = null);
 
 public sealed class AnimationGraphRuntime
 {
@@ -377,7 +379,9 @@ public sealed class AnimationGraphRuntime
             leafState.LayerClip,
             leafState.LayerClip.Length > 0 ? leafState.LayerAlpha : 0,
             leafState.LayerLoop,
-            leafState.LayerMask.Count > 0 ? leafState.LayerMask : null);
+            leafState.LayerMask.Count > 0 ? leafState.LayerMask : null,
+            leafState.LayerWeights.Count > 0 ? leafState.LayerWeights : null,
+            leafState.SlotWeights.Count > 0 ? leafState.SlotWeights : null);
     }
 
     // 只读诊断入口；不会推进状态机。

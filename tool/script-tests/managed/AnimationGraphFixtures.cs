@@ -1093,6 +1093,92 @@ public sealed class AnimationGraphPoseGraphProbeBlueprint : Blueprint
     private static float Flag(bool ok) => ok ? 1 : 2;
 }
 
+// BP_*.json 解析与图级 layer/slot 权重绑定探针。
+public sealed class AnimationGraphBlendProfileProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var profile = new AnimationBlendProfile("BP_Upper", new[]
+        {
+            new AnimationBoneWeight("hip", 1.0f),
+            new AnimationBoneWeight("foot", 0.5f)
+        });
+        var maps = new Dictionary<string, AnimationBlendProfile>(StringComparer.Ordinal)
+        {
+            ["BP_Upper"] = profile
+        };
+        var resolved = BuildGraph().ResolveBlendProfiles(maps).Validate();
+        var state = resolved.StateMachines[0].States[0];
+
+        var unknownProfile = Catch(() => BuildGraph().ResolveBlendProfiles(
+            new Dictionary<string, AnimationBlendProfile>()));
+        var unresolved = Catch(() => BuildGraph().Validate());
+        var conflict = Catch(() =>
+        {
+            var built = new AnimationGraphDefinition
+            {
+                Name = "Conflict", RootStateMachine = "Root",
+                StateMachines = new[]
+                {
+                    new AnimationGraphStateMachine
+                    {
+                        Name = "Root", EntryState = "A",
+                        States = new[]
+                        {
+                            new AnimationGraphState
+                            {
+                                Name = "A", Clip = "Clip_A", Slot = "DefaultSlot",
+                                SlotBlendProfile = "BP_Upper",
+                                SlotMask = new[] { "hip" }
+                            }
+                        }
+                    }
+                }
+            };
+            built.ResolveBlendProfiles(maps).Validate();
+        });
+
+        Transform.Position = new(
+            Flag(state.SlotWeights.Count == 2),
+            Flag(state.SlotWeights.Any(w => w.Bone == "foot" && MathF.Abs(w.Weight - 0.5f) < 1e-4f)),
+            Flag(state.SlotBlendProfile.Length == 0));
+        Transform.Rotation = new(
+            Flag(unknownProfile),
+            Flag(unresolved),
+            Flag(conflict));
+    }
+
+    private static bool Catch(Action action)
+    {
+        try { action(); }
+        catch (Exception) { return true; }
+        return false;
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => new()
+    {
+        Name = "BlendProfileProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A", Slot = "DefaultSlot",
+                        SlotBlendProfile = "BP_Upper"
+                    }
+                }
+            }
+        }
+    };
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
 public sealed class AnimationGraphSettingsProbeBlueprint : Blueprint
 {
     protected override void BeginPlay()

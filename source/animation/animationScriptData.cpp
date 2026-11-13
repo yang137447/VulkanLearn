@@ -232,6 +232,57 @@ void ValidateBlendSpaceClips(const BlendSpaceAsset& space, const SkeletalAsset& 
     }
 }
 
+BlendProfileAsset ParseBlendProfile(const nlohmann::json& json, const std::string& basePath)
+{
+    auto fail = [&](const std::string& field, const std::string& reason)
+    {
+        return std::invalid_argument("BlendProfile '" + basePath + "' " + field + " " + reason);
+    };
+    if (!json.is_object()) throw fail("root", "must be an object");
+    if (!json.contains("name") || !json["name"].is_string() ||
+        json["name"].get<std::string>().empty() ||
+        json["name"].get<std::string>().size() > 128)
+        throw fail("name", "must be a nonempty string of at most 128 characters");
+    if (!json.contains("type") || !json["type"].is_string() ||
+        json["type"].get<std::string>() != "blendProfile")
+        throw fail("type", "must be \"blendProfile\"");
+    if (!json.contains("description") || !json["description"].is_string() ||
+        json["description"].get<std::string>().empty())
+        throw fail("description", "must be a nonempty string");
+    if (!json.contains("bones") || !json["bones"].is_object() ||
+        json["bones"].empty() || json["bones"].size() > 256)
+        throw fail("bones", "must be a nonempty object with at most 256 entries");
+
+    BlendProfileAsset profile;
+    profile.name = json["name"].get<std::string>();
+    for (const auto& entry : json["bones"].items())
+    {
+        const std::string& name = entry.key();
+        if (name.empty() || name.size() > 128 || name.find('\0') != std::string::npos)
+            throw fail("bones", "contains an invalid bone name");
+        if (!entry.value().is_number())
+            throw fail("bones." + name, "must be a number");
+        const float weight = entry.value().get<float>();
+        if (!std::isfinite(weight) || weight < 0 || weight > 1)
+            throw fail("bones." + name, "must be in [0,1]");
+        profile.bones.push_back({name, weight});
+    }
+    return profile;
+}
+
+void ValidateBlendProfileBones(const BlendProfileAsset& profile, const SkeletalAsset& asset,
+    const std::string& basePath)
+{
+    for (const BlendProfileBone& bone : profile.bones)
+    {
+        const bool known = std::any_of(asset.mesh.joints.begin(), asset.mesh.joints.end(),
+            [&](const Joint& joint) { return joint.name == bone.name; });
+        if (!known)
+            throw std::invalid_argument("BlendProfile '" + basePath +
+                "' references unknown bone '" + bone.name + "'");
+    }
+}
+
 nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset)
 {
     auto result = nlohmann::json::object();
@@ -340,6 +391,15 @@ nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset)
             {"interpolation", space.interpolation}, {"samples", std::move(samples)}};
     }
     if (!blendSpaces.empty()) result["blendSpaces"] = std::move(blendSpaces);
+    auto blendProfiles = nlohmann::json::object();
+    for (const BlendProfileAsset& profile : asset.AnimationAsset().blendProfiles)
+    {
+        auto bones = nlohmann::json::object();
+        for (const BlendProfileBone& bone : profile.bones)
+            bones[bone.name] = bone.weight;
+        blendProfiles[profile.name] = {{"bones", std::move(bones)}};
+    }
+    if (!blendProfiles.empty()) result["blendProfiles"] = std::move(blendProfiles);
     return result;
 }
 

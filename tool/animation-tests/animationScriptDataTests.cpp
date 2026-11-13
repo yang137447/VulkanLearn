@@ -1120,4 +1120,57 @@ TEST(AnimationScriptData, BlendSpaceClipsAndCatalogPublishing)
     ASSERT_TRUE(catalog["blendSpaces"].contains("BS_Test"));
     EXPECT_EQ(catalog["blendSpaces"]["BS_Test"]["samples"].size(), 2u);
 }
+
+json BlendProfileJson()
+{
+    return json::parse(R"({
+      "name": "BP_Test",
+      "type": "blendProfile",
+      "description": "unit test",
+      "bones": { "hip": 1.0, "foot": 0.5 }
+    })");
+}
+
+TEST(AnimationScriptData, ParsesBlendProfileAndRejectsInvalidAuthoring)
+{
+    const BlendProfileAsset profile = ParseBlendProfile(BlendProfileJson(), "BP_Test.json");
+    EXPECT_EQ(profile.name, "BP_Test");
+    ASSERT_EQ(profile.bones.size(), 2u);
+    const auto foot = std::find_if(profile.bones.begin(), profile.bones.end(),
+        [](const BlendProfileBone& bone) { return bone.name == "foot"; });
+    ASSERT_NE(foot, profile.bones.end());
+    EXPECT_FLOAT_EQ(foot->weight, 0.5f);
+
+    auto badWeight = BlendProfileJson();
+    badWeight["bones"]["hip"] = 1.5;
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendProfile(badWeight, "x"); }).empty());
+
+    auto badType = BlendProfileJson();
+    badType["type"] = "blendProfile2";
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendProfile(badType, "x"); }).empty());
+
+    auto emptyBones = BlendProfileJson();
+    emptyBones["bones"] = json::object();
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendProfile(emptyBones, "x"); }).empty());
+}
+
+TEST(AnimationScriptData, BlendProfileBonesAndCatalogPublishing)
+{
+    SkeletalAsset asset;
+    asset.mesh.joints.push_back(Joint{});
+    asset.mesh.joints.back().name = "hip";
+    const BlendProfileAsset profile = ParseBlendProfile(BlendProfileJson(), "BP_Test.json");
+    // foot 尚未注册。
+    EXPECT_NE(ErrorOf([&] { ValidateBlendProfileBones(profile, asset, "x"); }).find("foot"),
+        std::string::npos);
+    asset.mesh.joints.push_back(Joint{});
+    asset.mesh.joints.back().name = "foot";
+    EXPECT_NO_THROW(ValidateBlendProfileBones(profile, asset, "x"));
+
+    asset.blendProfiles.push_back(profile);
+    const json catalog = BuildAnimationScriptAssets(asset);
+    ASSERT_TRUE(catalog.contains("blendProfiles"));
+    ASSERT_TRUE(catalog["blendProfiles"].contains("BP_Test"));
+    EXPECT_FLOAT_EQ(catalog["blendProfiles"]["BP_Test"]["bones"]["hip"].get<float>(), 1.0f);
+}
 }

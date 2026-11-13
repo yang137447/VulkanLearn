@@ -492,6 +492,19 @@ TEST_F(ScriptLocomotionTest, StateMachineSettingsBudgetAndFirstUpdateBlend)
     }
 }
 
+TEST_F(ScriptLocomotionTest, BlendProfileResolvesSlotWeightsAndRejectsConflicts)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphBlendProfileProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
 TEST_F(ScriptLocomotionTest, ConduitResolvesSameFrameAndFallsBackWhenBlocked)
 {
     Prepare(Json::object(), "ScriptFixtures.AnimationGraphConduitProbeBlueprint");

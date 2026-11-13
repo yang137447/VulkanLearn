@@ -283,6 +283,13 @@ struct MeshBlendSpacePlan
     std::string digest;
 };
 
+// BP_*.json 声明；与 BS 相同，名称/权重由资产文件拥有，这里只保存路径与摘要。
+struct MeshBlendProfilePlan
+{
+    std::string path;
+    std::string digest;
+};
+
 // TressFX 分组声明（TF 描述符 groups[]）。描述符层只校验形状、名称唯一与跨组重叠；
 // guide 上界要等 .tfx 解析后由导入器检查。simulationOverrides 已通过与放置 overrides
 // 相同的数值校验，保存为作者原始对象（缺省键表示沿用资产默认值），尚未参与运行期求解。
@@ -334,6 +341,7 @@ struct MeshAssetBuildPlan
     std::vector<MeshAnimationMontagePlan> animationMontages;
     // 可选 1D BlendSpace 清单；路径级缓存键与 clip/montage 同规则，内容摘要由 loader 追加。
     std::vector<MeshBlendSpacePlan> animationBlendSpaces;
+    std::vector<MeshBlendProfilePlan> animationBlendProfiles;
 
     bool IsSkeletal() const
     {

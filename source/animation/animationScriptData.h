@@ -15,6 +15,7 @@ class SkeletalPlayback;
 struct Montage;
 struct FiredNotify;
 struct BlendSpaceAsset;
+struct BlendProfileAsset;
 
 // C# 提交面（catalog / feedback / PlayMontage）需要的纯数据转换。
 // 这些函数不读文件、不持有 World/播放时钟；worldAnimation 只做 modelPath 索引与 JSON 编排，
@@ -30,6 +31,10 @@ nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset);
 // clip 是否存在由 Loader 在 SkeletalAsset 的 clips 就绪后调用 ValidateBlendSpaceClips。
 BlendSpaceAsset ParseBlendSpace(const nlohmann::json& json, const std::string& basePath);
 void ValidateBlendSpaceClips(const BlendSpaceAsset& space, const SkeletalAsset& asset,
+    const std::string& basePath);
+// BP_*.json 的逐骨权重解析与骨骼名校验；加载期只做结构与数值校验。
+BlendProfileAsset ParseBlendProfile(const nlohmann::json& json, const std::string& basePath);
+void ValidateBlendProfileBones(const BlendProfileAsset& profile, const SkeletalAsset& asset,
     const std::string& basePath);
 
 // feedback 的 notifies 数组：本 tick 触发的事件，作者原区间不裁剪。
