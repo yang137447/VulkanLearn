@@ -26,27 +26,59 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     private bool cachedPoseSubmitted;
 
     public AnimationGraphDefinition Graph { get; private set; } = null!;
-    public AnimationGraphRuntime GraphRuntime => runtime ??
-        throw new InvalidOperationException("Animation graph is not initialized.");
+    public AnimationGraphRuntime GraphRuntime
+    {
+        get
+        {
+            EnsureGraphPrepared();
+            return runtime!;
+        }
+    }
     public AnimationGraphDecision GraphDecision => decision;
 
     protected abstract AnimationGraphDefinition CreateGraph();
 
     protected override void OnAnimationCreate()
     {
-        Graph = CreateGraph().Validate();
-        runtime = new AnimationGraphRuntime(Graph);
-        OnGraphCreated();
+        // 组件在 World prepare 阶段创建，而 animation catalog 要到 start 才下发：
+        // 引用 BS_*.json 的图在这里可能还拿不到资产，先延迟到首次求值/首次访问时解析。
+        Graph = CreateGraph();
+        TryPrepareGraph();
     }
 
     protected virtual void OnGraphCreated() { }
 
+    private bool TryPrepareGraph()
+    {
+        if (runtime is not null) return true;
+        if (HasBlendSpaceReferences(Graph) && Animation.BlendSpaces.Count == 0) return false;
+        Graph = Graph.ResolveBlendSpaces(Animation.BlendSpaces).Validate();
+        runtime = new AnimationGraphRuntime(Graph);
+        OnGraphCreated();
+        return true;
+    }
+
+    private void EnsureGraphPrepared()
+    {
+        if (TryPrepareGraph()) return;
+        throw new InvalidOperationException(
+            "Animation graph references blend space assets but the animation catalog " +
+            "has not been bound yet.");
+    }
+
+    private static bool HasBlendSpaceReferences(AnimationGraphDefinition graph)
+    {
+        foreach (var machine in graph.StateMachines)
+            foreach (var state in machine.States)
+                if (!string.IsNullOrWhiteSpace(state.BlendSpace)) return true;
+        return false;
+    }
+
     // 角色在 LateTick 提交本帧冻结输入；覆盖写，不排队。
     protected void EvaluateGraph(in AnimationGraphInput input)
     {
-        if (runtime is null)
-            throw new InvalidOperationException("Animation graph is not initialized.");
-        decision = runtime.Update(input);
+        EnsureGraphPrepared();
+        decision = runtime!.Update(input);
         SubmitDecision(decision);
     }
 

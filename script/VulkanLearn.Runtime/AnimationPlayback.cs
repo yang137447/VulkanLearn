@@ -37,6 +37,10 @@ public readonly record struct MontageNotifyInfo(string Kind, string Track, strin
 // 与旧 3 分量调用等价，原生不会把默认单位四元数当成目标朝向。
 public readonly record struct WarpTarget(Vector3 Location, Quaternion? Rotation = null);
 public readonly record struct MontageWindowInfo(string Target, float Start, float End);
+// BS_*.json 展开后的 1D BlendSpace；C# 图在创建时把它解析成运行期 BlendSamples。
+public readonly record struct AnimationBlendSpaceSample(string Clip, float Threshold);
+public sealed record AnimationBlendSpaceDefinition(string Name, float WeightSpeedPerSec,
+    string Interpolation, IReadOnlyList<AnimationBlendSpaceSample> Samples);
 // 多 AnimSegment Montage 的一段；Start/End 是 Montage 时间轴，ClipStart/ClipEnd 是
 // sidecar 本地时间。C# 只读 catalog/feedback，不维护第二份段时钟。
 public readonly record struct MontageSegmentInfo(int Index, string SegmentId, string SequencePath,
@@ -153,9 +157,15 @@ public sealed class AnimationPlayback
     internal float MontageSlotAlpha = 1;
     internal bool BonePhysicsDebugRequested;
     internal readonly Dictionary<string, MontageInfo> Montages = new(StringComparer.Ordinal);
+    internal readonly Dictionary<string, AnimationBlendSpaceDefinition> BlendSpaces = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationPlayerInfo[]> ClipPlayers = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationSyncMarker[]> ClipSyncMarkers = new(StringComparer.Ordinal);
     public IReadOnlyList<string> Clips { get { CheckAccess(); return Array.AsReadOnly(ClipIds); } }
+    public AnimationBlendSpaceDefinition? FindBlendSpace(string name)
+    {
+        CheckAccess();
+        return BlendSpaces.GetValueOrDefault(name);
+    }
     public AnimationState State { get { CheckAccess(); return Feedback; } }
     public MotionMatchingState Motion { get { CheckAccess(); return MotionFeedback; } }
     public FootPlacementState FootPlacement { get { CheckAccess(); return FootPlacementFeedback; } }
@@ -739,6 +749,7 @@ public static partial class NativeBridge
         animation.ClipIds = context.AnimationCatalog.GetValueOrDefault(path) ?? [];
         animation.CurveData.Clear();
         animation.Montages.Clear();
+        animation.BlendSpaces.Clear();
         animation.ClipPlayers.Clear();
         animation.ClipSyncMarkers.Clear();
         if (!context.AnimationAssets.TryGetValue(path, out var assets) ||
@@ -779,6 +790,21 @@ public static partial class NativeBridge
             {
                 var info = ReadMontage(montage);
                 animation.Montages[info.Id] = info;
+            }
+        if (assets.TryGetProperty("blendSpaces", out var blendSpaces) &&
+            blendSpaces.ValueKind == JsonValueKind.Object)
+            foreach (var space in blendSpaces.EnumerateObject())
+            {
+                var samples = space.Value.GetProperty("samples").EnumerateArray()
+                    .Select(sample => new AnimationBlendSpaceSample(
+                        sample.GetProperty("clip").GetString()!,
+                        sample.GetProperty("threshold").GetSingle())).ToArray();
+                animation.BlendSpaces[space.Name] = new AnimationBlendSpaceDefinition(
+                    space.Name,
+                    space.Value.TryGetProperty("weightSpeedPerSec", out var speed) ? speed.GetSingle() : 5,
+                    space.Value.TryGetProperty("interpolation", out var interpolation)
+                        ? interpolation.GetString() ?? "EaseInOut" : "EaseInOut",
+                    samples);
             }
     }
 

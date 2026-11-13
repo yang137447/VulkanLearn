@@ -51,6 +51,8 @@ public sealed class AnimationGraphState
     public string SubStateMachine { get; init; } = "";
     // 非空表示 BlendSpace1D；runtime 按轴值在相邻 sample 间输出片段对与权重。
     public string BlendAxis { get; init; } = AnimationGraphBlendAxis.Speed;
+    // BS_*.json 的资产名；宿主创建时解析成 BlendSamples，未解析时校验失败。
+    public string BlendSpace { get; init; } = "";
     public IReadOnlyList<AnimationGraphBlendSample> BlendSamples { get; init; } =
         Array.Empty<AnimationGraphBlendSample>();
     // UE UseCachedPose：以之前 SaveCachedPose 的快照作为本状态 Base（不推进片段时钟）。
@@ -87,13 +89,24 @@ public sealed class AnimationGraphState
         bool hasClip = !string.IsNullOrWhiteSpace(Clip);
         bool hasMachine = !string.IsNullOrWhiteSpace(SubStateMachine);
         bool hasBlend = BlendSamples is { Count: > 0 };
+        bool hasBlendAsset = !string.IsNullOrWhiteSpace(BlendSpace);
         bool hasCachedPose = !string.IsNullOrWhiteSpace(UseCachedPose);
         int declarations = (hasClip ? 1 : 0) + (hasMachine ? 1 : 0) + (hasBlend ? 1 : 0) +
-            (Conduit ? 1 : 0) + (hasCachedPose ? 1 : 0);
+            (hasBlendAsset ? 1 : 0) + (Conduit ? 1 : 0) + (hasCachedPose ? 1 : 0);
         if (declarations != 1)
             throw new InvalidOperationException(
                 $"Animation graph state '{Name}' must declare exactly one of " +
-                "Clip, SubStateMachine, BlendSamples, Conduit or UseCachedPose.");
+                "Clip, SubStateMachine, BlendSpace, BlendSamples, Conduit or UseCachedPose.");
+        if (hasBlendAsset)
+        {
+            if (BlendSpace.Trim().Length != BlendSpace.Length || BlendSpace.Length > 128 ||
+                BlendSpace.Contains('\0'))
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' blend space name is invalid.");
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' blend space '{BlendSpace}' was not resolved; " +
+                "call ResolveBlendSpaces before Validate.");
+        }
         if (hasCachedPose)
         {
             if (UseCachedPose.Trim().Length != UseCachedPose.Length ||
@@ -233,6 +246,39 @@ public sealed class AnimationGraphState
         if (DirectionBranch is null || DirectionBranch.Length > 64 || DirectionBranch.Contains('\0'))
             throw new InvalidOperationException($"Animation graph state '{Name}' direction branch is invalid.");
     }
+
+    // BlendSpace 资产解析后的等价状态：清除资产名、填入运行期 sample 列表，
+    // 其余字段原样保留（含 additive/layer/slot 修饰）。
+    internal AnimationGraphState WithBlendSamples(
+        IReadOnlyList<AnimationGraphBlendSample> samples) => new()
+    {
+        Name = Name,
+        Clip = Clip,
+        Loop = Loop,
+        Rate = Rate,
+        SyncGroup = SyncGroup,
+        StartPosition = StartPosition,
+        Mode = Mode,
+        SubStateMachine = SubStateMachine,
+        BlendAxis = BlendAxis,
+        BlendSpace = "",
+        BlendSamples = samples,
+        UseCachedPose = UseCachedPose,
+        AdditiveClip = AdditiveClip,
+        AdditiveAlpha = AdditiveAlpha,
+        AdditiveLoop = AdditiveLoop,
+        LayerClip = LayerClip,
+        LayerAlpha = LayerAlpha,
+        LayerLoop = LayerLoop,
+        LayerMask = LayerMask,
+        Slot = Slot,
+        SlotMask = SlotMask,
+        SlotAlpha = SlotAlpha,
+        Conduit = Conduit,
+        EntryRule = EntryRule,
+        DirectionBranch = DirectionBranch,
+        Interruptible = Interruptible
+    };
 
     private void ValidateBlendSamples()
     {
@@ -507,6 +553,69 @@ public sealed class AnimationGraphDefinition
         Array.Empty<AnimationGraphDirectionBranch>();
     public IReadOnlyList<AnimationGraphStateMachine> StateMachines { get; init; } =
         Array.Empty<AnimationGraphStateMachine>();
+
+    // 把 BS_*.json 资产名展开成运行期 BlendSamples；没有资产引用时原样返回。
+    public AnimationGraphDefinition ResolveBlendSpaces(
+        IReadOnlyDictionary<string, AnimationBlendSpaceDefinition> blendSpaces)
+    {
+        ArgumentNullException.ThrowIfNull(blendSpaces);
+        if (StateMachines is null) return this;
+        bool any = false;
+        foreach (var machine in StateMachines)
+        {
+            if (machine?.States is null) continue;
+            foreach (var state in machine.States)
+                if (state is not null && !string.IsNullOrWhiteSpace(state.BlendSpace)) { any = true; break; }
+            if (any) break;
+        }
+        if (!any) return this;
+
+        var machines = new AnimationGraphStateMachine[StateMachines.Count];
+        for (int index = 0; index < StateMachines.Count; ++index)
+        {
+            var machine = StateMachines[index];
+            var states = new AnimationGraphState[machine.States.Count];
+            for (int stateIndex = 0; stateIndex < machine.States.Count; ++stateIndex)
+            {
+                var state = machine.States[stateIndex];
+                if (string.IsNullOrWhiteSpace(state.BlendSpace))
+                {
+                    states[stateIndex] = state;
+                    continue;
+                }
+                if (!blendSpaces.TryGetValue(state.BlendSpace, out var space))
+                    throw new InvalidOperationException(
+                        $"Animation graph state '{machine.Name}/{state.Name}' references unknown " +
+                        $"blend space '{state.BlendSpace}'.");
+                var samples = space.Samples
+                    .Select(sample => new AnimationGraphBlendSample(sample.Clip, sample.Threshold))
+                    .ToArray();
+                states[stateIndex] = state.WithBlendSamples(samples);
+            }
+            machines[index] = new AnimationGraphStateMachine
+            {
+                Name = machine.Name,
+                EntryState = machine.EntryState,
+                DirectionCurve = machine.DirectionCurve,
+                AllowConduitEntryStates = machine.AllowConduitEntryStates,
+                MaxTransitionsPerFrame = machine.MaxTransitionsPerFrame,
+                SkipFirstUpdateTransition = machine.SkipFirstUpdateTransition,
+                States = states,
+                Aliases = machine.Aliases,
+                EntryTransitions = machine.EntryTransitions,
+                Transitions = machine.Transitions
+            };
+        }
+        return new AnimationGraphDefinition
+        {
+            Name = Name,
+            Version = Version,
+            RootStateMachine = RootStateMachine,
+            SaveCachedPose = SaveCachedPose,
+            DirectionBranches = DirectionBranches,
+            StateMachines = machines
+        };
+    }
 
     public AnimationGraphDefinition Validate()
     {

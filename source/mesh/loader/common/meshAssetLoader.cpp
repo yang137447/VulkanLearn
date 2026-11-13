@@ -20,6 +20,7 @@
 #include "../animation/assimpSkeletalImporter.h"
 #include "animation/animationSkeleton.h"
 #include "animation/animationMontage.h"
+#include "animation/animationScriptData.h"
 #include "animation/animationRetarget.h"
 #include "animation/animationSequenceData.h"
 #include "animation/skeletalPlayback.h"
@@ -437,6 +438,25 @@ MeshAssetImportResult MeshAssetLoader::ImportSections(const MeshAssetLoadRequest
                 asset->sourceInputs.emplace_back(montagePlan.path, montageDigest);
                 asset->montages.push_back(std::move(montage));
             }
+        }
+
+        // BlendSpace 依赖 clip 列表：在 clips 与 montages 就绪后解析，名称必须唯一。
+        for (MeshBlendSpacePlan& blendPlan : plan.animationBlendSpaces)
+        {
+            std::string blendDigest;
+            const nlohmann::json blendJson = LoadBoundedJsonFile(
+                blendPlan.path, "BlendSpace asset", MaxSkeletonJsonBytes, blendDigest);
+            BlendSpaceAsset space = ParseBlendSpace(blendJson, blendPlan.path);
+            ValidateBlendSpaceClips(space, *asset, blendPlan.path);
+            for (const BlendSpaceAsset& existing : asset->blendSpaces)
+                if (existing.name == space.name)
+                    throw std::runtime_error(
+                        "Duplicate skeletal blend space name: " + space.name);
+            blendPlan.digest = blendDigest;
+            plan.modelCacheKey +=
+                "|blendSpaceBlake3=" + space.name + ":" + blendDigest;
+            asset->sourceInputs.emplace_back(blendPlan.path, blendDigest);
+            asset->blendSpaces.push_back(std::move(space));
         }
 
         // Assimp 读取期间源可能被替换；只有整份清单仍一致才发布导入后的不可变资产。

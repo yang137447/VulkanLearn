@@ -14,6 +14,7 @@ struct SkeletalAsset;
 class SkeletalPlayback;
 struct Montage;
 struct FiredNotify;
+struct BlendSpaceAsset;
 
 // C# 提交面（catalog / feedback / PlayMontage）需要的纯数据转换。
 // 这些函数不读文件、不持有 World/播放时钟；worldAnimation 只做 modelPath 索引与 JSON 编排，
@@ -24,6 +25,12 @@ struct FiredNotify;
 // 执行层消费，C# 不需要）。旧 clip id 列表仍由 World::ScriptAnimationCatalog 单独发布，
 // 两者不互相替换。
 nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset);
+
+// BS_*.json 的 1D BlendSpace 解析与跨资产校验。解析只做结构与数值校验；
+// clip 是否存在由 Loader 在 SkeletalAsset 的 clips 就绪后调用 ValidateBlendSpaceClips。
+BlendSpaceAsset ParseBlendSpace(const nlohmann::json& json, const std::string& basePath);
+void ValidateBlendSpaceClips(const BlendSpaceAsset& space, const SkeletalAsset& asset,
+    const std::string& basePath);
 
 // feedback 的 notifies 数组：本 tick 触发的事件，作者原区间不裁剪。
 nlohmann::json BuildAnimationNotifyFeedback(const std::vector<FiredNotify>& notifies);

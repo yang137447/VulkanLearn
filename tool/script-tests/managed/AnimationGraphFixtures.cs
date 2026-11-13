@@ -1138,6 +1138,87 @@ public sealed class AnimationGraphLayerProbeBlueprint : Blueprint
             "", 0, 1, false, true, 0);
 }
 
+// BS_*.json 资产探针：图只写 BlendSpace 名字，宿主用 catalog 解析成 samples。
+public sealed class AnimationGraphBlendSpaceAssetProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var map = new Dictionary<string, AnimationBlendSpaceDefinition>
+        {
+            ["BS_WalkRun"] = new("BS_WalkRun", 5, "EaseInOut", new[]
+            {
+                new AnimationBlendSpaceSample("MM_Walk_InPlace", 0),
+                new AnimationBlendSpaceSample("MM_Walk_Fwd", 230),
+                new AnimationBlendSpaceSample("MM_Run_Fwd", 500)
+            })
+        };
+        var resolved = BuildGraph().ResolveBlendSpaces(map).Validate();
+        var low = Evaluate(resolved, 115);
+        var mid = Evaluate(resolved, 365);
+        var high = Evaluate(resolved, 500);
+
+        bool unresolvedRejected = false;
+        try { BuildGraph().Validate(); }
+        catch (InvalidOperationException) { unresolvedRejected = true; }
+        bool unknownRejected = false;
+        try
+        {
+            BuildGraph().ResolveBlendSpaces(
+                new Dictionary<string, AnimationBlendSpaceDefinition>());
+        }
+        catch (InvalidOperationException) { unknownRejected = true; }
+
+        Transform.Position = new(
+            Flag(low.Clip == "MM_Walk_Fwd" && low.BlendClip == "MM_Walk_InPlace" &&
+                MathF.Abs(low.BlendWeight - 0.5f) < 1e-3f),
+            Flag(mid.Clip == "MM_Walk_Fwd" && mid.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(mid.BlendWeight - 0.5f) < 1e-3f),
+            Flag(high.Clip == "MM_Walk_Fwd" && high.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(high.BlendWeight - 1.0f) < 1e-3f));
+        Transform.Rotation = new(Flag(unresolvedRejected), Flag(unknownRejected), 1);
+        Transform.Scale = new(1, 1, 1);
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => new()
+    {
+        Name = "BlendSpaceAssetProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "Idle",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "Idle", Clip = "MM_Idle" },
+                    new AnimationGraphState { Name = "Walk / Run", BlendSpace = "BS_WalkRun" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "Idle", To = "Walk / Run",
+                        Condition = AnimationGraphCondition.Speed(0, AnimationGraphComparison.GreaterThan)
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDecision Evaluate(AnimationGraphDefinition graph, float speed)
+    {
+        var runtime = new AnimationGraphRuntime(graph);
+        runtime.Update(Input(0));
+        return runtime.Update(Input(speed));
+    }
+
+    private static AnimationGraphInput Input(float speed) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, speed, speed, speed, 0, 1f / 60,
+            "", 0, 1, false, true, 0);
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
 // Conduit 语义探针：同帧落地、入口规则回落、链、环、最终 blend 与入口 conduit。
 public sealed class AnimationGraphConduitProbeBlueprint : Blueprint
 {

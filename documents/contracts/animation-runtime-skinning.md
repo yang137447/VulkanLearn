@@ -590,8 +590,11 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   - 每个状态机每帧最多发起 `MaxTransitionsPerFrame` 条常规转移；entry transition
     不占这个预算。`From = "*"` 表示任意当前状态
 - `AnimationGraphState`
-  - `Clip`、`SubStateMachine`、`BlendSamples` 与 `Conduit` 必须四选一；外层 Idle/Walk/Jog 通过
-    子状态机表达内层 entry/start/cycles/stop
+  - `Clip`、`SubStateMachine`、`BlendSpace`、`BlendSamples`、`Conduit` 与
+    `UseCachedPose` 必须六选一；外层 Idle/Walk/Jog 通过子状态机表达内层
+    entry/start/cycles/stop
+  - `BlendSpace`（string）引用 `BS_*.json` 资产名；宿主创建时（catalog 下发后）
+    解析成运行期 `BlendSamples`，未解析的引用在 `Validate()` 中拒绝
   - `Conduit = true` 表示 UE 的无姿态过路状态；`EntryRule`（仅 conduit 可用，null =
     恒真）决定这次是否允许借它转移。conduit 不能声明 clip/blend/子状态机，也不能
     覆盖 rate、start position、sync group 或 direction branch
@@ -604,8 +607,9 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   - `LayerClip` / `LayerAlpha` / `LayerLoop` / `LayerMask`：LayeredBoneBlend。
     overlay 片段按 `LayerMask` 命中的骨骼逐关节混合到基础姿态；空 mask 视为全身，
     不能与 conduit 或子状态机并用
-  - `Slot`（string）是 UE Slot 的图级元数据：本切片由宿主 montage 承担，
-    不做骨骼 mask
+  - `Slot`（string）+ `SlotMask`（骨骼名，≤64）+ `SlotAlpha`：UE Slot 的单槽位。
+    mask 非空时宿主把 montage 以 slot overlay 叠在基础姿态上；空 mask 为整身覆盖，
+    见下方 Masked Slot Montage
   - `BlendSamples[]`（`Clip` + `Threshold`）表示 1D BlendSpace；`BlendAxis` 目前只接受
     `Speed`（取 `AnimationGraphInput.PlanarSpeed`），2..3 个 sample，阈值有限且严格递增，
     sample 片段不得重复（成对原生混合见下方 BlendSpace1D）
@@ -646,6 +650,15 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   `Maps/SC_valley_echo/Blueprints/EchoLocomotionGraph.cs`；角色蓝图不写 clip 字符串。
 
 ### BlendSpace1D
+
+- 资产：`BS_*.json`（`type: "blendSpace1D"`）由 SM 的 `skinning.blendSpaces`
+  引用；字段为 `name`、`axis {name:"Speed",min,max}`、`interpolation`
+  （`EaseInOut`；`Linear` 被接受但运行期仍按 EaseInOut）、`weightSpeedPerSec`、
+  `samples[] {clip, threshold}`。sample 2..3 个、阈值严格递增、clip 不得重复且
+  必须属于同一 SKM 的 clips。
+- 解析时机：组件在 World prepare 阶段创建，而 animation catalog 到 start 才下发；
+  `AnimationGraphBlueprint` 在创建时尝试解析，若 catalog 尚未绑定则延迟到首次
+  求值/首次访问 `GraphRuntime` 时解析并 Validate。
 
 - 求值：输出 `(Clip = 基准 sample, BlendClip = 相邻 sample)`——两个 sample 时基准是
   首 sample，三个 sample 时基准是中间 sample；目标权重按 `smoothstep` 成形，并受

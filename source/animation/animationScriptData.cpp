@@ -5,6 +5,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <set>
 #include <stdexcept>
 
@@ -138,6 +139,99 @@ void ValidateMontageExecution(const Montage& montage)
 }
 }
 
+BlendSpaceAsset ParseBlendSpace(const nlohmann::json& json, const std::string& basePath)
+{
+    auto fail = [&](const std::string& field, const std::string& reason)
+    {
+        return std::invalid_argument(
+            "BlendSpace '" + basePath + "' " + field + " " + reason);
+    };
+    if (!json.is_object()) throw fail("root", "must be an object");
+    if (!json.contains("name") || !json["name"].is_string() ||
+        json["name"].get<std::string>().empty())
+        throw fail("name", "must be a nonempty string");
+    if (!json.contains("type") || !json["type"].is_string() ||
+        json["type"].get<std::string>() != "blendSpace1D")
+        throw fail("type", "must be \"blendSpace1D\"");
+    if (!json.contains("description") || !json["description"].is_string() ||
+        json["description"].get<std::string>().empty())
+        throw fail("description", "must be a nonempty string");
+    if (!json.contains("axis") || !json["axis"].is_object())
+        throw fail("axis", "must be an object");
+    const auto& axis = json["axis"];
+    if (!axis.contains("name") || !axis["name"].is_string() ||
+        axis["name"].get<std::string>() != "Speed")
+        throw fail("axis.name", "must be \"Speed\"");
+    for (const char* bound : {"min", "max"})
+        if (axis.contains(bound) &&
+            (!axis[bound].is_number() || !std::isfinite(axis[bound].get<double>())))
+            throw fail(std::string("axis.") + bound, "must be finite");
+
+    BlendSpaceAsset space;
+    space.name = json["name"].get<std::string>();
+    if (space.name.size() > 128)
+        throw fail("name", "exceeds 128 characters");
+    if (json.contains("interpolation"))
+    {
+        if (!json["interpolation"].is_string())
+            throw fail("interpolation", "must be a string");
+        const std::string value = json["interpolation"].get<std::string>();
+        // 运行期目前只实现 UE 的 EaseInOut；Linear 仍按 EaseInOut 执行，
+        // 因此导入期接受但记录在资产里，避免静默改变作者意图却没有任何输出。
+        if (value != "EaseInOut" && value != "Linear")
+            throw fail("interpolation", "must be EaseInOut or Linear");
+        space.interpolation = value;
+    }
+    if (json.contains("weightSpeedPerSec"))
+    {
+        if (!json["weightSpeedPerSec"].is_number() ||
+            !std::isfinite(json["weightSpeedPerSec"].get<double>()) ||
+            json["weightSpeedPerSec"].get<double>() < 0)
+            throw fail("weightSpeedPerSec", "must be finite and nonnegative");
+        space.weightSpeedPerSec = json["weightSpeedPerSec"].get<float>();
+    }
+    if (!json.contains("samples") || !json["samples"].is_array())
+        throw fail("samples", "must be an array");
+    const auto& samples = json["samples"];
+    if (samples.size() < 2 || samples.size() > 3)
+        throw fail("samples", "requires 2..3 entries");
+    float previous = -std::numeric_limits<float>::infinity();
+    std::set<std::string> clips;
+    for (const auto& sample : samples)
+    {
+        if (!sample.is_object() || !sample.contains("clip") || !sample["clip"].is_string() ||
+            sample["clip"].get<std::string>().empty())
+            throw fail("samples[].clip", "must be a nonempty string");
+        if (!sample.contains("threshold") || !sample["threshold"].is_number() ||
+            !std::isfinite(sample["threshold"].get<double>()))
+            throw fail("samples[].threshold", "must be finite");
+        BlendSpaceSample entry;
+        entry.clip = sample["clip"].get<std::string>();
+        entry.threshold = sample["threshold"].get<float>();
+        if (!(entry.threshold > previous))
+            throw fail("samples[].threshold", "must be strictly increasing");
+        if (!clips.insert(entry.clip).second)
+            throw fail("samples[].clip", "must not repeat");
+        previous = entry.threshold;
+        space.samples.push_back(std::move(entry));
+    }
+    return space;
+}
+
+void ValidateBlendSpaceClips(const BlendSpaceAsset& space, const SkeletalAsset& asset,
+    const std::string& basePath)
+{
+    for (const BlendSpaceSample& sample : space.samples)
+    {
+        const bool known = std::any_of(asset.AnimationAsset().clips.begin(),
+            asset.AnimationAsset().clips.end(),
+            [&](const Clip& clip) { return clip.id == sample.clip; });
+        if (!known)
+            throw std::invalid_argument("BlendSpace '" + basePath + "' references unknown clip '" +
+                sample.clip + "'");
+    }
+}
+
 nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset)
 {
     auto result = nlohmann::json::object();
@@ -235,6 +329,17 @@ nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset)
             {"sections", std::move(sections)}, {"notifies", std::move(notifies)}});
     }
     result["montages"] = std::move(montages);
+    // BlendSpace 资产按 name 发布；C# 图在创建时把它展开为运行期 BlendSamples。
+    auto blendSpaces = nlohmann::json::object();
+    for (const BlendSpaceAsset& space : asset.AnimationAsset().blendSpaces)
+    {
+        auto samples = nlohmann::json::array();
+        for (const BlendSpaceSample& sample : space.samples)
+            samples.push_back({{"clip", sample.clip}, {"threshold", sample.threshold}});
+        blendSpaces[space.name] = {{"weightSpeedPerSec", space.weightSpeedPerSec},
+            {"interpolation", space.interpolation}, {"samples", std::move(samples)}};
+    }
+    if (!blendSpaces.empty()) result["blendSpaces"] = std::move(blendSpaces);
     return result;
 }
 

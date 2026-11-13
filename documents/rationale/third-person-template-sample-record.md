@@ -70,6 +70,11 @@ Maps/SC_third_person/
   `UseCachedPose + ApplyAdditive(Alpha=1)` 一致。
 - Additive 扩展：`RotationOffsetMeshSpace` 按 UE 的“局部→mesh 空间→累加→回局部”
   只处理旋转增量；`FrameCurves()` 汇总基础片段（BlendSpace 加权）与 additive
+  片段曲线并由 feedback 发布。
+- BlendSpace 资产：`BS_MM_WalkRun.json` 由 `skinning.blendSpaces` 引用，原生
+  loader 校验后经 animation catalog 下发；图只写 `BlendSpace = "BS_MM_WalkRun"`，
+  宿主在 catalog 可用时解析成运行期 samples（prepare 阶段创建组件，故解析延迟到
+  start 后的首次求值）。运行时 365 cm/s 仍得到 `MM_Walk_Fwd ↔ MM_Run_Fwd 0.500`。
   片段（×alpha）的同名曲线，并随反馈的 `curves` 发布（≤64 键、跳过 0 值）。
 - `ThirdPersonLocomotionGraph`：两层状态机；`Idle` 与 `Walk / Run`
   BlendSpace1D（Speed 轴 0 = Walk_InPlace、230 = Walk、500 = Run），以及
@@ -119,16 +124,16 @@ Pose Graph 的 UE 依据来自 `tool/animation/inspect_third_person_additive.py`
 
 回归证据（Release，`artifacts/third-person-test-build`）：
 
-- `animation_preflight_tests`：373/373 通过，覆盖片段骨骼子集导入、
+- `animation_preflight_tests`：375/375 通过，覆盖片段骨骼子集导入、
   `SkeletalBlendSpace` 相位/端点/夹紧、`SkeletalAdditive`/`SkeletalCachedPose`，
   `SkeletalLayered` 的 mask/alpha/顺序，以及 `SkeletalSlotMontage` 的
   masked overlay/完成语义。
-- `script_tests --gtest_filter=ScriptLocomotionTest.*`：34/34 通过，覆盖
+- `script_tests --gtest_filter=ScriptLocomotionTest.*`：35/35 通过，覆盖
   alias/VerticalSpeed/BlendSpace（230/365/500、端点、三 sample 区间、0.1 s 重插值）
   与 Conduit（同帧落地、入口规则回落、链、环、入口 conduit）、以及
   `MaxTransitionsPerFrame`/`SkipFirstUpdateTransition`、Pose Graph 决策输出与
   LayeredBoneBlend 字段；校验 mask 扩展到 7864319。
-- 整套 `script_tests`：513 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
+- 整套 `script_tests`：514 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
   `vl-build-*` 时被本机沙箱拒绝）加 1 个偶发的
   `FormalGaspFootPlacementDynamicQualityUsesFrozenRawRootStanceWindows`。
   后者曾在同一资源上出现约 11 cm 支撑误差；2026-10-24 的主干二进制通过同一用例，

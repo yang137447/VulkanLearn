@@ -1057,4 +1057,67 @@ TEST(AnimationScriptData, SegmentedMontageMapsSidecarNotifiesToSegmentTimeline)
     EXPECT_NEAR(player.FiredNotifies()[0].time, 1.5f, 1e-5f);
     EXPECT_EQ(player.FiredNotifies()[0].segmentId, "Loop");
 }
+
+json BlendSpaceJson()
+{
+    return json::parse(R"({
+      "name": "BS_Test",
+      "type": "blendSpace1D",
+      "description": "unit test blend space",
+      "axis": { "name": "Speed", "min": 0, "max": 500 },
+      "interpolation": "EaseInOut",
+      "weightSpeedPerSec": 5,
+      "samples": [
+        { "clip": "Walk", "threshold": 0 },
+        { "clip": "Run", "threshold": 500 }
+      ]
+    })");
+}
+
+TEST(AnimationScriptData, ParsesBlendSpaceAndRejectsInvalidAuthoring)
+{
+    const BlendSpaceAsset space = ParseBlendSpace(BlendSpaceJson(), "BS_Test.json");
+    EXPECT_EQ(space.name, "BS_Test");
+    ASSERT_EQ(space.samples.size(), 2u);
+    EXPECT_EQ(space.samples[0].clip, "Walk");
+    EXPECT_FLOAT_EQ(space.samples[1].threshold, 500.0f);
+    EXPECT_FLOAT_EQ(space.weightSpeedPerSec, 5.0f);
+
+    auto unsorted = BlendSpaceJson();
+    unsorted["samples"][0]["threshold"] = 600;
+    EXPECT_NE(ErrorOf([&] { ParseBlendSpace(unsorted, "x"); }).find("strictly increasing"),
+        std::string::npos);
+
+    auto unknownAxis = BlendSpaceJson();
+    unknownAxis["axis"]["name"] = "Direction";
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendSpace(unknownAxis, "x"); }).empty());
+
+    auto duplicateClip = BlendSpaceJson();
+    duplicateClip["samples"][1]["clip"] = "Walk";
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendSpace(duplicateClip, "x"); }).empty());
+
+    auto tooFew = BlendSpaceJson();
+    tooFew["samples"].erase(1);
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendSpace(tooFew, "x"); }).empty());
+}
+
+TEST(AnimationScriptData, BlendSpaceClipsAndCatalogPublishing)
+{
+    SkeletalAsset asset;
+    asset.clips.push_back(Clip{});
+    asset.clips.back().id = "Walk";
+    const BlendSpaceAsset space = ParseBlendSpace(BlendSpaceJson(), "BS_Test.json");
+    // Run 尚未注册。
+    EXPECT_NE(ErrorOf([&] { ValidateBlendSpaceClips(space, asset, "x"); }).find("Run"),
+        std::string::npos);
+    asset.clips.push_back(Clip{});
+    asset.clips.back().id = "Run";
+    EXPECT_NO_THROW(ValidateBlendSpaceClips(space, asset, "x"));
+
+    asset.blendSpaces.push_back(space);
+    const json catalog = BuildAnimationScriptAssets(asset);
+    ASSERT_TRUE(catalog.contains("blendSpaces"));
+    ASSERT_TRUE(catalog["blendSpaces"].contains("BS_Test"));
+    EXPECT_EQ(catalog["blendSpaces"]["BS_Test"]["samples"].size(), 2u);
+}
 }

@@ -405,6 +405,8 @@ sample/权重选择，以及 Conduit 的同帧落地、入口规则回落、链�
 决策输出与互斥校验，`LayeredBoneBlend` 探针验证 `LayerClip`/`LayerAlpha`/
 `LayerMask` 的透传与拒绝项，masked Slot montage 探针验证 `Slot`/`SlotMask`/
 `SlotAlpha`；原生 `SkeletalSlotMontage` 验证命中/未命中关节、alpha 与完成语义。
+`AnimationScriptData` 验证 `BS_*.json` 解析、sample/clip 校验与 catalog 发布，
+图探针验证 `BlendSpace` 名称解析成运行期 samples（未知/未解析引用被拒绝）。
 它只证明图决策与局部混合，不证明资源侧姿态观感。
 原生 `SkeletalAdditive` 验证 LocalSpaceBase 增量的平移/旋转/缩放复合与 alpha
 收缩，`SkeletalCachedPose` 验证快照冻结、无根位移与 additive 叠加。

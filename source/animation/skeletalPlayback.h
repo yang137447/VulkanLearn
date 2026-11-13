@@ -25,6 +25,21 @@
 
 namespace VL::Animation
 {
+// BS_*.json 的 1D BlendSpace：当前只支持 Speed 轴与 2..3 个 sample 的成对混合。
+struct BlendSpaceSample
+{
+    std::string clip;
+    float threshold = 0;
+};
+
+struct BlendSpaceAsset
+{
+    std::string name;
+    std::vector<BlendSpaceSample> samples;
+    float weightSpeedPerSec = 5;
+    std::string interpolation = "EaseInOut";
+};
+
 struct SkeletalAsset
 {
     SkeletonMesh mesh;
@@ -35,6 +50,9 @@ struct SkeletalAsset
     // SM skinning.montages 导入的动作编排数据；只按值保存数据，不持有播放器/notify 回调。
     // 后续 catalog/C# 播放按 id 或 Montage 资源路径查找，不复制第二份序列数据。
     std::vector<Montage> montages;
+    // SM skinning.blendSpaces 导入的 1D BlendSpace 资产；C# 图按 name 引用并展开为
+    // 运行期 BlendSamples，原生播放器仍只消费展开后的片段对。
+    std::vector<BlendSpaceAsset> blendSpaces;
     // 正式加载时捕获源字节身份；MM 绑定统计前核对同一代模型和片段。
     std::vector<std::pair<std::string, std::string>> sourceInputs;
     // 可选的动画源资产。目标资产拥有最终渲染 mesh；动作源只提供 clips、

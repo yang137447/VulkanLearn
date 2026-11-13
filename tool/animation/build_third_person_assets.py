@@ -429,6 +429,9 @@ def main():
         "modelDataPath": "Maps/SC_third_person/Source/SKM_Manny.fbx",
         "skinning": {
             "skeleton": "Maps/SC_third_person/Skeletons/SK_ThirdPersonManny.json",
+            "blendSpaces": [{
+                "path": "Maps/SC_third_person/BlendSpaces/BS_MM_WalkRun.json",
+            }],
             "clips": [{
                 "id": str(clip["name"]),
                 "path": "Maps/SC_third_person/Source/" + str(clip["name"]) + ".fbx",
