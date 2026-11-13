@@ -1,7 +1,9 @@
 #include "terrain/terrainAssetLoader.h"
 
+#include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include <iostream>
 #include <stdexcept>
 #include <string>
 
@@ -9,6 +11,7 @@
 
 #include "commonFunction.h"
 #include "terrain/terrainPaintFile.h"
+#include "terrain/terrainPaintManifest.h"
 #include "terrain/terrainHeightmapIO.h"
 #include "terrain/validation/terrainAssetValidator.h"
 
@@ -31,6 +34,10 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
 
         TerrainAssetDesc desc;
         desc.assetPath = pathString;
+        // registry key、paint sidecar 与离线工具都以正斜杠比较资产路径；
+        // 场景/命令行传入的反斜杠在这里统一归一化。
+        std::replace(
+            desc.assetPath.begin(), desc.assetPath.end(), '\\', '/');
         desc.name = asset.at("name").get<std::string>();
         desc.heightmapPath = asset.at("heightmapPath").get<std::string>();
         desc.paintPath = asset.value("paintPath", std::string());
@@ -174,6 +181,56 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
                         *paint,
                         paintError))
                     throw std::runtime_error(paintError);
+
+                // VLP2 sidecar 是层身份的校验记录：存在时必须与刚恢复的
+                // paint 形状和当前 TR 的层 key 顺序完全一致，否则宁可失败，
+                // 也不能把权重静默套到错误的层上。旧资产没有 sidecar 时只
+                // 打印一次 warning 并继续按 VLP1 使用。
+                std::string sidecarQueryError;
+                if (TerrainPaintManifestExists(
+                        paintPhysical, sidecarQueryError))
+                {
+                    TerrainPaintManifest manifest;
+                    std::string manifestError;
+                    if (!LoadTerrainPaintManifest(
+                            paintPhysical, manifest, manifestError))
+                    {
+                        throw std::runtime_error(
+                            "Terrain paint sidecar load failed: TR=" +
+                            pathString + " paint=" +
+                            paintPhysical.string() + ": " + manifestError);
+                    }
+                    std::string validationError;
+                    if (!ValidateTerrainPaintManifest(
+                            manifest,
+                            TerrainPaintLayerKeys(plan.desc),
+                            paint->width,
+                            paint->height,
+                            validationError))
+                    {
+                        throw std::runtime_error(
+                            "Terrain paint sidecar validation failed: TR=" +
+                            pathString + " paint=" +
+                            paintPhysical.string() + ": " + validationError);
+                    }
+                }
+                else if (!sidecarQueryError.empty())
+                {
+                    throw std::runtime_error(
+                        "Terrain paint sidecar cannot be queried: TR=" +
+                        pathString + " paint=" +
+                        paintPhysical.string() + ": " +
+                        sidecarQueryError);
+                }
+                else
+                {
+                    // 兼容没有 sidecar 的旧资产；这条 warning 文案是契约的一部分。
+                    // 相邻字面量在编译期拼接，运行期输出仍是一条完整消息。
+                    std::cout
+                        << "[Terrain] paint sidecar missing (leg"
+                           "acy asset): "
+                        << paintPhysical.string() << std::endl;
+                }
                 plan.layerPaint = std::move(paint);
             }
         }

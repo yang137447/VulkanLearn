@@ -6,6 +6,7 @@ add_executable(terrain_tests
     terrainHeightmapIOTests.cpp
     terrainHeightmapEditorTests.cpp
     terrainPaintFileTests.cpp
+    terrainPaintManifestTests.cpp
     terrainTressfxStubs.cpp
     terrainPageManagerP31Tests.cpp
     terrainLayerFeedbackTests.cpp
@@ -42,6 +43,8 @@ ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerSources.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainWeightMapBinding.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerPaint.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintFile.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintManifest.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintSha256.cpp
     ${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp
     ${PROJECT_SOURCE_DIR}/source/physics/joltRegistration.cpp
     ${PROJECT_SOURCE_DIR}/source/render/resource/rendererResourceCache.cpp

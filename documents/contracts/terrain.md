@@ -78,7 +78,8 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
 - `heightmapPath`、`materialInstancePath` 都是资源根相对路径；材质在预检阶段至少必须可解析。
 - `paintPath`（可选）是资源根相对的 `.vlpaint` paint 快照路径，且要求至少一层
   `layers`。文件不存在是合法状态：此时它只是 Save Paint 的写入目标；文件存在时
-  `TerrainAssetLoader` 会按当前层数恢复覆盖层，存在但格式/层数/权重非法则加载失败。
+  `TerrainAssetLoader` 会按当前层数恢复覆盖层，存在但格式/层数/权重非法则加载失败；
+  同目录 `<paint>.meta.json` 存在时还要通过 VLP2 sidecar 校验（见“VLP2 sidecar”）。
 - `layers` 可选：1..256 层。每层必有 `name`、`heightRange`、`slopeRange`；可选
   `noise`、`uvScale`、`uvRotation` 与 L1 新增的 `sourceResolution`（512/1024/2048，
   默认 1024）、`avgColor`（3 个 0..1 线性色分量，默认中性 0.18）、`sourceSet`（0..255，
@@ -273,8 +274,11 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
 
 - 有活动 stroke、会话没有可保存数据或 TR 没有 `paintPath` 时拒绝；缺失路径的反馈是
   `TR has no paintPath; add one to persist terrain paint.`。
-- 路径按 `resourcePath / paintPath` 解析，写 `.vlpaint` v1；成功后反馈
-  `Terrain paint saved: <path>`。保存不改写 TR JSON、不失效页、不重新加载 World。
+- 路径按 `resourcePath / paintPath` 解析，然后通过两文件事务写 `.vlpaint` v1
+  和同目录 `<paint>.meta.json` VLP2 sidecar；两者都成功后反馈
+  `Terrain paint saved: <path>`。任一步失败都会尽量回滚到旧字节，并把具体
+  错误反馈到 UI，不会静默当作保存成功。保存不改写 TR JSON、不失效页、不重新
+  加载 World。
 - 加载与保存共用 `ResolveTerrainPaintPath`：解析结果按 weak canonical 归一化后
   必须仍位于资源根内，绝对路径、`..` 逃逸以及 junction/symlink 指向根外都会失败。
 - 文件格式固定为小端：
@@ -896,10 +900,10 @@ L3 在 `M_terrain` 内增加 `u_terrainLayerMode` 运行时分支；默认 0 仍
 
 ## VLP2 sidecar
 
-VLP2 是 VLP1 paint 文件旁边的离线校验 sidecar，**不改变 VLP1 二进制格式**：
+VLP2 是 VLP1 paint 文件旁边的校验 sidecar，**不改变 VLP1 二进制格式**：
 对每个 `tile_XX/Source/*_paint.vlpaint`，同目录生成
-`<paint>.meta.json`。当前 sidecar 由工具写出并由离线脚本校验；运行时尚未
-消费 sidecar，加载期仍只读取 VLP1 本体。
+`<paint>.meta.json`。VLP1 文件字节布局与读取路径保持不变；sidecar 只补充
+层身份和形状声明。
 
 字段固定为：
 
@@ -912,7 +916,40 @@ VLP2 是 VLP1 paint 文件旁边的离线校验 sidecar，**不改变 VLP1 二�
 | `width` / `height` / `layerCount` | 必须等于 VLP1 头部声明 |
 | `layerKeys` | 与 TR `layers[].key`（缺省 `assetPath#name`）顺序完全一致 |
 | `featherTexels` | 记录写入时使用的羽化宽度 |
-| `contentSha256` | `.vlpaint` 文件字节的 SHA-256 |
+| `contentSha256` | `.vlpaint` 文件字节的 SHA-256；编辑器与离线工具都会写入 |
+
+运行时与编辑器的当前行为：
+
+- 运行时在 VLP1 paint 成功恢复后检查 sidecar。存在时必须通过
+  `version == 2`、`kind == "terrainLayerWeights"`、`layerCount` 与 TR 层数一致、
+  `width`/`height` 与 VLP1 头实际值一致、`layerKeys` 与 TR 层 key
+  （显式 `key`，缺省 `<assetPath>#<name>`）顺序完全一致；任一失败抛出
+  `std::runtime_error`（消息包含 TR 路径、paint 路径和具体原因），本次 World
+  候选不会提交。
+- sidecar 不存在时打印一次
+  `[Terrain] paint sidecar missing (legacy asset): <paintPath>` 并继续按 VLP1
+  加载，兼容没有 sidecar 的旧资产。运行时只解析 `contentSha256` 字段，
+  不计算也不核对哈希。
+- 编辑器 Save Paint 通过 `SaveTerrainLayerPaintBundle` 执行两文件事务：
+  先写两个同目录 `.tmp.<pid>`，把已有目标 rename 成
+  `.rollback.<pid>`，再依次 rename 临时文件到目标；成功时删除 rollback，
+  任一步失败则删除已替换的新目标并把 rollback 改回原名。进程崩溃可能留下
+  `.rollback.<pid>` 残留；若崩溃发生在 rename 之间，目标文件本身也可能缺失，
+  旧内容只存在于 `.rollback.<pid>`。此时 loader 会按“没有 paint”加载，
+  需要人工把 rollback 文件改回原路径；运行时不做自动恢复。
+  `width`/`height`/`layerCount` 由 bundle 强制取自 paint，`layerKeys` 取自
+  当前 Paint 会话（即 TR 层顺序），数量必须与 paint 层数一致。sidecar 已存在
+  时保留其 `version/kind/tileX/tileY/tileGrid/featherTexels`，不存在时使用
+  `version=2`、`tileX=tileY=0`、`tileGrid=1`、`featherTexels=0`。
+  `contentSha256` 由本次实际写出的 VLP1 字节计算并写入。
+- 多 tile set 若缺 sidecar，编辑器只能写入 `tileX=tileY=0`、`tileGrid=1`；
+  保存后需运行 `paint_manifest.py write <terrain-set>` 重写真实 tile 身份，
+  才能通过离线 `validate`。
+- 离线导出/校验工具同样写入并核对 `contentSha256`；运行时只解析该字段，
+  不计算也不核对哈希。
+- sidecar 路径由调用方先用 `ResolveTerrainPaintPath` 解析并确认仍在资源根内；
+  manifest 侧只在该已解析 paint 路径后追加 `.meta.json`，loader 只读、不再
+  做第二套路径解析。
 
 工具入口：
 

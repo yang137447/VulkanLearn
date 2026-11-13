@@ -4,6 +4,8 @@
 #include <cmath>
 #include <stdexcept>
 
+#include "terrain/terrainPaintManifest.h"
+
 namespace VL::Editor
 {
 namespace
@@ -90,6 +92,7 @@ bool TerrainPaintSession::Create(
     TerrainPaintSession candidate;
     candidate.placementId_ = instance.placementId;
     candidate.paintPath_ = instance.plan.desc.paintPath;
+    candidate.layerKeys_ = TerrainPaintLayerKeys(instance.plan.desc);
     candidate.layerCount_ = static_cast<uint32_t>(instance.plan.desc.layers.size());
     const std::shared_ptr<const TerrainLayerPaintData> loaded =
         instance.plan.layerPaint;

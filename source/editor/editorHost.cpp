@@ -44,6 +44,7 @@
 #include "script/scriptSourceLocation.h"
 #include "terrain/terrainPageManager.h"
 #include "terrain/terrainPaintFile.h"
+#include "terrain/terrainPaintManifest.h"
 #include "ui/uiEditorViewModelSections.h"
 #include "ui/uiSubsystem.h"
 #include "world/world.h"
@@ -624,9 +625,41 @@ bool EditorHost::ApplyTerrainPaintAction(const UiAction& action, World* world)
                                 path,
                                 pathError))
                             error = pathError;
-                        else if (SaveTerrainLayerPaintFile(path, *paint, error))
-                            scripts.SetFeedback(
-                                "Terrain paint saved: " + path.string());
+                        else
+                        {
+                            // 已存在的 sidecar 保留 tile 身份与 feather；编辑器只
+                            // 更新 paint 形状、层 key 和本次实际字节的哈希。
+                            TerrainPaintManifest manifest;
+                            manifest.version = 2;
+                            manifest.tileX = 0;
+                            manifest.tileY = 0;
+                            manifest.tileGrid = 1;
+                            manifest.featherTexels = 0.0f;
+                            std::string manifestError;
+                            if (TerrainPaintManifestExists(
+                                    path, manifestError))
+                            {
+                                if (!LoadTerrainPaintManifest(
+                                        path, manifest, manifestError))
+                                    error = manifestError;
+                            }
+                            else if (!manifestError.empty())
+                                error = manifestError;
+                            if (error.empty())
+                            {
+                                manifest.width = paint->width;
+                                manifest.height = paint->height;
+                                manifest.layerCount = paint->layerCount;
+                                manifest.layerKeys =
+                                    terrainPaintSession->LayerKeys();
+                                if (!SaveTerrainLayerPaintBundle(
+                                        path, *paint, manifest, manifestError))
+                                    error = manifestError;
+                                else
+                                    scripts.SetFeedback(
+                                        "Terrain paint saved: " + path.string());
+                            }
+                        }
                     }
                 }
             }

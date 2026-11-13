@@ -100,6 +100,21 @@ TEST(TerrainLayerRegistry, SingleTerrainMapsIdentity)
     EXPECT_EQ(registry.Layers()[0].key, "TR_a.json#grass");
 }
 
+TEST(TerrainLayerRegistry, BackslashAssetPathFallbackIsNormalized)
+{
+    TerrainLayerRegistry registry;
+    const TerrainBuildPlan plan = MakePlan(
+        "Maps\\SC_test\\TR_a.json",
+        "terrain|A",
+        {MakeLayer("grass", "")});
+
+    registry.RegisterTerrain(plan);
+    ASSERT_EQ(registry.GlobalLayerCount(), 1u);
+    EXPECT_EQ(
+        registry.Layers()[0].key,
+        "Maps/SC_test/TR_a.json#grass");
+}
+
 TEST(TerrainLayerRegistry, SharedKeyDeduplicatesAcrossTerrains)
 {
     TerrainLayerRegistry registry;

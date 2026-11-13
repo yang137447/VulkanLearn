@@ -14,7 +14,12 @@ std::string TerrainLayerRegistry::ResolveLayerKey(
 {
     if (!layer.key.empty())
         return layer.key;
-    return assetPath + "#" + layer.name;
+    // 身份串统一用正斜杠，避免 Windows 调用方传入反斜杠时同一资产产生
+    // 两个 registry key，也让 sidecar 与离线工具的字符串完全一致。
+    std::string normalizedPath = assetPath;
+    std::replace(
+        normalizedPath.begin(), normalizedPath.end(), '\\', '/');
+    return normalizedPath + "#" + layer.name;
 }
 
 bool TerrainLayerRegistry::LayersEquivalent(

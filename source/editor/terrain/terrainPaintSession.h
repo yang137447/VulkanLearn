@@ -4,6 +4,7 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <Eigen/Dense>
 
@@ -45,6 +46,11 @@ public:
 
     const std::string& PlacementId() const noexcept { return placementId_; }
     const std::string& PaintPath() const noexcept { return paintPath_; }
+    // 与 TR 层顺序一致的身份列表；Save Paint 用它写 VLP2 sidecar。
+    const std::vector<std::string>& LayerKeys() const noexcept
+    {
+        return layerKeys_;
+    }
     uint32_t LayerCount() const noexcept;
     uint64_t Revision() const noexcept { return revision_; }
     bool IsStrokeActive() const noexcept { return strokeActive_; }
@@ -67,6 +73,7 @@ private:
 
     std::string placementId_;
     std::string paintPath_;
+    std::vector<std::string> layerKeys_;
     uint32_t layerCount_ = 0;
     std::shared_ptr<TerrainLayerPaintData> paint_;
     TerrainLayerPaintData strokeStart_;
