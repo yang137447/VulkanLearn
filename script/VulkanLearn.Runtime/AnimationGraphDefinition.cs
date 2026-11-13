@@ -330,6 +330,12 @@ public sealed class AnimationGraphTransition
     public bool SyncPhaseFromSource { get; init; }
     // false 表示硬切；true 且 BlendSeconds>0 表示交叉淡入。
     public bool Crossfade { get; init; } = true;
+    // UE Automatic Rule：按剩余时间触发；开启后忽略 Condition。
+    public bool AutomaticRule { get; init; }
+    // -1 = 使用 BlendSeconds 作为触发提前量。
+    public float AutomaticRuleTriggerTime { get; init; } = -1;
+    // 进入目标状态后的冷却秒数；0 = 关闭。
+    public float MinTimeBeforeReentry { get; init; }
 
     internal void Validate(string machineName)
     {
@@ -348,6 +354,14 @@ public sealed class AnimationGraphTransition
                 $"Animation graph transition '{From}->{To}' requires a sync group for source phase.");
         if (Tag is null || Tag.Length > 64 || Tag.Contains('\0'))
             throw new InvalidOperationException($"Animation graph transition '{From}->{To}' tag is invalid.");
+        if (!float.IsFinite(AutomaticRuleTriggerTime) || AutomaticRuleTriggerTime < -1 ||
+            AutomaticRuleTriggerTime > 10)
+            throw new InvalidOperationException(
+                $"Animation graph transition '{From}->{To}' automatic rule trigger time is invalid.");
+        if (!float.IsFinite(MinTimeBeforeReentry) || MinTimeBeforeReentry < 0 ||
+            MinTimeBeforeReentry > 60)
+            throw new InvalidOperationException(
+                $"Animation graph transition '{From}->{To}' min reentry time is invalid.");
         Condition.Validate();
     }
 }

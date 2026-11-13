@@ -78,6 +78,8 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
         mask |= Catch(1024, BlendDuplicateClip());
         mask |= Catch(2048, BlendUnknownAxis());
         mask |= Catch(32768, MaxTransitionsOutOfRange());
+        mask |= Catch(268435456, AutomaticRuleTriggerOutOfRange());
+        mask |= Catch(536870912, MinReentryNegative());
         mask |= Catch(65536, AdditiveOnConduit());
         mask |= Catch(131072, AdditiveAlphaWithoutClip());
         mask |= Catch(262144, CachedPoseWithClip());
@@ -337,6 +339,41 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
                 Name = "Root", EntryState = "A",
                 MaxTransitionsPerFrame = 0,
                 States = new[] { new AnimationGraphState { Name = "A", Clip = "Clip_A" } }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition AutomaticRuleTriggerOutOfRange() => TransitionProbeGraph(
+        automaticRule: true, triggerTime: 11, minReentry: 0);
+
+    private static AnimationGraphDefinition MinReentryNegative() => TransitionProbeGraph(
+        automaticRule: false, triggerTime: -1, minReentry: -1);
+
+    private static AnimationGraphDefinition TransitionProbeGraph(
+        bool automaticRule, float triggerTime, float minReentry) => new()
+    {
+        Name = "TransitionProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "B", Condition = AnimationGraphCondition.Always,
+                        AutomaticRule = automaticRule,
+                        AutomaticRuleTriggerTime = triggerTime,
+                        MinTimeBeforeReentry = minReentry
+                    }
+                }
             }
         }
     };
@@ -1298,6 +1335,143 @@ public sealed class AnimationGraphBlendSpaceAssetProbeBlueprint : Blueprint
             "", 0, 1, false, true, 0);
 
     private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
+// 转移系统探针：Automatic Rule（忽略普通条件/按剩余时间）、MinTimeBeforeReentry、
+// Transition Request 的一次消费语义。
+public sealed class AnimationGraphTransitionProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var early = new AnimationGraphRuntime(BuildAutomaticGraph());
+        var earlyState = early.Update(Input(1.7f));
+        var lateState = early.Update(Input(1.8f));
+
+        var looped = new AnimationGraphRuntime(BuildAutomaticGraph());
+        var loopState = looped.Update(Input(1.9f));
+
+        var reentry = new AnimationGraphRuntime(BuildReentryGraph());
+        reentry.Update(Input(0.1f));
+        var blocked = reentry.Update(Input(0.1f));
+        for (int step = 0; step < 5; ++step) reentry.Update(Input(0.1f));
+        var allowed = reentry.Update(Input(0.1f));
+
+        var requests = new AnimationGraphRuntime(BuildRequestGraph());
+        requests.Update(Input(0.1f));
+        var noRequest = requests.Update(Input(0.1f));
+        requests.RequestTransition("Go");
+        var requested = requests.Update(Input(0.1f));
+        var consumed = requests.Update(Input(0.1f));
+
+        Transform.Position = new(
+            earlyState.State == "A" ? 1 : 0,
+            lateState.State == "B" ? 1 : 0,
+            loopState.State == "B" ? 1 : 0);
+        Transform.Rotation = new(
+            lateState.State == "B" ? 1 : 0,
+            blocked.State == "B" ? 1 : 0,
+            allowed.State == "A" ? 1 : 0);
+        Transform.Scale = new(
+            noRequest.State == "B" ? 1 : 0,
+            requested.State == "C" ? 1 : 0,
+            consumed.State == "C" ? 1 : 0);
+    }
+
+    // Condition 故意为 false：Automatic Rule 开启时必须忽略它。
+    private static AnimationGraphDefinition BuildAutomaticGraph() => new()
+    {
+        Name = "AutomaticProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "B",
+                        Condition = AnimationGraphCondition.Not(AnimationGraphCondition.Always),
+                        AutomaticRule = true,
+                        AutomaticRuleTriggerTime = 0.25f
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BuildReentryGraph() => new()
+    {
+        Name = "ReentryProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "B", Condition = AnimationGraphCondition.Always,
+                        // 长时间冷却：避免 B→A 之后同一测试里又立刻回到 B。
+                        MinTimeBeforeReentry = 60
+                    },
+                    new AnimationGraphTransition
+                    {
+                        From = "B", To = "A", Condition = AnimationGraphCondition.Always,
+                        MinTimeBeforeReentry = 0.5f
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BuildRequestGraph() => new()
+    {
+        Name = "RequestProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "B", Condition = AnimationGraphCondition.Always
+                    },
+                    new AnimationGraphTransition
+                    {
+                        From = "B", To = "C",
+                        Condition = AnimationGraphCondition.TransitionRequest("Go")
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput Input(float clipTime) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, 0, 0, 0, 0, 0.1f,
+            "Clip_A", clipTime, 2.0f, false, true, 0);
 }
 
 // Conduit 语义探针：同帧落地、入口规则回落、链、环、最终 blend 与入口 conduit。

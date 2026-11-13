@@ -60,6 +60,9 @@ Maps/SC_third_person/
   `FAnimNode_StateMachine` 的循环预算与首帧丢混合语义实现；Third Person 图显式
   使用 UE 类默认值 3 / true，VL 自身的默认值保持 1 / false 以保留原有预算与混合
   行为；entry 帧开始检查常规转移是与 UE 对齐的新行为。
+- `AutomaticRule` / `MinTimeBeforeReentry` / `TransitionRequest`：按剩余时间触发
+  （开启后忽略普通条件）、按状态机时钟冷却、事件请求在下一个 `Update` 内消费一次；
+  automatic 只在源状态就是当前播放片段时有效，loop 按当前循环剩余时间计算。
 - `CachedPoseBranches`：每帧先于主状态求值的命名分支（clip 或 1D blend），
   `UseCachedPose` 优先读同帧结果；Third Person 的 `Locomotion` 分支引用
   `BS_MM_WalkRun`，Land 读取本帧 Walk/Run 姿态再叠加 `MM_Land` additive。
@@ -131,12 +134,13 @@ Pose Graph 的 UE 依据来自 `tool/animation/inspect_third_person_additive.py`
   `SkeletalBlendSpace` 相位/端点/夹紧、`SkeletalAdditive`/`SkeletalCachedPose`，
   `SkeletalLayered` 的 mask/alpha/顺序，以及 `SkeletalSlotMontage` 的
   masked overlay/完成语义。
-- `script_tests --gtest_filter=ScriptLocomotionTest.*`：35/35 通过，覆盖
+- `script_tests --gtest_filter=ScriptLocomotionTest.*`：36/36 通过，覆盖
   alias/VerticalSpeed/BlendSpace（230/365/500、端点、三 sample 区间、0.1 s 重插值）
   与 Conduit（同帧落地、入口规则回落、链、环、入口 conduit）、以及
-  `MaxTransitionsPerFrame`/`SkipFirstUpdateTransition`、Pose Graph 决策输出与
+  `MaxTransitionsPerFrame`/`SkipFirstUpdateTransition`/Automatic Rule/
+  MinTimeBeforeReentry/Transition Request、Pose Graph 决策输出与
   LayeredBoneBlend 字段；校验 mask 扩展到 7864319。
-- 整套 `script_tests`：514 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
+- 整套 `script_tests`：515 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
   `vl-build-*` 时被本机沙箱拒绝）加 1 个偶发的
   `FormalGaspFootPlacementDynamicQualityUsesFrozenRawRootStanceWindows`。
   后者曾在同一资源上出现约 11 cm 支撑误差；2026-10-24 的主干二进制通过同一用例，

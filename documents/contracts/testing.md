@@ -401,7 +401,9 @@ inPlace 与冻结姿态所有权。`SkeletalBlendSpace` 验证 BlendSpace1D 的�
 `ScriptLocomotionTest` 验证图级 State Alias、`VerticalSpeed`、BlendSpace1D 的
 sample/权重选择，以及 Conduit 的同帧落地、入口规则回落、链、环与入口 conduit；
 `MaxTransitionsPerFrame` 预算与 `SkipFirstUpdateTransition` 的首帧不混合语义
-也在同一套件覆盖；Pose Graph 探针验证 `UseCachedPose`/`AdditiveClip`/`Slot` 的
+也在同一套件覆盖；`AutomaticRule`、`MinTimeBeforeReentry` 与
+`TransitionRequest` 的一次消费语义同样由该套件验证；Pose Graph 探针验证
+`UseCachedPose`/`AdditiveClip`/`Slot` 的
 决策输出与互斥校验，`LayeredBoneBlend` 探针验证 `LayerClip`/`LayerAlpha`/
 `LayerMask` 的透传与拒绝项，masked Slot montage 探针验证 `Slot`/`SlotMask`/
 `SlotAlpha`；原生 `SkeletalSlotMontage` 验证命中/未命中关节、alpha 与完成语义。

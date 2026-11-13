@@ -619,11 +619,17 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   - `From`/`To`、`Condition`、`Priority`（数值越小越先检查，同优先级按声明顺序）、
     `BlendSeconds`、`Inertialization`、`Crossfade`、`SyncGroup`、
     `SyncPhaseFromSource`、`Tag`
+  - `AutomaticRule`（默认 false）+ `AutomaticRuleTriggerTime`（-1 = 使用
+    `BlendSeconds`）：按片段剩余时间触发；开启后忽略 `Condition`。只在源状态
+    就是当前播放片段时有效（子状态机/缓存姿态/BlendSpace 状态不触发）
+  - `MinTimeBeforeReentry`（秒，默认 0 = 关闭）：目标状态最近一次进入后的冷却
 - `AnimationGraphCondition`
   - 叶节点：`Always`、`Grounded`、`Airborne`、`Sitting`、`Speed`、`DesiredSpeed`、
     `MaxSpeed`、`VerticalSpeed`、`InputMagnitude`、`BackwardDot`、`Direction`、
     `RelativeYaw`、`Curve`、`StateTime`、`StateCompleted`、`SyncMarker`、
-    `EntryFromState`
+    `EntryFromState`、`TransitionRequest`
+  - `TransitionRequest(name)`：匹配 `AnimationGraphRuntime.RequestTransition(name)`
+    下发的请求；请求只在下一个 `Update` 内有效、去重、上限 8，未匹配即丢弃
   - 组合节点：`All` / `Any` / `Not`
   - 方向条件可指定 `DirectionCurve`；曲线缺失时使用未缩放的相对 yaw。曲线条件缺键
     为 false，不把缺失当成 0

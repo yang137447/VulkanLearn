@@ -426,12 +426,27 @@ TEST_F(ScriptLocomotionTest, AnimationGraphValidationRejectsInvalidDefinitions)
     // 4194304 duplicate layer mask bone.
     // 8388608 adds a slot mask without a slot name.
     // 16777216 duplicate branch name, 33554432 branch clip+samples,
-    // 67108864 unresolved branch blend space, 134217728 too many branch samples.
-    EXPECT_NEAR(State()["position"][0].get<float>(), 267911167.0f, 0.001f);
+    // 67108864 unresolved branch blend space, 134217728 too many branch samples,
+    // 268435456 automatic rule trigger out of range, 536870912 negative min reentry.
+    EXPECT_NEAR(State()["position"][0].get<float>(), 1073217535.0f, 0.001f);
     for (int axis = 0; axis < 3; ++axis)
     {
         SCOPED_TRACE(axis);
         EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, TransitionSettingsDriveAutomaticReentryAndRequests)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphTransitionProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
     }
 }
 

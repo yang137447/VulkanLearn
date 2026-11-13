@@ -20,7 +20,8 @@ public enum AnimationGraphConditionKind
     StateCompleted = 14,
     SyncMarker = 15,
     EntryFromState = 16,
-    VerticalSpeed = 17
+    VerticalSpeed = 17,
+    TransitionRequest = 18
 }
 
 public enum AnimationGraphConditionOperator
@@ -99,6 +100,9 @@ public sealed class AnimationGraphCondition
         new() { Kind = AnimationGraphConditionKind.SyncMarker, Name = marker, Threshold = minimumAlpha };
     public static AnimationGraphCondition EntryFromState(string state) =>
         new() { Kind = AnimationGraphConditionKind.EntryFromState, Name = state };
+    // 事件驱动转移：RequestTransition(name) 在下一个 Update 内匹配一次。
+    public static AnimationGraphCondition TransitionRequest(string name) =>
+        new() { Kind = AnimationGraphConditionKind.TransitionRequest, Name = name };
 
     public static AnimationGraphCondition All(params AnimationGraphCondition[] children) =>
         Composite(AnimationGraphConditionOperator.All, children);
@@ -208,6 +212,11 @@ public sealed class AnimationGraphCondition
             break;
         case AnimationGraphConditionKind.EntryFromState:
             RequireName(Name, "Entry source state");
+            break;
+        case AnimationGraphConditionKind.TransitionRequest:
+            RequireName(Name, "Transition request name");
+            if (Name.Length > 64 || Name.Contains('\0'))
+                throw new InvalidOperationException("Transition request name is invalid.");
             break;
         default:
             throw new InvalidOperationException($"Unsupported animation graph condition kind: {Kind}.");

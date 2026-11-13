@@ -114,6 +114,9 @@ public sealed class AnimationGraphRuntime
         public AnimationGraphStateMachine Definition = null!;
         public string State = "";
         public float StateTime;
+        // 状态机自己的时钟：MinTimeBeforeReentry 用，不受内层状态重置影响。
+        public float Clock;
+        public readonly Dictionary<string, float> EnteredAt = new(StringComparer.Ordinal);
         public string EntryFromState = "";
         public bool JustEntered;
     }
@@ -138,6 +141,10 @@ public sealed class AnimationGraphRuntime
     private readonly Dictionary<string, float> blendWeights = new(StringComparer.Ordinal);
     private string activeBlendPath = "";
     private readonly List<string> conduitPath = [];
+    // Transition Request：RequestTransition 在下一个 Update 内消费一次。
+    private readonly HashSet<string> pendingTransitionRequests = new(StringComparer.Ordinal);
+    private readonly HashSet<string> activeTransitionRequests = new(StringComparer.Ordinal);
+    private const int MaximumTransitionRequests = 8;
     private bool started;
     private string lastDirectionBranch = "";
 
@@ -154,6 +161,7 @@ public sealed class AnimationGraphRuntime
             State = root.EntryState,
             JustEntered = true
         });
+        stack[0].EnteredAt[root.EntryState] = 0;
         lastDirectionBranch = definition.DirectionBranches.Count > 0
             ? definition.DirectionBranches[0].Name : "";
         if (root.EntryState.Length > 0)
@@ -166,9 +174,24 @@ public sealed class AnimationGraphRuntime
 
     public AnimationGraphDefinition Definition => definition;
 
+    // Transition Request：只在下一次 Update 内有效；未匹配到转移就丢弃。
+    public void RequestTransition(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Trim().Length != name.Length ||
+            name.Length > 64 || name.Contains('\0'))
+            throw new ArgumentException("Transition request name is invalid.", nameof(name));
+        if (pendingTransitionRequests.Count >= MaximumTransitionRequests &&
+            !pendingTransitionRequests.Contains(name))
+            throw new InvalidOperationException("Transition request budget exceeded.");
+        pendingTransitionRequests.Add(name);
+    }
+
     public AnimationGraphDecision Update(in AnimationGraphInput input)
     {
         input.Validate();
+        activeTransitionRequests.Clear();
+        foreach (var request in pendingTransitionRequests) activeTransitionRequests.Add(request);
+        pendingTransitionRequests.Clear();
         AdvanceTime(input.DeltaTime);
         conduitPath.Clear();
 
@@ -363,6 +386,7 @@ public sealed class AnimationGraphRuntime
     private void AdvanceTime(float deltaTime)
     {
         if (stack.Count == 0) return;
+        foreach (var machine in stack) machine.Clock += deltaTime;
         stack[^1].StateTime += deltaTime;
     }
 
@@ -395,7 +419,16 @@ public sealed class AnimationGraphRuntime
             var transition = transitions[index];
             if (!machine.Definition.MatchesSource(transition.From, sourceState)) continue;
             if (transition.To == sourceState) continue;
-            if (!context.Evaluate(transition.Condition)) continue;
+            if (transition.MinTimeBeforeReentry > 0 &&
+                machine.EnteredAt.TryGetValue(transition.To, out var enteredAt) &&
+                machine.Clock - enteredAt < transition.MinTimeBeforeReentry)
+                continue;
+            // UE Automatic Rule：按剩余时间触发，开启后不再求值普通条件。
+            if (transition.AutomaticRule)
+            {
+                if (!AutomaticRuleReady(machine, sourceState, transition, input)) continue;
+            }
+            else if (!context.Evaluate(transition.Condition)) continue;
             candidates.Add((index, transition));
         }
         candidates.Sort((left, right) => left.Transition.Priority != right.Transition.Priority
@@ -450,7 +483,17 @@ public sealed class AnimationGraphRuntime
         var state = FindState(machine.Definition, stateName);
         return new AnimationGraphEvaluationContext(definition, input,
             ResolveStateTime(machine, state, input), IsCompleted(machine, state, input),
-            machine.EntryFromState, machine.Definition.DirectionCurve);
+            machine.EntryFromState, machine.Definition.DirectionCurve, activeTransitionRequests);
+    }
+
+    private bool AutomaticRuleReady(ActiveMachine machine, string sourceState,
+        AnimationGraphTransition transition, in AnimationGraphInput input)
+    {
+        var state = FindState(machine.Definition, sourceState);
+        if (state.Clip.Length == 0 || input.Clip != state.Clip || input.ClipDuration <= 0) return false;
+        float trigger = transition.AutomaticRuleTriggerTime >= 0
+            ? transition.AutomaticRuleTriggerTime : transition.BlendSeconds;
+        return input.ClipDuration - input.ClipTime <= trigger;
     }
 
     private void AppendConduits(IReadOnlyList<string> conduits)
@@ -462,6 +505,7 @@ public sealed class AnimationGraphRuntime
     {
         machine.State = stateName;
         machine.StateTime = 0;
+        machine.EnteredAt[stateName] = machine.Clock;
         machine.EntryFromState = previousState;
         machine.JustEntered = false;
         RebuildNested(machine);
@@ -475,13 +519,15 @@ public sealed class AnimationGraphRuntime
         var state = FindState(parent.Definition, parent.State);
         if (state.SubStateMachine.Length == 0) return;
         var nested = machines[state.SubStateMachine];
-        stack.Add(new ActiveMachine
+        var nestedMachine = new ActiveMachine
         {
             Definition = nested,
             State = nested.EntryState,
             EntryFromState = parent.EntryFromState,
             JustEntered = true
-        });
+        };
+        nestedMachine.EnteredAt[nested.EntryState] = 0;
+        stack.Add(nestedMachine);
     }
 
     private void TrimStack(int count)
@@ -594,9 +640,11 @@ internal readonly struct AnimationGraphEvaluationContext
     private readonly bool clipCompleted;
     private readonly string entryFromState;
     private readonly string machineDirectionCurve;
+    private readonly IReadOnlySet<string>? transitionRequests;
 
     public AnimationGraphEvaluationContext(AnimationGraphDefinition definition, in AnimationGraphInput input,
-        float stateTime, bool clipCompleted, string entryFromState, string machineDirectionCurve)
+        float stateTime, bool clipCompleted, string entryFromState, string machineDirectionCurve,
+        IReadOnlySet<string>? transitionRequests)
     {
         this.definition = definition;
         this.input = input;
@@ -604,6 +652,7 @@ internal readonly struct AnimationGraphEvaluationContext
         this.clipCompleted = clipCompleted;
         this.entryFromState = entryFromState;
         this.machineDirectionCurve = machineDirectionCurve;
+        this.transitionRequests = transitionRequests;
     }
 
     public bool Evaluate(AnimationGraphCondition condition)
@@ -635,6 +684,8 @@ internal readonly struct AnimationGraphEvaluationContext
         case AnimationGraphConditionKind.DesiredSpeed: return Compare(input.DesiredSpeed, condition);
         case AnimationGraphConditionKind.MaxSpeed: return Compare(input.MaxSpeed, condition);
         case AnimationGraphConditionKind.VerticalSpeed: return Compare(input.VerticalSpeed, condition);
+        case AnimationGraphConditionKind.TransitionRequest:
+            return transitionRequests is not null && transitionRequests.Contains(condition.Name);
         case AnimationGraphConditionKind.InputMagnitude: return Compare(input.InputMagnitude, condition);
         case AnimationGraphConditionKind.BackwardDot:
             return Compare(BackwardDot(input), condition);
