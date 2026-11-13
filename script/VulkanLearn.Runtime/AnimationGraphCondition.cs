@@ -19,7 +19,8 @@ public enum AnimationGraphConditionKind
     StateTime = 13,
     StateCompleted = 14,
     SyncMarker = 15,
-    EntryFromState = 16
+    EntryFromState = 16,
+    VerticalSpeed = 17
 }
 
 public enum AnimationGraphConditionOperator
@@ -71,6 +72,9 @@ public sealed class AnimationGraphCondition
         Numeric(AnimationGraphConditionKind.DesiredSpeed, threshold, comparison);
     public static AnimationGraphCondition MaxSpeed(float threshold, AnimationGraphComparison comparison = AnimationGraphComparison.AtLeast) =>
         Numeric(AnimationGraphConditionKind.MaxSpeed, threshold, comparison);
+    public static AnimationGraphCondition VerticalSpeed(float threshold,
+        AnimationGraphComparison comparison = AnimationGraphComparison.AtLeast) =>
+        Numeric(AnimationGraphConditionKind.VerticalSpeed, threshold, comparison);
     public static AnimationGraphCondition InputMagnitude(float threshold, AnimationGraphComparison comparison = AnimationGraphComparison.AtLeast) =>
         Numeric(AnimationGraphConditionKind.InputMagnitude, threshold, comparison);
     public static AnimationGraphCondition BackwardDot(float threshold, AnimationGraphComparison comparison = AnimationGraphComparison.LessThan) =>
@@ -175,6 +179,7 @@ public sealed class AnimationGraphCondition
         case AnimationGraphConditionKind.Speed:
         case AnimationGraphConditionKind.DesiredSpeed:
         case AnimationGraphConditionKind.MaxSpeed:
+        case AnimationGraphConditionKind.VerticalSpeed:
         case AnimationGraphConditionKind.InputMagnitude:
         case AnimationGraphConditionKind.BackwardDot:
             RequireFinite(Threshold, "Threshold");

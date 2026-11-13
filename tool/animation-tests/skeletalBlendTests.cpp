@@ -97,6 +97,113 @@ std::shared_ptr<SkeletalAsset> MakeAsset()
     return asset;
 }
 
+// 匀速位移片段：用于检查第二片段是否按 A 的归一化相位采样。
+Clip MakeTravelClip(const std::string& id, float duration, float hipFrom, float hipTo)
+{
+    Clip clip;
+    clip.id = id;
+    clip.raw.duration = duration;
+    clip.raw.tracks.resize(3);
+    auto& root = clip.raw.tracks[0];
+    root.translations = {{0, {3, 2, 1}}};
+    root.rotations = {{0, ozz::math::Quaternion::identity()}};
+    root.scales = {{0, ozz::math::Float3::one()}};
+    auto& hip = clip.raw.tracks[1];
+    hip.translations = {{0, {hipFrom, 10, 0}}, {duration, {hipTo, 10, 0}}};
+    hip.rotations = {{0, ozz::math::Quaternion::identity()}};
+    hip.scales = {{0, ozz::math::Float3::one()}};
+    auto& foot = clip.raw.tracks[2];
+    foot.translations = {{0, {0, 0, 4}}};
+    foot.rotations = {{0, ozz::math::Quaternion::identity()}};
+    foot.scales = {{0, ozz::math::Float3::one()}};
+    ozz::animation::offline::AnimationBuilder builder;
+    clip.runtime = builder(clip.raw);
+    return clip;
+}
+
+std::shared_ptr<SkeletalAsset> MakeBlendAsset()
+{
+    auto asset = MakeAsset();
+    // A：4 s 内 hip.x 0→40（10 cm/s）；B：2 s 内 0→80（40 cm/s）。
+    asset->clips.push_back(MakeTravelClip("travel-slow", 4, 0, 40));
+    asset->clips.push_back(MakeTravelClip("travel-fast", 2, 0, 80));
+    return asset;
+}
+
+TEST(SkeletalBlendSpace, SecondClipFollowsNormalizedPhaseAndWeight)
+{
+    auto asset = MakeBlendAsset();
+    SkeletalPlayback player(asset);
+    player.Play("travel-slow", true, 1, true);
+    // 2 s → A 相位 0.5；B（2 s 片段）必须采样到 1 s，而不是从 0 开始推进 2 s。
+    player.Tick(2.0f);
+    EXPECT_FLOAT_EQ(player.Time(), 2.0f);
+    player.SetBlendSpace1D("travel-slow", "travel-fast", 0.5f);
+    ASSERT_TRUE(player.BlendSpaceActive());
+    EXPECT_EQ(player.BlendSpaceClipId(), "travel-fast");
+    player.Tick(0.0f);
+    player.Tick(1.0f / 60);
+    const float phase = player.Time() / 4.0f;
+    // Models 含 root 的 3 cm 绑定平移，比较前加回。
+    const float expected = 3.0f + 0.5f * (40.0f * phase) + 0.5f * (80.0f * phase);
+    EXPECT_NEAR(player.Models()[1](0, 3), expected, 0.05f);
+    // 第二片段没有自己的根轨迹：root motion 仍只来自 A。
+    EXPECT_NEAR(player.BlendSpaceWeight(), 0.5f, 1e-6f);
+}
+
+TEST(SkeletalBlendSpace, EndpointWeightsMatchSingleClipPoses)
+{
+    auto asset = MakeBlendAsset();
+    SkeletalPlayback pure(asset);
+    pure.Play("travel-slow", true, 1, true);
+    pure.Tick(1.0f);
+    pure.Tick(1.0f / 60);
+    const float pureHip = pure.Models()[1](0, 3);
+
+    SkeletalPlayback zero(asset);
+    zero.Play("travel-slow", true, 1, true);
+    zero.Tick(1.0f);
+    zero.SetBlendSpace1D("travel-slow", "travel-fast", 0.0f);
+    zero.Tick(1.0f / 60);
+    // 权重 0 必须与单片段逐元素一致（不经过 ozz 归一化）。
+    const auto& reference = pure.Models();
+    const auto& blended = zero.Models();
+    for (size_t joint = 0; joint < reference.size(); ++joint)
+        EXPECT_TRUE(reference[joint].isApprox(blended[joint], 1e-6f));
+    EXPECT_NEAR(pureHip - 3.0f, 40.0f * (pure.Time() / 4.0f), 0.05f);
+
+    SkeletalPlayback full(asset);
+    full.Play("travel-slow", true, 1, true);
+    full.Tick(1.0f);
+    full.SetBlendSpace1D("travel-slow", "travel-fast", 1.0f);
+    full.Tick(1.0f / 60);
+    // 权重 1 等价于单独播放 B 到同一相位（B 时长 2 s，相位取自 A）。
+    const float blendSeconds = (full.Time() / 4.0f) * 2.0f;
+    SkeletalPlayback direct(asset);
+    direct.Play("travel-fast", true, 1, true);
+    direct.Tick(blendSeconds);
+    const auto& fullModels = full.Models();
+    const auto& directModels = direct.Models();
+    for (size_t joint = 0; joint < fullModels.size(); ++joint)
+        EXPECT_TRUE(fullModels[joint].isApprox(directModels[joint], 1e-5f));
+}
+
+TEST(SkeletalBlendSpace, ClampsWeightRejectsMismatchAndClearsOnTransition)
+{
+    auto asset = MakeBlendAsset();
+    SkeletalPlayback player(asset);
+    player.Play("travel-slow", true, 1, true);
+    player.SetBlendSpace1D("travel-slow", "travel-fast", 5.0f);
+    EXPECT_FLOAT_EQ(player.BlendSpaceWeight(), 1.0f);
+    player.SetBlendSpace1D("travel-slow", "travel-fast", -3.0f);
+    EXPECT_FLOAT_EQ(player.BlendSpaceWeight(), 0.0f);
+    EXPECT_ANY_THROW(player.SetBlendSpace1D("travel-fast", "travel-slow", 0.5f));
+    EXPECT_ANY_THROW(player.SetBlendSpace1D("travel-slow", "missing", 0.5f));
+    player.TransitionTo("travel-fast", 0, true, 0.2f);
+    EXPECT_FALSE(player.BlendSpaceActive());
+    EXPECT_EQ(player.BlendSpaceClipId(), "");
+}
+
 TEST(SkeletalBlend, BlendsLocalTrsBeforeHierarchyWithQuaternionNormalization)
 {
     SkeletalPlayback player(MakeAsset());

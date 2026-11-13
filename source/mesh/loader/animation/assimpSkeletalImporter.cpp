@@ -552,12 +552,19 @@ Clip AssimpSkeletalImporter::BuildClip(const aiScene& scene, const SkeletonMesh&
     Nodes nodes;
     ReadHierarchy(root, -1, clipHierarchy, rawSkeleton.roots[0], nodes);
     const auto indices = JointIndices(mesh);
-    if (nodes.size() != indices.size()) throw std::runtime_error("Clip skeleton size mismatch");
+    // UE 允许动画只写实际变化的骨骼；未出现的骨骼回退绑定姿态。
+    // 这里仍是“网格骨架的子集”，不能接受未知关节，也要求出现的关节父链一致。
+    for (const auto& entry : nodes)
+    {
+        if (indices.find(entry.first) == indices.end())
+            throw std::runtime_error("Clip skeleton contains unknown joint: " + entry.first);
+    }
     for (size_t joint = 0; joint < mesh.joints.size(); ++joint)
     {
         const auto found = nodes.find(mesh.joints[joint].name);
-        if (found == nodes.end() || (mesh.joints[joint].parent >= 0 &&
-            found->second->mParent->mName.C_Str() != mesh.joints[mesh.joints[joint].parent].name))
+        if (found == nodes.end()) continue;
+        if (mesh.joints[joint].parent >= 0 &&
+            found->second->mParent->mName.C_Str() != mesh.joints[mesh.joints[joint].parent].name)
         {
             throw std::runtime_error("Clip skeleton name/parent mismatch");
         }

@@ -11,7 +11,7 @@ public readonly record struct AnimationState(string Clip, float Time, float Dura
     string SyncMarker = "", float SyncMarkerAlpha = 0, bool SyncActive = false,
     string SyncLeader = "", string SyncRole = "", string SyncMethod = "",
     string SyncEffectiveMethod = "", string SyncScope = "", string SyncDiagnostic = "",
-    int MontageSegment = 0, string MontageSegmentId = "");
+    int MontageSegment = 0, string MontageSegmentId = "", string BlendClip = "", float BlendWeight = 0);
 public readonly record struct AnimationSyncMarker(string Name, float Time);
 public readonly record struct AnimationPlayerInfo(string SyncGroup, string SyncRole, string SyncMethod,
     float StartPosition, bool Loop, string SyncGroupScope = "Local");
@@ -85,6 +85,11 @@ internal sealed record SlopeWarpingCommand(bool Enabled, float Weight, float Max
 internal sealed record PoseDriverCommand(bool Enabled, string Asset);
 internal sealed record PostProcessCommand(bool Enabled, string Asset);
 internal sealed record BonePhysicsCommand(bool Enabled, string Asset, bool Debug);
+// BlendSpace1D 是播放命令之后的附加候选：只更新第二片段与权重，不推进第二时钟。
+internal sealed record BlendSpaceCommand(bool Enabled, string ClipA, string ClipB, float Weight)
+{
+    public static readonly BlendSpaceCommand Disabled = new(false, "", "", 0);
+}
 
 // catalog 曲线键：times/values 等长且已按时间排序；C# 只在本地做线性 clamp 采样。
 internal sealed class AnimationCurve(float[] times, float[] values)
@@ -120,6 +125,7 @@ public sealed class AnimationPlayback
     internal BonePhysicsState BonePhysicsFeedback = default;
     internal BonePhysicsCommand? PendingBonePhysics;
     internal BonePhysicsCommand? ActiveBonePhysics;
+    internal BlendSpaceCommand? PendingBlendSpace;
     internal bool BonePhysicsDebugRequested;
     internal readonly Dictionary<string, MontageInfo> Montages = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationPlayerInfo[]> ClipPlayers = new(StringComparer.Ordinal);
@@ -274,6 +280,30 @@ public sealed class AnimationPlayback
         Pending = new(clip, loop, rate, inPlace, Inertialization: inertialization,
             Transition: true, TransitionStartTime: startTime, BlendSeconds: blendSeconds,
             SyncGroup: syncGroup, SyncPhase: syncPhase);
+    }
+
+    // UE BlendSpace1D：A 是唯一时钟片段，B 按 A 的归一化相位采样后加权混合。
+    // 权重越界按 [0,1] 夹紧；A/B 必须是 catalog 里的片段，A 必须等于本帧已播放的片段。
+    public void SetBlendSpace(string clipA, string clipB, float weight)
+    {
+        CheckRequest();
+        if (!ClipIds.Contains(clipA, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown animation clip: {clipA}", nameof(clipA));
+        if (!ClipIds.Contains(clipB, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown animation clip: {clipB}", nameof(clipB));
+        if (!float.IsFinite(weight)) throw new ArgumentOutOfRangeException(nameof(weight));
+        if (string.Equals(clipA, clipB, StringComparison.Ordinal))
+        {
+            ClearBlendSpace();
+            return;
+        }
+        PendingBlendSpace = new(true, clipA, clipB, Math.Clamp(weight, 0, 1));
+    }
+
+    public void ClearBlendSpace()
+    {
+        CheckRequest();
+        PendingBlendSpace = BlendSpaceCommand.Disabled;
     }
 
     // 任意时刻曲线采样：秒、clip-local、键间线性、区间外 clamp 到首/末值、单键常量。
@@ -746,6 +776,16 @@ public static partial class NativeBridge
                 var range = montage.GetProperty("range");
                 montageRange = new(range[0].GetSingle(), range[1].GetSingle());
             }
+            var blendClip = "";
+            var blendWeight = 0.0f;
+            if (value.TryGetProperty("blendSpace", out var blendSpace) &&
+                blendSpace.ValueKind == JsonValueKind.Object)
+            {
+                if (blendSpace.TryGetProperty("clip", out var blendClipNode))
+                    blendClip = blendClipNode.GetString()!;
+                if (blendSpace.TryGetProperty("weight", out var blendWeightNode))
+                    blendWeight = blendWeightNode.GetSingle();
+            }
             component.Animation.Feedback = new(value.GetProperty("clip").GetString()!,
                 value.GetProperty("time").GetSingle(), value.GetProperty("duration").GetSingle(),
                 value.GetProperty("completed").GetBoolean(), value.GetProperty("playing").GetBoolean(),
@@ -769,7 +809,7 @@ public static partial class NativeBridge
                 value.TryGetProperty("syncScope", out var syncScope) ? syncScope.GetString()! : "",
                 value.TryGetProperty("syncDiagnostic", out var syncDiagnostic) ?
                     syncDiagnostic.GetString()! : "",
-                montageSegment, montageSegmentId);
+                montageSegment, montageSegmentId, blendClip, blendWeight);
             component.Animation.FootPlacementFeedback = value.TryGetProperty("footPlacement", out var placement)
                 ? new(placement.GetProperty("enabled").GetBoolean(), placement.GetProperty("active").GetBoolean(),
                     placement.GetProperty("pelvisOffset").GetSingle(), ReadFootPlacementFoot(placement.GetProperty("feet")[0]),
@@ -918,6 +958,15 @@ public static partial class NativeBridge
                     commands.Add(new { component = mesh.Id, clip = request.Clip, loop = request.Loop,
                         rate = request.Rate, inPlace = request.InPlace });
                 mesh.Animation.Pending = null;
+            }
+            // BlendSpace1D 必须紧跟播放命令提交：A 由同批 play/transitionTo 选定，
+            // 原生只在这个候选上更新第二片段与权重。
+            if (mesh.Animation.PendingBlendSpace is { } blendSpace)
+            {
+                commands.Add(new { component = mesh.Id, mode = "blendSpace",
+                    enabled = blendSpace.Enabled, clipA = blendSpace.ClipA,
+                    clipB = blendSpace.ClipB, weight = blendSpace.Weight });
+                mesh.Animation.PendingBlendSpace = null;
             }
             // 斜率配置放在主命令之后：非 slope 命令仍保持“同一 batch 只允许一条”的
             // 旧边界，slope 作为后续候选组合应用到刚提交的播放状态上。

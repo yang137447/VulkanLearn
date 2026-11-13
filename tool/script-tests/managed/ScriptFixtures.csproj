@@ -13,4 +13,9 @@
              Link="Gameplay/%(RecursiveDir)%(Filename)%(Extension)"/>
   </ItemGroup>
   <Import Project="$(VulkanLearnSourceItems)" Condition="'$(VulkanLearnSourceItems)' != ''" />
+  <!-- GunOutlineDemo.blueprint.cs still targets the retired MaterialInstance/GetMaterial API.
+       Exclude it until the resource asset is repaired; otherwise the whole fixture build fails. -->
+  <ItemGroup>
+    <Compile Remove="$(VulkanLearnResourceRoot)/Common/Blueprints/GunOutlineDemo.blueprint.cs" />
+  </ItemGroup>
 </Project>

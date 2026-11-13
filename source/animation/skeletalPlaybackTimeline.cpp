@@ -265,11 +265,52 @@ void SkeletalPlayback::Stop()
     EndActiveNotifyStates(time, true, true);
     playing = false;
     explicitlyPaused = false;
+    ClearBlendSpace();
     ClearSyncSourceClock();
     syncDecisionValid = false;
     syncLeader.clear();
     syncPendingValid = false;
     syncPendingHasTime = false;
+}
+
+void SkeletalPlayback::SetBlendSpace1D(const std::string& clipA, const std::string& clipB, float weight)
+{
+    const auto& animation = asset->AnimationAsset();
+    if (animation.clips.empty())
+        throw std::invalid_argument("Blend space requires animation clips");
+    if (!std::isfinite(weight))
+        throw std::invalid_argument("Blend space weight must be finite");
+    if (clipB.empty() || clipB.size() > 256)
+        throw std::invalid_argument("Blend space target clip is invalid");
+    if (clipA != SelectedClipId())
+        throw std::invalid_argument("Blend space source clip must match the selected clip");
+    size_t index = 0;
+    while (index < animation.clips.size() && animation.clips[index].id != clipB) ++index;
+    if (index == animation.clips.size())
+        throw std::invalid_argument("Unknown animation blend clip: " + clipB);
+    // 同片段没有混合意义；显式清空可让调用方用同一入口退回单片段。
+    if (index == selected)
+    {
+        ClearBlendSpace();
+        return;
+    }
+    // 先完成全部校验再改状态；失败时保持上一帧的姿态输出。
+    blendSpaceClip = index;
+    blendSpaceWeight = std::clamp(weight, 0.0f, 1.0f);
+    blendSpaceActive = true;
+}
+
+void SkeletalPlayback::ClearBlendSpace()
+{
+    blendSpaceActive = false;
+    blendSpaceWeight = 0;
+}
+
+std::string SkeletalPlayback::BlendSpaceClipId() const
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!blendSpaceActive || blendSpaceClip >= animation.clips.size()) return {};
+    return animation.clips[blendSpaceClip].id;
 }
 
 LocalPose SkeletalPlayback::Sample(size_t clipIndex, float sampleTime) const
@@ -381,6 +422,8 @@ void SkeletalPlayback::TransitionTo(const std::string& clipId, float seconds, bo
     candidate.ClearMontageSegments();
     candidate.blendElapsed = 0;
     candidate.blendDuration = blendSeconds;
+    // 过渡开启新的目标片段；旧的混合源属于上一播放段，不能带到新时钟上。
+    candidate.ClearBlendSpace();
     auto target = candidate.Sample(index, seconds);
     std::shared_ptr<const std::vector<Eigen::Matrix4f>> targetModels;
     auto targetPoses = candidate.Evaluate(target, discontinuity + (blendSeconds == 0), targetModels);
@@ -551,6 +594,7 @@ void SkeletalPlayback::Seek(float seconds)
     displayedLocals.swap(locals);
     blendSource.clear();
     inertialization.Clear();
+    ClearBlendSpace();
     time = seconds;
     selected = sampleClip;
     montageSegment = segmentIndex;
@@ -594,6 +638,7 @@ void SkeletalPlayback::Select(size_t clipIndex)
     displayedLocals.swap(locals);
     blendSource.clear();
     inertialization.Clear();
+    ClearBlendSpace();
     selected = clipIndex;
     time = 0;
     activeSyncGroup.clear();

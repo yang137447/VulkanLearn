@@ -72,6 +72,11 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
         mask |= Catch(16, EmptyClip());
         mask |= Catch(32, InvalidThreshold());
         mask |= Catch(64, BudgetExceeded());
+        mask |= Catch(128, UnknownAlias());
+        mask |= Catch(256, BlendTooFewSamples());
+        mask |= Catch(512, BlendUnsortedThresholds());
+        mask |= Catch(1024, BlendDuplicateClip());
+        mask |= Catch(2048, BlendUnknownAxis());
         // 合法图必须通过；否则 rejection 夹具会把“全都拒绝”误判成正确。
         _ = ValidGraph().Validate();
         Transform.Position = new(mask, 0, 0);
@@ -229,6 +234,258 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
     {
         From = from, To = to, Condition = AnimationGraphCondition.Always
     };
+
+    private static AnimationGraphDefinition UnknownAlias() => new()
+    {
+        Name = "UnknownAlias", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[] { new AnimationGraphState { Name = "A", Clip = "Clip_A" } },
+                Aliases = new[]
+                {
+                    new AnimationGraphStateAlias { Name = "Bad", Sources = new[] { "Missing" } }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BlendTooFewSamples() => BlendGraph(
+        new[] { new AnimationGraphBlendSample("Clip_A", 230) });
+
+    private static AnimationGraphDefinition BlendUnsortedThresholds() => BlendGraph(
+        new[]
+        {
+            new AnimationGraphBlendSample("Clip_A", 500),
+            new AnimationGraphBlendSample("Clip_B", 230)
+        });
+
+    private static AnimationGraphDefinition BlendDuplicateClip() => BlendGraph(
+        new[]
+        {
+            new AnimationGraphBlendSample("Clip_A", 230),
+            new AnimationGraphBlendSample("Clip_A", 500)
+        });
+
+    private static AnimationGraphDefinition BlendUnknownAxis() => new()
+    {
+        Name = "BlendUnknownAxis", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A",
+                        BlendAxis = "Direction",
+                        BlendSamples = new[]
+                        {
+                            new AnimationGraphBlendSample("Clip_A", 230),
+                            new AnimationGraphBlendSample("Clip_B", 500)
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BlendGraph(AnimationGraphBlendSample[] samples) => new()
+    {
+        Name = "Blend", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[] { new AnimationGraphState { Name = "A", BlendSamples = samples } }
+            }
+        }
+    };
+}
+
+// State Alias + VerticalSpeed 的纯 C# 探针：A/B 都能通过共享 alias 进入 C。
+public sealed class AnimationGraphAliasProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var graph = BuildGraph();
+        var fromA = new AnimationGraphRuntime(graph);
+        var a0 = fromA.Update(MakeInput(0, 10, ""));
+        var a1 = fromA.Update(MakeInput(0, 10, a0.Clip));
+
+        var fromB = new AnimationGraphRuntime(graph);
+        var b0 = fromB.Update(MakeInput(20, 0, ""));
+        var b1 = fromB.Update(MakeInput(20, 0, b0.Clip));
+        var b2 = fromB.Update(MakeInput(20, 10, b1.Clip));
+
+        Transform.Position = new(
+            a1.State == "C" ? 1 : 0,
+            b2.State == "C" ? 1 : 0,
+            b1.State == "B" ? 1 : 0);
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => new()
+    {
+        Name = "AliasProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root",
+                EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" }
+                },
+                Aliases = new[]
+                {
+                    new AnimationGraphStateAlias { Name = "Airborne", Sources = new[] { "A", "B" } }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "B", Condition = AnimationGraphCondition.Speed(10),
+                        Priority = 10
+                    },
+                    new AnimationGraphTransition
+                    {
+                        From = "Airborne", To = "C",
+                        Condition = AnimationGraphCondition.VerticalSpeed(0,
+                            AnimationGraphComparison.GreaterThan),
+                        Priority = 0
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput MakeInput(float speed, float vertical, string clip) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, speed, speed, speed, 0,
+            1f / 60, clip, 0, 1, false, true, 0,
+            VerticalSpeed: vertical);
+}
+
+// BlendSpace1D 决策探针：官方 BS_MM_WalkRun 的三段 sample
+// （0 = Walk_InPlace、230 = Walk_Fwd、500 = Run_Fwd）、区间括号选择，
+// 以及 UE TargetWeightInterpolationSpeedPerSec=5 的权重逼近速度。
+public sealed class AnimationGraphBlendSpaceProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var graph = BuildGraph();
+        // 首帧只走 entry transition，第二帧才做 Idle→WalkRun 的常规迁移，
+        // 因此每个探针都先以 0 速度入场，再在同一 runtime 上给出目标速度。
+        // 最低端点用刚过阈值的速度，权重仍在 1e-3 以内；0 速度不会离开 Idle。
+        var low = Evaluate(graph, 0.001f);
+        var below = Evaluate(graph, 115);
+        var mid = Evaluate(graph, 365);
+        var walk = Evaluate(graph, 230);
+        var high = Evaluate(graph, 500);
+        var above = Evaluate(graph, 900);
+
+        var bracket = Evaluate(BuildThreeSampleGraph(), 420);
+
+        // 230 边界两侧必须是同一个 A（Walk）且权重连续：230 为 0，230.2 仍≈0。
+        var edge = new AnimationGraphRuntime(graph);
+        edge.Update(Input(0));
+        edge.Update(Input(230));
+        var afterEdge = edge.Update(Input(230.2f));
+
+        // 从 300 直接跳到 500：300 的稳态权重是 smoothstep(70/270)=0.1668，
+        // 0.1 s 后按 5/s 最多走 0.5，因此预期 0.6668。
+        var smoothed = new AnimationGraphRuntime(graph);
+        smoothed.Update(Input(0));
+        var steady = smoothed.Update(Input(300));
+        var halfway = smoothed.Update(Input(500, 0.1f));
+
+        Transform.Position = new(
+            low.Clip == "MM_Walk_Fwd" && low.BlendClip == "MM_Walk_InPlace" &&
+                MathF.Abs(low.BlendWeight - 1.0f) < 1e-3f ? 1 : 0,
+            below.Clip == "MM_Walk_Fwd" && below.BlendClip == "MM_Walk_InPlace" &&
+                MathF.Abs(below.BlendWeight - 0.5f) < 1e-3f ? 1 : 0,
+            mid.Clip == "MM_Walk_Fwd" && mid.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(mid.BlendWeight - 0.5f) < 1e-3f ? 1 : 0);
+        Transform.Rotation = new(
+            walk.Clip == "MM_Walk_Fwd" && walk.BlendClip == "MM_Walk_InPlace" &&
+                MathF.Abs(walk.BlendWeight) < 1e-3f &&
+                afterEdge.Clip == "MM_Walk_Fwd" && afterEdge.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(afterEdge.BlendWeight) < 1e-3f ? 1 : 0,
+            high.Clip == "MM_Walk_Fwd" && high.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(high.BlendWeight - 1.0f) < 1e-3f ? 1 : 0,
+            above.Clip == "MM_Walk_Fwd" && above.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(above.BlendWeight - 1.0f) < 1e-3f ? 1 : 0);
+        Transform.Scale = new(
+            bracket.Clip == "MM_Mid" && bracket.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(bracket.BlendWeight - 0.104f) < 1e-3f ? 1 : 0,
+            steady.Clip == "MM_Walk_Fwd" && steady.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(steady.BlendWeight - 0.1668f) < 1e-3f ? 1 : 0,
+            halfway.Clip == "MM_Walk_Fwd" && halfway.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(halfway.BlendWeight - 0.6668f) < 1e-3f ? 1 : 0);
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => Build(
+        new[]
+        {
+            new AnimationGraphBlendSample("MM_Walk_InPlace", 0),
+            new AnimationGraphBlendSample("MM_Walk_Fwd", 230),
+            new AnimationGraphBlendSample("MM_Run_Fwd", 500)
+        });
+
+    private static AnimationGraphDefinition BuildThreeSampleGraph() => Build(
+        new[]
+        {
+            new AnimationGraphBlendSample("MM_Walk_Fwd", 230),
+            new AnimationGraphBlendSample("MM_Mid", 400),
+            new AnimationGraphBlendSample("MM_Run_Fwd", 500)
+        });
+
+    private static AnimationGraphDefinition Build(AnimationGraphBlendSample[] samples) => new()
+    {
+        Name = "BlendSpaceProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root",
+                EntryState = "Idle",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "Idle", Clip = "MM_Idle" },
+                    new AnimationGraphState { Name = "Walk / Run", BlendSamples = samples }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "Idle",
+                        To = "Walk / Run",
+                        Condition = AnimationGraphCondition.Speed(0, AnimationGraphComparison.GreaterThan)
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDecision Evaluate(AnimationGraphDefinition graph, float speed)
+    {
+        var runtime = new AnimationGraphRuntime(graph);
+        runtime.Update(Input(0));
+        return runtime.Update(Input(speed));
+    }
+
+    private static AnimationGraphInput Input(float speed, float deltaTime = 1f / 60) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, speed, speed, speed, 0,
+            deltaTime, "", 0, 1, false, true, 0);
 }
 
 // Echo 资源图的直接探针：确认资源侧图能独立构建并选出 Valley 片段。

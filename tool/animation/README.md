@@ -576,3 +576,14 @@ Run comparison modes require 0.75 continuous seconds of a moving loop,
 with a six-second deadline. Use only Run at one size/thread count for a focused
 comparison; these images do not measure stance-foot drift or establish exact
 feedback/render-frame pairing.
+
+## Third Person Template Export
+
+`export_third_person_assets.py` and `audit_third_person.py` are read-only UE
+commandlet scripts for the Third Person Template (`ParallaxTest`). Run them
+against an isolated project copy; they never save packages. The export selects
+LOD0 only (`FbxExportOption.level_of_detail = False`) and excludes source mesh
+nodes from AnimSequence FBXs, so VL sees a skinnable mesh plus skeleton-only
+clip hierarchies. `build_third_person_assets.py` converts the UE dump into
+`Maps/SC_third_person` skeleton, sequence sidecars, mesh and neutral PBR
+material. See `documents/rationale/third-person-template-sample-record.md`.

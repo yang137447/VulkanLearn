@@ -193,7 +193,10 @@ nlohmann::json World::ScriptAnimationFeedback() const
                     {"syncMethod", player.CurrentSyncAuthoredMethodName()},
                     {"syncEffectiveMethod", player.CurrentSyncMethodName()},
                     {"syncScope", player.CurrentSyncScopeName()},
-                    {"syncDiagnostic", player.SyncDiagnosticName()}};
+                    {"syncDiagnostic", player.SyncDiagnosticName()},
+                    {"blendSpace", {{"active", player.BlendSpaceActive()},
+                        {"clip", player.BlendSpaceClipId()},
+                        {"weight", player.BlendSpaceWeight()}}}};
                 const auto& rootMotion = player.RootMotionDelta();
                 feedback["rootMotion"] = nlohmann::json::array(
                     {rootMotion.x(), rootMotion.y(), rootMotion.z()});
@@ -383,9 +386,10 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
         const std::string mode = request.value("mode", std::string());
         // 后处理配置（slope / pose driver）是紧随播放命令的附加候选，必须基于前一条
         // 继续应用，否则会丢掉播放状态；其余命令仍保持“同一 batch 每个组件一条”。
+        // blendSpace 与后处理配置一样，是基于同一 batch 前一条播放命令的附加候选。
         const bool postProcessConfiguration = mode == "configureSlopeWarping" ||
             mode == "configurePoseDriver" || mode == "configurePostProcess" ||
-            mode == "configureBonePhysics";
+            mode == "configureBonePhysics" || mode == "blendSpace";
         if (!player || (!postProcessConfiguration && candidates.count(player)))
             throw std::invalid_argument("Script.InvalidAnimationTarget");
         const auto existing = candidates.find(player);
@@ -640,6 +644,29 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             candidate.SetRate(rate);
             candidate.SetMotionWarpWindows({});
             runtimeCandidates.erase(identity);
+        }
+        else if (request.value("mode", std::string()) == "blendSpace")
+        {
+            // BlendSpace1D 是播放命令的附加候选：A 必须已经由同一 batch 的
+            // play/transitionTo 选为目标片段；这里只更新第二片段与权重。
+            if (!request.contains("enabled") || !request.at("enabled").is_boolean())
+                throw std::invalid_argument("Script.InvalidBlendSpaceRequest");
+            if (!request.at("enabled").get<bool>())
+                candidate.ClearBlendSpace();
+            else
+            {
+                if (!request.contains("clipA") || !request.at("clipA").is_string() ||
+                    !request.contains("clipB") || !request.at("clipB").is_string() ||
+                    !request.contains("weight") || !request.at("weight").is_number())
+                    throw std::invalid_argument("Script.InvalidBlendSpaceRequest");
+                const std::string clipA = request.at("clipA").get<std::string>();
+                const std::string clipB = request.at("clipB").get<std::string>();
+                const float weight = request.at("weight").get<float>();
+                if (clipA.empty() || clipA.size() > 256 || clipB.empty() || clipB.size() > 256 ||
+                    !std::isfinite(weight))
+                    throw std::invalid_argument("Script.InvalidBlendSpaceRequest");
+                candidate.SetBlendSpace1D(clipA, clipB, weight);
+            }
         }
         else
         {

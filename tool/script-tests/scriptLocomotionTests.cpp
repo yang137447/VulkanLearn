@@ -416,8 +416,42 @@ TEST_F(ScriptLocomotionTest, AnimationGraphValidationRejectsInvalidDefinitions)
     Play(); Tick();
     EXPECT_FALSE(State()["failed"].get<bool>());
     // 1 duplicate, 2 unknown target, 4 nested cycle, 8 unreachable, 16 empty clip,
-    // 32 invalid threshold, 64 budget.
-    EXPECT_NEAR(State()["position"][0].get<float>(), 127.0f, 0.001f);
+    // 32 invalid threshold, 64 budget, 128 unknown state alias source,
+    // 256 blend sample count, 512 unsorted blend thresholds, 1024 duplicate blend clip,
+    // 2048 unsupported blend axis.
+    EXPECT_NEAR(State()["position"][0].get<float>(), 4095.0f, 0.001f);
+}
+
+TEST_F(ScriptLocomotionTest, StateAliasAndVerticalSpeedDriveSharedTransition)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphAliasProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    EXPECT_NEAR(State()["position"][0].get<float>(), 1.0f, 0.001f);
+    EXPECT_NEAR(State()["position"][1].get<float>(), 1.0f, 0.001f);
+    EXPECT_NEAR(State()["position"][2].get<float>(), 1.0f, 0.001f);
+}
+
+TEST_F(ScriptLocomotionTest, BlendSpaceSelectsClipsAndWeightsOnSpeedAxis)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphBlendSpaceProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+    }
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+    }
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
 }
 
 TEST_F(ScriptLocomotionTest, EchoResourceGraphDefinesClipsWithoutCharacterCode)

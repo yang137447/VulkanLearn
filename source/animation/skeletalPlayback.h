@@ -155,6 +155,14 @@ public:
     // 的归一化时间；目标为循环片段时映射到 phase*duration，非循环时 clamp 到末帧前。
     void TransitionToSynced(const std::string& clipId, float seconds, bool loop,
         float blendSeconds, bool inPlace, const std::string& syncGroup, float syncPhase);
+    // UE BlendSpace1D 的运行时：A 仍是唯一推进时钟的片段（根位移/notify 仍属于它），
+    // B 只按 A 的归一化相位采样后与 A 做加权局部姿态混合。clipA 必须与当前选中
+    // 片段一致；权重在 [0,1] 内夹紧，0 = 纯 A，1 = 纯 B。切片段/Seek/Montage 会清除它。
+    void SetBlendSpace1D(const std::string& clipA, const std::string& clipB, float weight);
+    void ClearBlendSpace();
+    bool BlendSpaceActive() const { return blendSpaceActive; }
+    float BlendSpaceWeight() const { return blendSpaceActive ? blendSpaceWeight : 0.0f; }
+    std::string BlendSpaceClipId() const;
     // 只调节唯一目标时钟，不重采样或重启混合；混合时长仍按实际 delta 推进。
     void SetRate(float speed);
     // 模式只作用于后续过渡；切换不重采样当前姿态或重启唯一时钟。
@@ -411,6 +419,10 @@ private:
     LocalPose blendSource;
     float blendDuration = 0;
     float blendElapsed = 0;
+    // BlendSpace1D 的第二采样片段；不是第二个播放器，没有自己的时钟/notify/根轨迹。
+    bool blendSpaceActive = false;
+    size_t blendSpaceClip = 0;
+    float blendSpaceWeight = 0;
     size_t selected = 0;
     float time = 0;
     Eigen::Vector3f rootMotionDelta = Eigen::Vector3f::Zero();

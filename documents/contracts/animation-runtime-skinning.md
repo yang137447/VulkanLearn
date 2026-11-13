@@ -576,12 +576,18 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   - `StateMachines[]`
 - `AnimationGraphStateMachine`
   - `Name`、`EntryState`、可选 `DirectionCurve`
-  - `States[]`、`EntryTransitions[]`、`Transitions[]`
+  - `States[]`、`Aliases[]`、`EntryTransitions[]`、`Transitions[]`
+  - `Aliases[]` 是 UE State Alias 的等价物：每个 alias 声明一组来源状态（或
+    `Global = true`）；transition 的 `From` 可以写 alias 名，求值时按当前状态是否
+    属于该 alias 展开。alias 不是可进入状态，必须只出现在 `From`
   - `EntryTransitions` 只在进入状态机当帧检查；之后每帧检查 `Transitions`
   - 每个状态机每帧最多迁移一次，`From = "*"` 表示任意当前状态
 - `AnimationGraphState`
-  - `Clip` 与 `SubStateMachine` 必须二选一；外层 Idle/Walk/Jog 通过子状态机表达
-    内层 entry/start/cycles/stop
+  - `Clip`、`SubStateMachine` 与 `BlendSamples` 必须三选一；外层 Idle/Walk/Jog 通过
+    子状态机表达内层 entry/start/cycles/stop
+  - `BlendSamples[]`（`Clip` + `Threshold`）表示 1D BlendSpace；`BlendAxis` 目前只接受
+    `Speed`（取 `AnimationGraphInput.PlanarSpeed`），2..3 个 sample，阈值有限且严格递增，
+    sample 片段不得重复（成对原生混合见下方 BlendSpace1D）
   - `Loop`、`Rate`、`SyncGroup`、`StartPosition`（-1 = 宿主读取 Sequence Player）、
     `Mode = Grounded|Airborne`、`DirectionBranch`、`Interruptible`
 - `AnimationGraphTransition`
@@ -590,8 +596,9 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
     `SyncPhaseFromSource`、`Tag`
 - `AnimationGraphCondition`
   - 叶节点：`Always`、`Grounded`、`Airborne`、`Sitting`、`Speed`、`DesiredSpeed`、
-    `MaxSpeed`、`InputMagnitude`、`BackwardDot`、`Direction`、`RelativeYaw`、
-    `Curve`、`StateTime`、`StateCompleted`、`SyncMarker`、`EntryFromState`
+    `MaxSpeed`、`VerticalSpeed`、`InputMagnitude`、`BackwardDot`、`Direction`、
+    `RelativeYaw`、`Curve`、`StateTime`、`StateCompleted`、`SyncMarker`、
+    `EntryFromState`
   - 组合节点：`All` / `Any` / `Not`
   - 方向条件可指定 `DirectionCurve`；曲线缺失时使用未缩放的相对 yaw。曲线条件缺键
     为 false，不把缺失当成 0
@@ -601,7 +608,7 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 - `AnimationGraphRuntime.Update(AnimationGraphInput)` 输出 `AnimationGraphDecision`：
   外层/叶子状态、state path、mode、transition tag、clip、loop、direction branch、
   blend、inertialization、syncGroup、syncPhase、startPosition、crossfade、changed、
-  leaf state time 与 completed。
+  leaf state time 与 completed；BlendSpace 状态额外输出 `BlendClip` 与 `BlendWeight`。
 - 外层状态迁移先求值；迁移后重建内层 entry 栈，并在同一帧继续检查内层 entry，
   因此 `Idle -> Walk` 可以直接选方向起步。外层 transition 拥有整个内层状态机的
   交叉淡入；内层迁移只在没有外层迁移时接管 blend。
@@ -616,16 +623,49 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   图模板。Echo 的片段名、过渡时间和曲线名位于资源侧
   `Maps/SC_valley_echo/Blueprints/EchoLocomotionGraph.cs`；角色蓝图不写 clip 字符串。
 
+### BlendSpace1D
+
+- 求值：输出 `(Clip = 基准 sample, BlendClip = 相邻 sample)`——两个 sample 时基准是
+  首 sample，三个 sample 时基准是中间 sample；目标权重按 `smoothstep` 成形，并受
+  `5/s` 的权重变化上限约束；进入状态首帧
+  直接取目标值。低于首 sample 或高于末 sample 时仍保留相邻片段对（权重 0/1），
+  避免 A 片段在端点换片而重启时钟。
+- 基准 sample：两个 sample 时 A 固定为首 sample；三个 sample 时 A 固定为中间
+  sample，低段输出 `B = 首 sample`、权重 `1 - smoothstep`，高段输出
+  `B = 末 sample`、权重 `smoothstep`。因此跨内部 sample 边界不会更换 A，
+  A 的播放时钟和相位保持连续；B 的权重按片段分别缓存，换片段对时从该片段
+  自己的历史值继续，不继承上一对的端点权重。
+- Third Person Template 的当前资源使用官方三段轴：`MM_Walk_InPlace @ 0`、
+  `MM_Walk_Fwd @ 230`、`MM_Run_Fwd @ 500`。A 固定为 2.7333 s 的 Walk，
+  与 UE 的 `AnimLength` 一致；Walk_InPlace 与 Run 只按相位加速或减速。
+- 托管提交：`AnimationGraphBlueprint` 在播放命令之后调用
+  `AnimationPlayback.SetBlendSpace(clipA, clipB, weight)`；只有权重变化时只提交
+  混合候选，不重启 A 的时钟。离开混合状态时调用 `ClearBlendSpace`。
+- 原生：`SkeletalPlayback::SetBlendSpace1D(clipA, clipB, weight)` 要求 `clipA` 等于
+  当前选中片段，权重夹紧到 `[0,1]`。B 不是第二个播放器：它按 A 的归一化相位
+  `(time-rangeStart)/(rangeEnd-rangeStart)` 映射到自己的时长后采样，再在局部 TRS 上
+  用 `Crossfade` 混合；权重 0/1 直接取 A/B 采样结果，不经过 ozz 归一化。相位基准
+  是 A 的播放范围，而不是所有 sample 时长的加权值；当前资源满足 A 时长恒定。
+- 限制：根位移、根 yaw、notify、Montage 与 SyncGroup 仍只属于 A；B 不产生事件或
+  根轨迹。`Play`/`TransitionTo`/`Select`/`Seek`/`Stop` 会清除混合源。暂不支持
+  BlendSpace2D、每 sample 播放速率、per-sample 同步组或 UE 的 marker sync
+  （当前只有归一化相位同步）。1D 轴最多 3 个 sample：原生是“基准 sample +
+  一个邻居”的成对混合，不是 N 路加权采样。
+- 原生批量命令：`animationCommands` 的 `blendSpace` 候选必须跟随同一组件本批次的
+  `play`/`transitionTo`（或单独更新权重），字段为 `enabled`/`clipA`/`clipB`/`weight`；
+  原生反馈在 `blendSpace = { active, clip, weight }` 中发布。
+
 ### 校验与边界
 
 - `Validate()` 拒绝：重复状态机/状态/方向分支、未知 transition 目标或子状态机、
   状态机嵌套环、从 Entry 不可达的状态、空 clip、非有限或越界阈值、非法 yaw 区间、
   空条件组合、SyncPhase 缺少 SyncGroup，以及状态机/状态/transition/条件预算超限。
   状态迁移本身允许成环（Idle↔Walk 必须成环）；“循环”校验只针对嵌套状态机引用。
-- 当前节点子集只覆盖 Echo 需要的 StateMachine + SequencePlayer 语义、
-  SyncGroup/MarkerSync 数据、曲线条件、Inertialization 标记与单层 pose 输出；
+- 当前节点子集覆盖 StateMachine + SequencePlayer 语义、State Alias、
+  SyncGroup/MarkerSync 数据、曲线条件、`VerticalSpeed`、Inertialization 标记与
+  单层 pose 输出与 1D BlendSpace；Conduit 仍未实现；
   R4 的 Slot/Montage 动作层由宿主 `PlayAction` + 原生 `PlayMontage` 提供，仍是整身
-  `DefaultSlot` 覆盖，不做骨骼 mask 分层。BlendSpace、AimOffset、TurnInPlace、Pivot、
+  `DefaultSlot` 覆盖，不做骨骼 mask 分层。AimOffset、TurnInPlace、Pivot、
   LayeredBoneBlend、FootPlacement、additive 仍未实现；SlopeWarping 是图后的
   原生姿态后处理，不进入图节点。曲线驱动骨骼/AimOffset 仍归后续阶段。
 

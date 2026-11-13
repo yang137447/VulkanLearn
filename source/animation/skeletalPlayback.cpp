@@ -181,6 +181,24 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     if (sampleTime == time && epoch == discontinuity && !wrapped && !IsBlending()) return;
     const float previousTime = time;
     auto locals = Sample(selected, sampleTime);
+    // BlendSpace1D：第二片段按 A 的归一化相位采样，再在局部 TRS 上加权混合。
+    // 混合发生在一次性过渡混合之前，等价于 UE“状态输出 → 过渡混合”的顺序。
+    if (blendSpaceActive && blendSpaceClip < asset->AnimationAsset().clips.size())
+    {
+        const auto& blendClip = asset->AnimationAsset().clips[blendSpaceClip].runtime;
+        const float phase = rangeEnd > rangeStart
+            ? std::clamp((sampleTime - rangeStart) / (rangeEnd - rangeStart), 0.0f, 1.0f)
+            : 0.0f;
+        const float blendDurationSeconds = blendClip ? blendClip->duration() : 0.0f;
+        float blendTime = phase * blendDurationSeconds;
+        if (!looping)
+            blendTime = std::min(blendTime, std::max(0.0f, blendDurationSeconds - 1e-4f));
+        auto blendPose = Sample(blendSpaceClip, blendTime);
+        // 端点不走 ozz 混合，保证 0/1 与单独播放 A/B 的姿态逐元素一致。
+        if (blendSpaceWeight >= 1.0f) locals = std::move(blendPose);
+        else if (blendSpaceWeight > 0.0f)
+            locals = Crossfade(locals, std::move(blendPose), blendSpaceWeight, asset->mesh);
+    }
     if (!inertialization.Empty() && elapsed < blendDuration)
     {
         const auto target = ReadKinematics(locals, asset->mesh.joints.size());

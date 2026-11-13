@@ -214,7 +214,9 @@ RT，再从其 `sourceModel` 取得源模型，复用正式导入/重定向/蒙�
    的来源，SK 是权威校验清单，不反向驱动导入。
    若声明 `sourceModel`，此时先导入非 retarget 的源 SM，再读 profile（≤4 MiB）并校验
    两份 SK id、映射、root 和拓扑；profile 摘要及源 SM 的完整输入清单纳入目标身份。
-4. **逐 clip 加载**：先读 FBX 片段，再读可选 sidecar（≤8 MiB）→ `ParseSequence`。sidecar 的
+4. **逐 clip 加载**：先读 FBX 片段，再读可选 sidecar（≤8 MiB）→ `ParseSequence`。片段 FBX
+   的骨骼层级可以是网格骨架的子集：未出现的关节回退绑定姿态，出现但名称未知或父链不一致
+   的关节仍拒绝；这允许 UE 简化动画（例如只写 89 根实际变化骨骼）驱动完整网格。sidecar 的
    `sequence` 字段必须等于 `clips[].id`；曲线名必须在 SK `curves` 注册、`tracks` 必须是 SK
    关节；sidecar `duration` 与 FBX `raw.duration` 差 ≤`1e-5`。`syncMarkers` 与 `players`
    按上述结构校验；摘要与路径进入缓存键与 `sourceInputs`。侧车字段与采样语义以

@@ -388,7 +388,9 @@ World/Graph gate 退出码 0、stderr 为空并正常 teardown。
 同套件还区分地面当前受阻的实际水平速度预测、自由移动 desired 和空中 desired，
 不把其通过解释为未来碰撞预测完成。
 `SkeletalBlend` 验证 ozz 局部 TRS 混合、旋转归一化、混合打断、时钟/完成状态、
-inPlace 与冻结姿态所有权。模块通过不等同于正式控制器的动作效果通过。
+inPlace 与冻结姿态所有权。`SkeletalBlendSpace` 验证 BlendSpace1D 的第二片段按 A
+的归一化相位采样、端点权重与单片段逐元素一致、权重夹紧与切片段清理。
+模块通过不等同于正式控制器的动作效果通过。
 
 `ScriptAnimationWorld` 验证导入字节身份不匹配和批次失败原子性；
 真实 CLR/Jolt 的 `ScriptAnimationTest` 验证正式统计绑定、冻结查询/排名、
@@ -1367,7 +1369,7 @@ UI 的 `DebugDrawOverlay`、`DebugDrawLabelTest` 与 `EditorUiTest.DebugDraw*`
 
 动画 P0 工具使用可选 `VULKANLEARN_BUILD_ANIMATION_TOOLS=ON`；
 构建 `vl_animation_probe` 和 `animation_preflight_tests` 后，运行
-`ctest --test-dir build -R "^(AnimationSampling|AnimationDependency|UnrealProjectInventory|AnimationFbxInspection|SkeletalImport|SkeletalBlend|AnimationRetarget|SkinRenderHistory|MotionHistory|MotionPrediction|MotionFeatures|MotionRuntimeQuery|MotionDatabase|MotionDatabaseInputs|MotionMatching)\." --output-on-failure`。
+`ctest --test-dir build -R "^(AnimationSampling|AnimationDependency|UnrealProjectInventory|AnimationFbxInspection|SkeletalImport|SkeletalBlend|SkeletalBlendSpace|AnimationRetarget|SkinRenderHistory|MotionHistory|MotionPrediction|MotionFeatures|MotionRuntimeQuery|MotionDatabase|MotionDatabaseInputs|MotionMatching)\." --output-on-failure`。
 它验证依赖采样、只读盘点与 FBX 审计，不替代 GASP 导出或 VL 动态渲染验收。
 范围见 [动画预检工具](animation-preflight-tools.md)。
 P1 CPU 导入与采样、九影响权重及 MikkTSpace 顶点展开由 `SkeletalImport` 覆盖，

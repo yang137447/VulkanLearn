@@ -23,7 +23,8 @@ public readonly record struct AnimationGraphInput(
     string SyncMarker = "",
     float SyncMarkerAlpha = 0,
     IReadOnlyDictionary<string, float>? Curves = null,
-    IReadOnlyDictionary<string, float>? StartPositions = null)
+    IReadOnlyDictionary<string, float>? StartPositions = null,
+    float VerticalSpeed = 0)
 {
     internal void Validate()
     {
@@ -45,6 +46,8 @@ public readonly record struct AnimationGraphInput(
             throw new ArgumentOutOfRangeException(nameof(SyncPhase));
         if (!float.IsFinite(SyncMarkerAlpha) || SyncMarkerAlpha < 0 || SyncMarkerAlpha > 1)
             throw new ArgumentOutOfRangeException(nameof(SyncMarkerAlpha));
+        if (!float.IsFinite(VerticalSpeed))
+            throw new ArgumentOutOfRangeException(nameof(VerticalSpeed));
     }
 
     internal bool TryCurve(string name, out float value)
@@ -85,7 +88,9 @@ public readonly record struct AnimationGraphDecision(
     bool Changed,
     float StateTime,
     bool Completed,
-    bool InPlace = true);
+    bool InPlace = true,
+    string BlendClip = "",
+    float BlendWeight = 0);
 
 public sealed class AnimationGraphRuntime
 {
@@ -102,6 +107,10 @@ public sealed class AnimationGraphRuntime
     private readonly AnimationGraphDefinition definition;
     private readonly Dictionary<string, AnimationGraphStateMachine> machines;
     private readonly List<ActiveMachine> stack = [];
+    // UE BlendSpace 的 TargetWeightInterpolationSpeedPerSec = 5：轴值突变时权重按
+    // 5/s 逼近目标，而不是当帧跳变。键是状态路径，离开状态即丢弃。
+    private readonly Dictionary<string, float> blendWeights = new(StringComparer.Ordinal);
+    private string activeBlendPath = "";
     private bool started;
     private string lastDirectionBranch = "";
 
@@ -196,6 +205,24 @@ public sealed class AnimationGraphRuntime
         var leafMachine = stack[^1];
         var leafState = FindState(leafMachine.Definition, leafMachine.State);
         string clip = leafState.Clip;
+        string blendClip = "";
+        float blendWeight = 0;
+        string statePath = BuildStatePath();
+        // 发生任何状态迁移或路径变化都从目标权重起步；重新进入同一路径也不能
+        // 继承上一段播放的残留权重。
+        if (changed || !string.Equals(activeBlendPath, statePath, StringComparison.Ordinal))
+        {
+            blendWeights.Clear();
+            activeBlendPath = statePath;
+        }
+        if (leafState.BlendSamples.Count > 0)
+        {
+            var sample = ResolveBlendSample(leafState, input, statePath, input.DeltaTime);
+            clip = sample.Clip;
+            blendClip = sample.BlendClip;
+            blendWeight = sample.Weight;
+        }
+        else blendWeights.Remove(statePath);
         float stateTime = ResolveStateTime(leafMachine, leafState, input);
         bool completed = clip.Length > 0 && input.Clip == clip && input.ClipCompleted;
         string direction = ResolveDirection(leafState, leafMachine.Definition, input);
@@ -221,7 +248,7 @@ public sealed class AnimationGraphRuntime
         return new AnimationGraphDecision(
             root.State,
             leafMachine.State,
-            BuildStatePath(),
+            statePath,
             FindState(root.Definition, root.State).Mode,
             tag,
             clip,
@@ -236,7 +263,9 @@ public sealed class AnimationGraphRuntime
             changed,
             stateTime,
             completed,
-            true);
+            true,
+            blendClip,
+            blendWeight);
     }
 
     // 只读诊断入口；不会推进状态机。
@@ -263,7 +292,7 @@ public sealed class AnimationGraphRuntime
         AnimationGraphTransition? best = null;
         foreach (var transition in transitions)
         {
-            if (transition.From != "*" && transition.From != machine.State) continue;
+            if (!machine.Definition.MatchesSource(transition.From, machine.State)) continue;
             if (transition.To == machine.State) continue;
             var state = FindState(machine.Definition, machine.State);
             var context = new AnimationGraphEvaluationContext(definition, input,
@@ -318,6 +347,56 @@ public sealed class AnimationGraphRuntime
         foreach (var state in machine.States)
             if (state.Name == name) return state;
         throw new InvalidOperationException($"Animation graph state '{machine.Name}/{name}' is unknown.");
+    }
+
+    // 轴值取本帧平面速度。权重先按 UE 的 BSIT_EaseInOut（smoothstep）成形，
+    // 再按 5/s 向目标插值。A 固定为状态基准 sample（两个 sample 取 0，三个取 1），
+    // B 只取基准左右相邻的 sample：这样跨内部 sample 边界时 A 的时钟不换片、
+    // 相位不会重启；B 的权重按片段分别缓存，换片段对时从各自的历史值继续。
+    private (string Clip, string BlendClip, float Weight) ResolveBlendSample(
+        AnimationGraphState state, in AnimationGraphInput input, string statePath, float deltaTime)
+    {
+        var samples = state.BlendSamples;
+        float axis = input.PlanarSpeed;
+        int baseIndex = samples.Count >= 3 ? 1 : 0;
+        string clip = samples[baseIndex].Clip;
+        string blendClip;
+        float target;
+        if (baseIndex == 0)
+        {
+            blendClip = samples[1].Clip;
+            target = SmoothstepAlpha(axis, samples[0].Threshold, samples[1].Threshold);
+        }
+        else if (axis <= samples[1].Threshold)
+        {
+            // 低段：A 是中间 sample，B 是首 sample；轴越低 B 权重越高。
+            blendClip = samples[0].Clip;
+            target = 1 - SmoothstepAlpha(axis, samples[0].Threshold, samples[1].Threshold);
+        }
+        else
+        {
+            blendClip = samples[2].Clip;
+            target = SmoothstepAlpha(axis, samples[1].Threshold, samples[2].Threshold);
+        }
+
+        // B 片段是权重缓存键的一部分：换片段对不会继承上一对的端点权重。
+        string key = statePath + "|" + blendClip;
+        if (!blendWeights.TryGetValue(key, out float current) || !float.IsFinite(current))
+        {
+            blendWeights[key] = target;
+            return (clip, blendClip, target);
+        }
+        float step = 5 * Math.Max(0, deltaTime);
+        float weight = Math.Clamp(target, current - step, current + step);
+        blendWeights[key] = weight;
+        return (clip, blendClip, weight);
+    }
+
+    private static float SmoothstepAlpha(float axis, float from, float to)
+    {
+        float span = to - from;
+        float alpha = span > 0 ? Math.Clamp((axis - from) / span, 0, 1) : 0;
+        return alpha * alpha * (3 - 2 * alpha);
     }
 
     private string ResolveDirection(AnimationGraphState leaf, AnimationGraphStateMachine machine,
@@ -399,6 +478,7 @@ internal readonly struct AnimationGraphEvaluationContext
         case AnimationGraphConditionKind.Speed: return Compare(input.PlanarSpeed, condition);
         case AnimationGraphConditionKind.DesiredSpeed: return Compare(input.DesiredSpeed, condition);
         case AnimationGraphConditionKind.MaxSpeed: return Compare(input.MaxSpeed, condition);
+        case AnimationGraphConditionKind.VerticalSpeed: return Compare(input.VerticalSpeed, condition);
         case AnimationGraphConditionKind.InputMagnitude: return Compare(input.InputMagnitude, condition);
         case AnimationGraphConditionKind.BackwardDot:
             return Compare(BackwardDot(input), condition);

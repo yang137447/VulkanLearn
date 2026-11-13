@@ -79,6 +79,10 @@ void InputSubsystem::UpdateActionState()
         const bool down = injectedActions.count(entry.first) != 0;
         auto& actions = actionState.gameplay["actions"];
         auto& node = actions[entry.first];
+        // Play 尚未建立 action 表时，operator[] 会插入 null；注入仍然必须生效，
+        // 且 C# 端固定读取三个边沿键，因此缺失节点要补成完整形状。
+        if (!node.is_object())
+            node = {{"held", false}, {"pressed", false}, {"released", false}};
         const bool sdlHeld = node.value("held", false);
         node["held"] = sdlHeld || down;
         if (down && !entry.second) node["pressed"] = true;

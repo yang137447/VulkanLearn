@@ -6,6 +6,15 @@ public enum AnimationGraphMode
     Airborne = 1
 }
 
+// BlendSpace1D 的轴：当前只实现角色平面速度轴（UE BS_MM_WalkRun 的 Speed）。
+public static class AnimationGraphBlendAxis
+{
+    public const string Speed = "Speed";
+}
+
+// 每个 sample 是一个片段坐标；阈值必须严格递增，顺序即混合邻接顺序。
+public readonly record struct AnimationGraphBlendSample(string Clip, float Threshold);
+
 // 方向分支是图级数据：runtime 只按顺序匹配第一个包含相对 yaw 的区间。
 public sealed class AnimationGraphDirectionBranch
 {
@@ -27,8 +36,11 @@ public sealed class AnimationGraphDirectionBranch
 
 public sealed class AnimationGraphState
 {
+    // 原生两侧混合是“基准 sample + 一个邻居”的成对模型，因此只支持 2..3 个 sample。
+    public const int MaximumBlendSamples = 3;
+
     public string Name { get; init; } = "";
-    // Clip 与 SubStateMachine 必须二选一；外层 Idle/Walk/Jog 只指向内层状态机。
+    // Clip、SubStateMachine 与 BlendSamples 必须三选一。
     public string Clip { get; init; } = "";
     public bool Loop { get; init; } = true;
     public float Rate { get; init; } = 1;
@@ -37,6 +49,10 @@ public sealed class AnimationGraphState
     public float StartPosition { get; init; } = -1;
     public AnimationGraphMode Mode { get; init; } = AnimationGraphMode.Grounded;
     public string SubStateMachine { get; init; } = "";
+    // 非空表示 BlendSpace1D；runtime 按轴值在相邻 sample 间输出片段对与权重。
+    public string BlendAxis { get; init; } = AnimationGraphBlendAxis.Speed;
+    public IReadOnlyList<AnimationGraphBlendSample> BlendSamples { get; init; } =
+        Array.Empty<AnimationGraphBlendSample>();
     // 供宿主把叶子状态映射回语义（Echo 的 Forward/Left90...）；runtime 不解释名称。
     public string DirectionBranch { get; init; } = "";
     // 一次性起步/停步片段被新外层状态打断时，runtime 允许直接进入目标叶子。
@@ -50,10 +66,21 @@ public sealed class AnimationGraphState
             throw new InvalidOperationException($"Animation graph state '{Name}' has an invalid mode.");
         bool hasClip = !string.IsNullOrWhiteSpace(Clip);
         bool hasMachine = !string.IsNullOrWhiteSpace(SubStateMachine);
-        if (hasClip == hasMachine)
+        bool hasBlend = BlendSamples is { Count: > 0 };
+        int declarations = (hasClip ? 1 : 0) + (hasMachine ? 1 : 0) + (hasBlend ? 1 : 0);
+        if (declarations != 1)
             throw new InvalidOperationException(
-                $"Animation graph state '{Name}' must declare exactly one of Clip or SubStateMachine.");
-        if (hasClip)
+                $"Animation graph state '{Name}' must declare exactly one of " +
+                "Clip, SubStateMachine or BlendSamples.");
+        if (hasBlend)
+        {
+            ValidateBlendSamples();
+            if (!float.IsFinite(Rate) || Rate <= 0 || Rate > 4)
+                throw new InvalidOperationException($"Animation graph state '{Name}' rate must be in (0,4].");
+            if (!float.IsFinite(StartPosition) || StartPosition < -1)
+                throw new InvalidOperationException($"Animation graph state '{Name}' start position is invalid.");
+        }
+        else if (hasClip)
         {
             if (Clip.Trim().Length != Clip.Length)
                 throw new InvalidOperationException($"Animation graph state '{Name}' clip has surrounding whitespace.");
@@ -71,6 +98,32 @@ public sealed class AnimationGraphState
         }
         if (DirectionBranch is null || DirectionBranch.Length > 64 || DirectionBranch.Contains('\0'))
             throw new InvalidOperationException($"Animation graph state '{Name}' direction branch is invalid.");
+    }
+
+    private void ValidateBlendSamples()
+    {
+        if (BlendAxis != AnimationGraphBlendAxis.Speed)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' uses unsupported blend axis '{BlendAxis}'.");
+        if (BlendSamples is null || BlendSamples.Count < 2 ||
+            BlendSamples.Count > MaximumBlendSamples)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' blend space requires 2..{MaximumBlendSamples} samples.");
+        float previous = float.NegativeInfinity;
+        var clips = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var sample in BlendSamples)
+        {
+            if (string.IsNullOrWhiteSpace(sample.Clip) || sample.Clip.Trim().Length != sample.Clip.Length)
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' has an invalid blend sample clip.");
+            if (!float.IsFinite(sample.Threshold) || sample.Threshold <= previous)
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' blend sample thresholds must be finite and increasing.");
+            previous = sample.Threshold;
+            if (!clips.Add(sample.Clip))
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' has duplicate blend sample clip '{sample.Clip}'.");
+        }
     }
 }
 
@@ -112,13 +165,48 @@ public sealed class AnimationGraphTransition
     }
 }
 
+// UE State Alias：把多条来源状态的转移收敛到一个共享出口。VL 只把它作为
+// 转移来源集合解释，不生成可进入的状态，也不改变状态机当前状态身份。
+public sealed class AnimationGraphStateAlias
+{
+    public string Name { get; init; } = "";
+    // Global 等价于 UE 的 Global Alias：当前和以后新增的状态都属于来源集合。
+    public bool Global { get; init; }
+    public IReadOnlyList<string> Sources { get; init; } = Array.Empty<string>();
+
+    internal bool Contains(string state) =>
+        Global || Sources.Contains(state, StringComparer.Ordinal);
+
+    internal void Validate()
+    {
+        if (string.IsNullOrWhiteSpace(Name) || Name.Trim().Length != Name.Length)
+            throw new InvalidOperationException("Animation graph state alias name is required.");
+        if (Sources is null)
+            throw new InvalidOperationException($"Animation graph state alias '{Name}' sources cannot be null.");
+        var seen = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var source in Sources)
+        {
+            if (string.IsNullOrWhiteSpace(source) || source.Trim().Length != source.Length)
+                throw new InvalidOperationException(
+                    $"Animation graph state alias '{Name}' contains an invalid source state.");
+            if (!seen.Add(source))
+                throw new InvalidOperationException(
+                    $"Animation graph state alias '{Name}' contains duplicate source '{source}'.");
+        }
+    }
+}
+
 public sealed class AnimationGraphStateMachine
 {
+    public const int MaximumAliasesPerMachine = 32;
+
     public string Name { get; init; } = "";
     public string EntryState { get; init; } = "";
     // 内层步态用它选择方向曲线；空串表示直接使用相对 yaw。
     public string DirectionCurve { get; init; } = "";
     public IReadOnlyList<AnimationGraphState> States { get; init; } = Array.Empty<AnimationGraphState>();
+    public IReadOnlyList<AnimationGraphStateAlias> Aliases { get; init; } =
+        Array.Empty<AnimationGraphStateAlias>();
     // 进入状态机当帧只检查 EntryTransitions，不检查常规 Transitions。
     public IReadOnlyList<AnimationGraphTransition> EntryTransitions { get; init; } =
         Array.Empty<AnimationGraphTransition>();
@@ -129,7 +217,7 @@ public sealed class AnimationGraphStateMachine
     {
         if (string.IsNullOrWhiteSpace(Name))
             throw new InvalidOperationException("Animation graph state machine name is required.");
-        if (States is null || EntryTransitions is null || Transitions is null)
+        if (States is null || Aliases is null || EntryTransitions is null || Transitions is null)
             throw new InvalidOperationException($"Animation graph state machine '{Name}' collections cannot be null.");
         if (States.Count == 0)
             throw new InvalidOperationException($"Animation graph state machine '{Name}' has no states.");
@@ -138,6 +226,9 @@ public sealed class AnimationGraphStateMachine
         if (Transitions.Count > AnimationGraphDefinition.MaximumTransitionsPerMachine ||
             EntryTransitions.Count > AnimationGraphDefinition.MaximumTransitionsPerMachine)
             throw new InvalidOperationException($"Animation graph state machine '{Name}' exceeds the transition budget.");
+        if (Aliases.Count > MaximumAliasesPerMachine)
+            throw new InvalidOperationException(
+                $"Animation graph state machine '{Name}' exceeds the state alias budget.");
         if (DirectionCurve is null || DirectionCurve.Trim().Length != DirectionCurve.Length ||
             DirectionCurve.Contains('\0'))
             throw new InvalidOperationException($"Animation graph state machine '{Name}' direction curve is invalid.");
@@ -162,15 +253,34 @@ public sealed class AnimationGraphStateMachine
                         $"'{state.SubStateMachine}'.");
             }
         }
+        var aliases = new Dictionary<string, AnimationGraphStateAlias>(StringComparer.Ordinal);
+        foreach (var alias in Aliases)
+        {
+            if (alias is null)
+                throw new InvalidOperationException(
+                    $"Animation graph state machine '{Name}' has a null state alias.");
+            alias.Validate();
+            if (byName.ContainsKey(alias.Name))
+                throw new InvalidOperationException(
+                    $"Animation graph state machine '{Name}' state alias '{alias.Name}' collides with a state.");
+            if (!aliases.TryAdd(alias.Name, alias))
+                throw new InvalidOperationException(
+                    $"Animation graph state machine '{Name}' has duplicate state alias '{alias.Name}'.");
+            foreach (var source in alias.Sources)
+                if (!byName.ContainsKey(source))
+                    throw new InvalidOperationException(
+                        $"Animation graph state alias '{Name}/{alias.Name}' has unknown source '{source}'.");
+        }
         if (string.IsNullOrWhiteSpace(EntryState) || !byName.ContainsKey(EntryState))
             throw new InvalidOperationException(
                 $"Animation graph state machine '{Name}' entry state '{EntryState}' is unknown.");
-        ValidateTransitions(byName, EntryTransitions, "entry");
-        ValidateTransitions(byName, Transitions, "transition");
-        ValidateReachability(byName);
+        ValidateTransitions(byName, aliases, EntryTransitions, "entry");
+        ValidateTransitions(byName, aliases, Transitions, "transition");
+        ValidateReachability(byName, aliases);
     }
 
     private void ValidateTransitions(IReadOnlyDictionary<string, AnimationGraphState> states,
+        IReadOnlyDictionary<string, AnimationGraphStateAlias> aliases,
         IReadOnlyList<AnimationGraphTransition> transitions, string kind)
     {
         foreach (var transition in transitions)
@@ -178,7 +288,8 @@ public sealed class AnimationGraphStateMachine
             if (transition is null)
                 throw new InvalidOperationException($"Animation graph machine '{Name}' has a null {kind}.");
             transition.Validate(Name);
-            if (transition.From != "*" && !states.ContainsKey(transition.From))
+            if (transition.From != "*" && !states.ContainsKey(transition.From) &&
+                !aliases.ContainsKey(transition.From))
                 throw new InvalidOperationException(
                     $"Animation graph machine '{Name}' {kind} has unknown source '{transition.From}'.");
             if (!states.ContainsKey(transition.To))
@@ -188,7 +299,8 @@ public sealed class AnimationGraphStateMachine
     }
 
     // 状态迁移本身允许环（Idle↔Walk 本来就必须成环）；这里只拒绝从 Entry 永远到不了的状态。
-    private void ValidateReachability(IReadOnlyDictionary<string, AnimationGraphState> states)
+    private void ValidateReachability(IReadOnlyDictionary<string, AnimationGraphState> states,
+        IReadOnlyDictionary<string, AnimationGraphStateAlias> aliases)
     {
         var reachable = new HashSet<string>(StringComparer.Ordinal) { EntryState };
         bool changed = true;
@@ -197,9 +309,15 @@ public sealed class AnimationGraphStateMachine
             changed = false;
             foreach (var transition in EntryTransitions.Concat(Transitions))
             {
-                bool sourceReachable = transition.From == "*"
-                    ? reachable.Count > 0
-                    : reachable.Contains(transition.From);
+                bool sourceReachable;
+                if (transition.From == "*")
+                    sourceReachable = reachable.Count > 0;
+                else if (aliases.TryGetValue(transition.From, out var alias))
+                    sourceReachable = alias.Global
+                        ? reachable.Count > 0
+                        : alias.Sources.Any(reachable.Contains);
+                else
+                    sourceReachable = reachable.Contains(transition.From);
                 if (sourceReachable && reachable.Add(transition.To))
                     changed = true;
             }
@@ -208,6 +326,14 @@ public sealed class AnimationGraphStateMachine
             if (!reachable.Contains(state.Name))
                 throw new InvalidOperationException(
                     $"Animation graph state '{Name}/{state.Name}' is unreachable from entry '{EntryState}'.");
+    }
+
+    internal bool MatchesSource(string from, string currentState)
+    {
+        if (from == "*" || from == currentState) return true;
+        foreach (var alias in Aliases)
+            if (alias.Name == from && alias.Contains(currentState)) return true;
+        return false;
     }
 }
 
