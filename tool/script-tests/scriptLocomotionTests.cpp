@@ -421,8 +421,10 @@ TEST_F(ScriptLocomotionTest, AnimationGraphValidationRejectsInvalidDefinitions)
     // 2048 unsupported blend axis, 4096 conduit with clip, 8192 entry rule on
     // content state, 16384 entry conduit without AllowConduitEntryStates,
     // 32768 max transitions per frame out of range, 65536 additive on conduit,
-    // 131072 additive alpha without clip, 262144 cached pose with clip.
-    EXPECT_NEAR(State()["position"][0].get<float>(), 524287.0f, 0.001f);
+    // 131072 additive alpha without clip, 262144 cached pose with clip,
+    // 1048576 layer on conduit, 2097152 layer alpha without clip,
+    // 4194304 duplicate layer mask bone.
+    EXPECT_NEAR(State()["position"][0].get<float>(), 7864319.0f, 0.001f);
 }
 
 TEST_F(ScriptLocomotionTest, PoseGraphReportsCachedPoseAdditiveAndSlot)
@@ -436,6 +438,19 @@ TEST_F(ScriptLocomotionTest, PoseGraphReportsCachedPoseAdditiveAndSlot)
         EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
         EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
         EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, LayeredPoseDecisionFieldsAndValidation)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphLayerProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
     }
 }
 

@@ -59,6 +59,11 @@ public sealed class AnimationGraphState
     public string AdditiveClip { get; init; } = "";
     public float AdditiveAlpha { get; init; } = 1;
     public bool AdditiveLoop { get; init; }
+    // LayeredBoneBlend：按骨骼 mask 把 overlay 片段混合到基础姿态上。
+    public string LayerClip { get; init; } = "";
+    public float LayerAlpha { get; init; } = 1;
+    public bool LayerLoop { get; init; }
+    public IReadOnlyList<string> LayerMask { get; init; } = Array.Empty<string>();
     // UE Slot 元数据：本切片由宿主 montage 承担，图只记录名字。
     public string Slot { get; init; } = "";
     // UE Conduit：无姿态的过路状态，只能作为转移目标；进入后同一帧继续求值它的出边。
@@ -133,6 +138,44 @@ public sealed class AnimationGraphState
         {
             throw new InvalidOperationException(
                 $"Animation graph state '{Name}' declares additive alpha/loop without AdditiveClip.");
+        }
+        if (LayerClip is null)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' LayerClip cannot be null.");
+        if (LayerClip.Length > 0)
+        {
+            if (Conduit || hasMachine)
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' cannot layer on a conduit or sub-state machine.");
+            if (LayerClip.Trim().Length != LayerClip.Length ||
+                LayerClip.Length > 128 || LayerClip.Contains('\0'))
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' layer clip is invalid.");
+            if (!float.IsFinite(LayerAlpha) || LayerAlpha < 0 || LayerAlpha > 1)
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' layer alpha must be in [0,1].");
+        }
+        else if (LayerAlpha != 1 || LayerLoop || (LayerMask is { Count: > 0 }))
+        {
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' declares layer alpha/loop/mask without LayerClip.");
+        }
+        if (LayerMask is null)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' LayerMask cannot be null.");
+        if (LayerMask.Count > 64)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' layer mask exceeds 64 bones.");
+        var maskNames = new HashSet<string>(StringComparer.Ordinal);
+        foreach (var bone in LayerMask)
+        {
+            if (string.IsNullOrWhiteSpace(bone) || bone.Trim().Length != bone.Length ||
+                bone.Length > 128 || bone.Contains('\0'))
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' has an invalid layer mask bone.");
+            if (!maskNames.Add(bone))
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' has duplicate layer mask bone '{bone}'.");
         }
         if (Slot is null || Slot.Trim().Length != Slot.Length || Slot.Length > 64 ||
             Slot.Contains('\0'))

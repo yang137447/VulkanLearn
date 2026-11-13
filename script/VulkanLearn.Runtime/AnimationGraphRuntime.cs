@@ -98,7 +98,11 @@ public readonly record struct AnimationGraphDecision(
     float AdditiveAlpha = 0,
     bool AdditiveLoop = false,
     string Slot = "",
-    string SaveCachedPose = "");
+    string SaveCachedPose = "",
+    string LayerClip = "",
+    float LayerAlpha = 0,
+    bool LayerLoop = false,
+    IReadOnlyList<string>? LayerMask = null);
 
 public sealed class AnimationGraphRuntime
 {
@@ -342,7 +346,11 @@ public sealed class AnimationGraphRuntime
             leafState.AdditiveClip.Length > 0 ? leafState.AdditiveAlpha : 0,
             leafState.AdditiveLoop,
             leafState.Slot,
-            definition.SaveCachedPose);
+            definition.SaveCachedPose,
+            leafState.LayerClip,
+            leafState.LayerClip.Length > 0 ? leafState.LayerAlpha : 0,
+            leafState.LayerLoop,
+            leafState.LayerMask.Count > 0 ? leafState.LayerMask : null);
     }
 
     // 只读诊断入口；不会推进状态机。

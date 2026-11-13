@@ -159,4 +159,25 @@ inline LocalPose ApplyLocalSpaceAdditive(const LocalPose& base, const LocalPose&
     }
     return WriteKinematics(base, target);
 }
+
+// 骨骼 mask 分层：只对 mask 命中的关节把 base 向 overlay 混合；未命中关节保持原值。
+inline LocalPose ApplyLayeredPose(const LocalPose& base, const LocalPose& overlay,
+    const std::vector<uint8_t>& mask, float alpha, size_t jointCount)
+{
+    if (alpha <= 0 || jointCount == 0) return base;
+    auto target = ReadKinematics(base, jointCount);
+    const auto layer = ReadKinematics(overlay, jointCount);
+    const float weight = std::clamp(alpha, 0.0f, 1.0f);
+    for (size_t joint = 0; joint < jointCount; ++joint)
+    {
+        if (joint >= mask.size() || mask[joint] == 0) continue;
+        target[joint].translation =
+            target[joint].translation * (1.0f - weight) + layer[joint].translation * weight;
+        target[joint].rotation =
+            target[joint].rotation.slerp(weight, layer[joint].rotation).normalized();
+        target[joint].scale =
+            target[joint].scale * (1.0f - weight) + layer[joint].scale * weight;
+    }
+    return WriteKinematics(base, target);
+}
 }

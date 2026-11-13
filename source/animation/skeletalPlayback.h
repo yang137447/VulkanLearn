@@ -172,6 +172,15 @@ public:
     std::string AdditiveClipId() const;
     float AdditiveAlpha() const { return additiveActive ? additiveAlpha : 0.0f; }
     float AdditiveTime() const { return additiveTime; }
+    // 骨骼 mask 分层：overlay 片段独立时钟，按 mask 命中关节把局部 TRS 混合到 base。
+    // 空 mask 视为全身；未知骨骼名拒绝。顺序固定为 base → additive → layered。
+    void SetLayeredPose(const std::string& clipId, float alpha, bool loop,
+        const std::vector<std::string>& boneMask);
+    void ClearLayeredPose();
+    bool LayeredActive() const { return layeredActive; }
+    std::string LayeredClipId() const;
+    float LayeredAlpha() const { return layeredActive ? layeredAlpha : 0.0f; }
+    size_t LayeredMaskCount() const { return layeredMaskBones; }
     // UE SaveCachedPose/UseCachedPose 的单机近似：保存当前最终局部姿态，
     // 之后以该快照为 Base（不推进片段时钟、不产生根位移/notify），可再叠加 additive。
     void CaptureCachedPose(const std::string& name);
@@ -445,6 +454,14 @@ private:
     float additiveAlpha = 0;
     bool additiveLoop = false;
     float additiveTime = 0;
+    bool layeredActive = false;
+    size_t layeredClip = 0;
+    float layeredAlpha = 0;
+    bool layeredLoop = false;
+    float layeredTime = 0;
+    // 逐关节 mask；空输入 mask 会展开为全身。
+    std::vector<uint8_t> layeredMask;
+    size_t layeredMaskBones = 0;
     std::map<std::string, LocalPose> cachedPoses;
     bool useCachedPoseActive = false;
     std::string useCachedPoseName;
@@ -452,6 +469,8 @@ private:
     void TickCachedPose(float deltaSeconds);
     void AdvanceAdditiveClock(float deltaSeconds);
     LocalPose ApplyAdditive(LocalPose locals) const;
+    void AdvanceLayerClock(float deltaSeconds);
+    LocalPose ApplyLayered(LocalPose locals) const;
     size_t selected = 0;
     float time = 0;
     Eigen::Vector3f rootMotionDelta = Eigen::Vector3f::Zero();

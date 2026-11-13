@@ -81,6 +81,9 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
         mask |= Catch(65536, AdditiveOnConduit());
         mask |= Catch(131072, AdditiveAlphaWithoutClip());
         mask |= Catch(262144, CachedPoseWithClip());
+        mask |= Catch(1048576, LayerOnConduit());
+        mask |= Catch(2097152, LayerAlphaWithoutClip());
+        mask |= Catch(4194304, LayerMaskDuplicate());
         mask |= Catch(4096, ConduitWithClip());
         mask |= Catch(8192, EntryRuleOnContentState());
         mask |= Catch(16384, EntryConduitWithoutFlag());
@@ -328,6 +331,64 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
                     new AnimationGraphState
                     {
                         Name = "A", Conduit = true, AdditiveClip = "MM_Land"
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition LayerOnConduit() => new()
+    {
+        Name = "LayerOnConduit", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Conduit = true, LayerClip = "Clip_B"
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition LayerAlphaWithoutClip() => new()
+    {
+        Name = "LayerAlphaWithoutClip", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A", LayerAlpha = 0.5f
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition LayerMaskDuplicate() => new()
+    {
+        Name = "LayerMaskDuplicate", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A", LayerClip = "Clip_B",
+                        LayerMask = new[] { "hip", "hip" }
                     }
                 }
             }
@@ -1000,6 +1061,53 @@ public sealed class AnimationGraphSettingsProbeBlueprint : Blueprint
             "", 0, 1, false, true, 0);
 
     private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
+// LayeredBoneBlend 决策探针：字段透传与 mask 顺序。
+public sealed class AnimationGraphLayerProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var runtime = new AnimationGraphRuntime(Build());
+        var decision = runtime.Update(Input());
+        Transform.Position = new(
+            decision.LayerClip == "Clip_B" ? 1 : 0,
+            MathF.Abs(decision.LayerAlpha - 0.25f) < 1e-4f ? 1 : 0,
+            decision.LayerLoop ? 1 : 0);
+        Transform.Rotation = new(
+            decision.LayerMask is { Count: 2 } ? 1 : 0,
+            decision.LayerMask is { Count: 2 } &&
+                decision.LayerMask[0] == "hip" ? 1 : 0,
+            decision.LayerMask is { Count: 2 } &&
+                decision.LayerMask[1] == "spine_01" ? 1 : 0);
+        Transform.Scale = new(1, 1, 1);
+    }
+
+    private static AnimationGraphDefinition Build() => new()
+    {
+        Name = "LayerProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A",
+                        LayerClip = "Clip_B", LayerAlpha = 0.25f, LayerLoop = true,
+                        LayerMask = new[] { "hip", "spine_01" }
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput Input() =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, 0, 0, 0, 0, 1f / 60,
+            "", 0, 1, false, true, 0);
 }
 
 // Conduit 语义探针：同帧落地、入口规则回落、链、环、最终 blend 与入口 conduit。

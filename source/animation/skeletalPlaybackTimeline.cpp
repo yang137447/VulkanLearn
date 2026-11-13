@@ -354,6 +354,62 @@ std::string SkeletalPlayback::AdditiveClipId() const
     return animation.clips[additiveClip].id;
 }
 
+void SkeletalPlayback::SetLayeredPose(const std::string& clipId, float alpha, bool loop,
+    const std::vector<std::string>& boneMask)
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!std::isfinite(alpha))
+        throw std::invalid_argument("Layered alpha must be finite");
+    if (boneMask.size() > 64)
+        throw std::invalid_argument("Layered bone mask exceeds 64 names");
+    size_t index = 0;
+    while (index < animation.clips.size() && animation.clips[index].id != clipId) ++index;
+    if (index == animation.clips.size())
+        throw std::invalid_argument("Unknown animation layered clip: " + clipId);
+    const auto jointCount = asset->mesh.joints.size();
+    std::vector<uint8_t> mask(jointCount, 0);
+    if (boneMask.empty())
+        std::fill(mask.begin(), mask.end(), static_cast<uint8_t>(1));
+    else
+    {
+        for (const auto& name : boneMask)
+        {
+            size_t joint = 0;
+            while (joint < jointCount && asset->mesh.joints[joint].name != name) ++joint;
+            if (joint == jointCount)
+                throw std::invalid_argument("Unknown layered bone: " + name);
+            mask[joint] = 1;
+        }
+    }
+    // 同一片段保留自己的时钟；权重/mask 可在不重启的情况下更新。
+    if (!layeredActive || layeredClip != index)
+    {
+        layeredTime = 0;
+        layeredClip = index;
+    }
+    layeredAlpha = std::clamp(alpha, 0.0f, 1.0f);
+    layeredLoop = loop;
+    layeredMask = std::move(mask);
+    layeredMaskBones = boneMask.empty() ? jointCount : boneMask.size();
+    layeredActive = true;
+}
+
+void SkeletalPlayback::ClearLayeredPose()
+{
+    layeredActive = false;
+    layeredAlpha = 0;
+    layeredTime = 0;
+    layeredMask.clear();
+    layeredMaskBones = 0;
+}
+
+std::string SkeletalPlayback::LayeredClipId() const
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!layeredActive || layeredClip >= animation.clips.size()) return {};
+    return animation.clips[layeredClip].id;
+}
+
 void SkeletalPlayback::CaptureCachedPose(const std::string& name)
 {
     if (name.empty() || name.size() > 128)

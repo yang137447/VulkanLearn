@@ -145,6 +145,7 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     if (!playing || Duration() == 0 || deltaSeconds == 0) return;
     AdvanceSyncSourceClock(deltaSeconds);
     AdvanceAdditiveClock(deltaSeconds);
+    AdvanceLayerClock(deltaSeconds);
     if (syncJumped)
     {
         // 与 Seek 一样，相位跳变不补发被跳过的事件；只按新位置重建活动区间，
@@ -207,6 +208,8 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     }
     // ApplyAdditive 属于本状态姿态的一部分：先加在状态局部姿态上，再参与过渡混合。
     locals = ApplyAdditive(std::move(locals));
+    // LayeredBoneBlend 只改 mask 命中的关节，顺序固定在 additive 之后。
+    locals = ApplyLayered(std::move(locals));
     if (!inertialization.Empty() && elapsed < blendDuration)
     {
         const auto target = ReadKinematics(locals, asset->mesh.joints.size());
@@ -311,6 +314,31 @@ LocalPose SkeletalPlayback::ApplyAdditive(LocalPose locals) const
         asset->mesh.joints.size());
 }
 
+void SkeletalPlayback::AdvanceLayerClock(float deltaSeconds)
+{
+    if (!layeredActive || deltaSeconds <= 0) return;
+    const auto& animation = asset->AnimationAsset();
+    if (layeredClip >= animation.clips.size()) return;
+    const auto& clip = animation.clips[layeredClip];
+    const float duration = clip.runtime ? clip.runtime->duration() : 0.0f;
+    if (duration <= 0) return;
+    layeredTime += deltaSeconds;
+    if (layeredLoop)
+        layeredTime = std::fmod(layeredTime, duration);
+    else
+        layeredTime = std::min(layeredTime, std::max(0.0f, duration - 1e-4f));
+}
+
+LocalPose SkeletalPlayback::ApplyLayered(LocalPose locals) const
+{
+    if (!layeredActive || layeredAlpha <= 0) return locals;
+    const auto& animation = asset->AnimationAsset();
+    if (layeredClip >= animation.clips.size()) return locals;
+    const LocalPose sample = Sample(layeredClip, layeredTime);
+    return ApplyLayeredPose(locals, sample, layeredMask, layeredAlpha,
+        asset->mesh.joints.size());
+}
+
 void SkeletalPlayback::TickCachedPose(float deltaSeconds)
 {
     firedNotifies = std::move(pendingNotifies);
@@ -319,8 +347,10 @@ void SkeletalPlayback::TickCachedPose(float deltaSeconds)
     if (found == cachedPoses.end())
         throw std::runtime_error("Cached pose disappeared: " + useCachedPoseName);
     AdvanceAdditiveClock(deltaSeconds);
+    AdvanceLayerClock(deltaSeconds);
     auto locals = found->second;
     locals = ApplyAdditive(std::move(locals));
+    locals = ApplyLayered(std::move(locals));
     const float elapsed = IsBlending() ? std::min(blendElapsed + deltaSeconds, blendDuration) : 0;
     if (!inertialization.Empty() && elapsed < blendDuration)
     {

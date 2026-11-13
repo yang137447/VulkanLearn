@@ -200,6 +200,10 @@ nlohmann::json World::ScriptAnimationFeedback() const
                     {"additive", {{"active", player.AdditiveActive()},
                         {"clip", player.AdditiveClipId()},
                         {"alpha", player.AdditiveAlpha()}}},
+                    {"layered", {{"active", player.LayeredActive()},
+                        {"clip", player.LayeredClipId()},
+                        {"alpha", player.LayeredAlpha()},
+                        {"maskCount", player.LayeredMaskCount()}}},
                     {"cachedPose", {{"active", player.CachedPoseActive()},
                         {"name", player.CachedPoseName()}}}};
                 const auto& rootMotion = player.RootMotionDelta();
@@ -395,7 +399,7 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
         const bool postProcessConfiguration = mode == "configureSlopeWarping" ||
             mode == "configurePoseDriver" || mode == "configurePostProcess" ||
             mode == "configureBonePhysics" || mode == "blendSpace" ||
-            mode == "additive" || mode == "cachedPose";
+            mode == "additive" || mode == "layeredPose" || mode == "cachedPose";
         if (!player || (!postProcessConfiguration && candidates.count(player)))
             throw std::invalid_argument("Script.InvalidAnimationTarget");
         const auto existing = candidates.find(player);
@@ -712,6 +716,41 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                 candidate.CaptureCachedPose(name);
             else
                 candidate.UseCachedPose(name);
+        }
+        else if (request.value("mode", std::string()) == "layeredPose")
+        {
+            // LayeredBoneBlend：overlay 片段按 mask 命中关节混合到当前姿态；
+            // mask 为空表示全身，未知骨骼名由原生拒绝。
+            if (!request.contains("enabled") || !request.at("enabled").is_boolean())
+                throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+            if (!request.at("enabled").get<bool>())
+                candidate.ClearLayeredPose();
+            else
+            {
+                if (!request.contains("clip") || !request.at("clip").is_string() ||
+                    !request.contains("alpha") || !request.at("alpha").is_number() ||
+                    !request.contains("loop") || !request.at("loop").is_boolean() ||
+                    !request.contains("mask") || !request.at("mask").is_array())
+                    throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+                const std::string clip = request.at("clip").get<std::string>();
+                const float alpha = request.at("alpha").get<float>();
+                if (clip.empty() || clip.size() > 256 || !std::isfinite(alpha) ||
+                    request.at("mask").size() > 64)
+                    throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+                std::vector<std::string> mask;
+                mask.reserve(request.at("mask").size());
+                for (const auto& entry : request.at("mask"))
+                {
+                    if (!entry.is_string()) throw std::invalid_argument(
+                        "Script.InvalidLayeredPoseRequest");
+                    const std::string bone = entry.get<std::string>();
+                    if (bone.empty() || bone.size() > 128) throw std::invalid_argument(
+                        "Script.InvalidLayeredPoseRequest");
+                    mask.push_back(bone);
+                }
+                candidate.SetLayeredPose(clip, alpha,
+                    request.at("loop").get<bool>(), mask);
+            }
         }
         else
         {

@@ -12,7 +12,8 @@ public readonly record struct AnimationState(string Clip, float Time, float Dura
     string SyncLeader = "", string SyncRole = "", string SyncMethod = "",
     string SyncEffectiveMethod = "", string SyncScope = "", string SyncDiagnostic = "",
     int MontageSegment = 0, string MontageSegmentId = "", string BlendClip = "", float BlendWeight = 0,
-    string AdditiveClip = "", float AdditiveAlpha = 0, string CachedPose = "");
+    string AdditiveClip = "", float AdditiveAlpha = 0, string CachedPose = "",
+    string LayerClip = "", float LayerAlpha = 0, int LayerMaskCount = 0);
 public readonly record struct AnimationSyncMarker(string Name, float Time);
 public readonly record struct AnimationPlayerInfo(string SyncGroup, string SyncRole, string SyncMethod,
     float StartPosition, bool Loop, string SyncGroupScope = "Local");
@@ -100,6 +101,13 @@ internal sealed record CachedPoseCommand(bool Enabled, bool Capture, string Name
 {
     public static readonly CachedPoseCommand Disabled = new(false, false, "");
 }
+// LayeredBoneBlend：overlay 片段按骨骼 mask 混合到当前姿态。
+internal sealed record LayeredPoseCommand(bool Enabled, string Clip, float Alpha, bool Loop,
+    string[] Mask)
+{
+    public static readonly LayeredPoseCommand Disabled =
+        new(false, "", 0, false, Array.Empty<string>());
+}
 
 // catalog 曲线键：times/values 等长且已按时间排序；C# 只在本地做线性 clamp 采样。
 internal sealed class AnimationCurve(float[] times, float[] values)
@@ -138,6 +146,7 @@ public sealed class AnimationPlayback
     internal BlendSpaceCommand? PendingBlendSpace;
     internal AdditiveCommand? PendingAdditive;
     internal CachedPoseCommand? PendingCachedPose;
+    internal LayeredPoseCommand? PendingLayeredPose;
     internal bool BonePhysicsDebugRequested;
     internal readonly Dictionary<string, MontageInfo> Montages = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationPlayerInfo[]> ClipPlayers = new(StringComparer.Ordinal);
@@ -356,6 +365,28 @@ public sealed class AnimationPlayback
     {
         CheckRequest();
         PendingCachedPose = CachedPoseCommand.Disabled;
+    }
+
+    // LayeredBoneBlend：mask 为空表示全身；未知骨骼名由原生拒绝。
+    public void SetLayeredPose(string clip, float alpha, bool loop, IReadOnlyList<string>? mask)
+    {
+        CheckRequest();
+        if (!ClipIds.Contains(clip, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown animation clip: {clip}", nameof(clip));
+        if (!float.IsFinite(alpha)) throw new ArgumentOutOfRangeException(nameof(alpha));
+        var bones = mask is null ? Array.Empty<string>() : mask.ToArray();
+        if (bones.Length > 64)
+            throw new ArgumentException("Layer mask exceeds 64 bones.", nameof(mask));
+        foreach (var bone in bones)
+            if (string.IsNullOrWhiteSpace(bone) || bone.Length > 128 || bone.Contains('\0'))
+                throw new ArgumentException("Layer mask contains an invalid bone name.", nameof(mask));
+        PendingLayeredPose = new(true, clip, Math.Clamp(alpha, 0, 1), loop, bones);
+    }
+
+    public void ClearLayeredPose()
+    {
+        CheckRequest();
+        PendingLayeredPose = LayeredPoseCommand.Disabled;
     }
 
     // 任意时刻曲线采样：秒、clip-local、键间线性、区间外 clamp 到首/末值、单键常量。
@@ -857,6 +888,21 @@ public static partial class NativeBridge
                 cachedActive.GetBoolean() &&
                 cachedPoseNode.TryGetProperty("name", out var cachedNameNode))
                 cachedPoseName = cachedNameNode.GetString()!;
+            var layerClip = "";
+            var layerAlpha = 0.0f;
+            var layerMaskCount = 0;
+            if (value.TryGetProperty("layered", out var layeredNode) &&
+                layeredNode.ValueKind == JsonValueKind.Object &&
+                layeredNode.TryGetProperty("active", out var layeredActive) &&
+                layeredActive.GetBoolean())
+            {
+                if (layeredNode.TryGetProperty("clip", out var layerClipNode))
+                    layerClip = layerClipNode.GetString()!;
+                if (layeredNode.TryGetProperty("alpha", out var layerAlphaNode))
+                    layerAlpha = layerAlphaNode.GetSingle();
+                if (layeredNode.TryGetProperty("maskCount", out var layerMaskNode))
+                    layerMaskCount = layerMaskNode.GetInt32();
+            }
             component.Animation.Feedback = new(value.GetProperty("clip").GetString()!,
                 value.GetProperty("time").GetSingle(), value.GetProperty("duration").GetSingle(),
                 value.GetProperty("completed").GetBoolean(), value.GetProperty("playing").GetBoolean(),
@@ -881,7 +927,8 @@ public static partial class NativeBridge
                 value.TryGetProperty("syncDiagnostic", out var syncDiagnostic) ?
                     syncDiagnostic.GetString()! : "",
                 montageSegment, montageSegmentId, blendClip, blendWeight,
-                additiveClip, additiveAlpha, cachedPoseName);
+                additiveClip, additiveAlpha, cachedPoseName,
+                layerClip, layerAlpha, layerMaskCount);
             component.Animation.FootPlacementFeedback = value.TryGetProperty("footPlacement", out var placement)
                 ? new(placement.GetProperty("enabled").GetBoolean(), placement.GetProperty("active").GetBoolean(),
                     placement.GetProperty("pelvisOffset").GetSingle(), ReadFootPlacementFoot(placement.GetProperty("feet")[0]),
@@ -1053,6 +1100,13 @@ public static partial class NativeBridge
                     enabled = cachedPose.Enabled, capture = cachedPose.Capture,
                     name = cachedPose.Name });
                 mesh.Animation.PendingCachedPose = null;
+            }
+            if (mesh.Animation.PendingLayeredPose is { } layered)
+            {
+                commands.Add(new { component = mesh.Id, mode = "layeredPose",
+                    enabled = layered.Enabled, clip = layered.Clip,
+                    alpha = layered.Alpha, loop = layered.Loop, mask = layered.Mask });
+                mesh.Animation.PendingLayeredPose = null;
             }
             // 斜率配置放在主命令之后：非 slope 命令仍保持“同一 batch 只允许一条”的
             // 旧边界，slope 作为后续候选组合应用到刚提交的播放状态上。

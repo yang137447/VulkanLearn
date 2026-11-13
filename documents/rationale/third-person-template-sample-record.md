@@ -60,6 +60,9 @@ Maps/SC_third_person/
   `FAnimNode_StateMachine` 的循环预算与首帧丢混合语义实现；Third Person 图显式
   使用 UE 类默认值 3 / true，VL 自身的默认值保持 1 / false 以保留原有预算与混合
   行为；entry 帧开始检查常规转移是与 UE 对齐的新行为。
+- `LayeredBoneBlend`：原生 base → additive → layer 顺序，按骨骼 mask 逐关节
+  混合 overlay（空 mask 全身、未知骨骼拒绝）；官方模板未使用分层，本轮只补
+  通用能力与测试。
 - Pose Graph 首组：`SaveCachedPose`/`UseCachedPose` 用实例级局部姿态快照，
   `AdditiveClip` 按 UE `AAT_LocalSpaceBase` 的 `base * inverse(reference)` 复合，
   `Slot` 先作为图级元数据。Third Person 的 `Land` 改为
@@ -113,14 +116,15 @@ Pose Graph 的 UE 依据来自 `tool/animation/inspect_third_person_additive.py`
 
 回归证据（Release，`artifacts/third-person-test-build`）：
 
-- `animation_preflight_tests`：364/364 通过，覆盖片段骨骼子集导入、
-  `SkeletalBlendSpace` 相位/端点/夹紧，以及 `SkeletalAdditive`/`SkeletalCachedPose`。
-- `script_tests --gtest_filter=ScriptLocomotionTest.*`：33/33 通过，覆盖
+- `animation_preflight_tests`：367/367 通过，覆盖片段骨骼子集导入、
+  `SkeletalBlendSpace` 相位/端点/夹紧、`SkeletalAdditive`/`SkeletalCachedPose`，
+  以及 `SkeletalLayered` 的 mask/alpha/顺序。
+- `script_tests --gtest_filter=ScriptLocomotionTest.*`：34/34 通过，覆盖
   alias/VerticalSpeed/BlendSpace（230/365/500、端点、三 sample 区间、0.1 s 重插值）
   与 Conduit（同帧落地、入口规则回落、链、环、入口 conduit）、以及
-  `MaxTransitionsPerFrame`/`SkipFirstUpdateTransition` 与 Pose Graph 决策输出；
-  校验 mask 扩展到 524287。
-- 整套 `script_tests`：512 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
+  `MaxTransitionsPerFrame`/`SkipFirstUpdateTransition`、Pose Graph 决策输出与
+  LayeredBoneBlend 字段；校验 mask 扩展到 7864319。
+- 整套 `script_tests`：513 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
   `vl-build-*` 时被本机沙箱拒绝）加 1 个偶发的
   `FormalGaspFootPlacementDynamicQualityUsesFrozenRawRootStanceWindows`。
   后者曾在同一资源上出现约 11 cm 支撑误差；2026-10-24 的主干二进制通过同一用例，

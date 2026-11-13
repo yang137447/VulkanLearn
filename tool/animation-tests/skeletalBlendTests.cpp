@@ -354,6 +354,100 @@ TEST(SkeletalCachedPose, CaptureDuringCachedPoseDoesNotAccumulateAdditive)
     EXPECT_NEAR(scale, 2.0f, 1e-3f);
 }
 
+// 只有 foot 轨道不同：用于验证 mask 分层只改命中关节。
+Clip MakeFootClip(const std::string& id, float footZ)
+{
+    Clip clip = MakeClip(id, 0, 0, 1);
+    clip.raw.tracks[2].translations = {{0, {0, 0, footZ}}};
+    ozz::animation::offline::AnimationBuilder builder;
+    clip.runtime = builder(clip.raw);
+    return clip;
+}
+
+TEST(SkeletalLayered, MaskedJointBlendsAndOthersStay)
+{
+    auto asset = MakeAdditiveAsset();
+    asset->clips.push_back(MakeFootClip("foot9", 9));
+    SkeletalPlayback base(asset);
+    base.Play("a", true, 1, true);
+    base.Tick(0.5f);
+
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.5f);
+    player.SetLayeredPose("foot9", 1.0f, false, {"foot"});
+    EXPECT_TRUE(player.LayeredActive());
+    EXPECT_EQ(player.LayeredClipId(), "foot9");
+    EXPECT_EQ(player.LayeredMaskCount(), 1u);
+    player.Tick(1.0f / 60);
+    // hip / root 不在 mask 内：模型矩阵保持 base。
+    EXPECT_TRUE(base.Models()[0].isApprox(player.Models()[0], 1e-5f));
+    EXPECT_TRUE(base.Models()[1].isApprox(player.Models()[1], 1e-5f));
+    // foot 局部 z 从 4 变为 9，模型 z 增加 5。
+    EXPECT_NEAR(player.Models()[2](2, 3), base.Models()[2](2, 3) + 5.0f, 1e-3f);
+}
+
+TEST(SkeletalLayered, AlphaEmptyMaskAndRejections)
+{
+    auto asset = MakeAdditiveAsset();
+    asset->clips.push_back(MakeFootClip("foot9", 9));
+    SkeletalPlayback base(asset);
+    base.Play("a", true, 1, true);
+    base.Tick(0.5f);
+
+    SkeletalPlayback half(asset);
+    half.Play("a", true, 1, true);
+    half.Tick(0.5f);
+    half.SetLayeredPose("foot9", 0.5f, false, {"foot"});
+    half.Tick(1.0f / 60);
+    EXPECT_NEAR(half.Models()[2](2, 3), base.Models()[2](2, 3) + 2.5f, 1e-3f);
+
+    SkeletalPlayback zero(asset);
+    zero.Play("a", true, 1, true);
+    zero.Tick(0.5f);
+    zero.SetLayeredPose("foot9", 0.0f, false, {"foot"});
+    zero.Tick(1.0f / 60);
+    for (size_t joint = 0; joint < base.Models().size(); ++joint)
+        EXPECT_TRUE(base.Models()[joint].isApprox(zero.Models()[joint], 1e-5f));
+
+    // 空 mask 视为全身。
+    SkeletalPlayback full(asset);
+    full.Play("a", true, 1, true);
+    full.Tick(0.5f);
+    full.SetLayeredPose("foot9", 1.0f, false, {});
+    full.Tick(1.0f / 60);
+    EXPECT_EQ(full.LayeredMaskCount(), 3u);
+    EXPECT_NEAR(full.Models()[2](2, 3), base.Models()[2](2, 3) + 5.0f, 1e-3f);
+
+    SkeletalPlayback invalid(asset);
+    invalid.Play("a", true, 1, true);
+    EXPECT_ANY_THROW(invalid.SetLayeredPose("missing", 0.5f, false, {}));
+    EXPECT_ANY_THROW(invalid.SetLayeredPose("foot9", 0.5f, false, {"missing"}));
+    std::vector<std::string> tooMany(65, "foot");
+    EXPECT_ANY_THROW(invalid.SetLayeredPose("foot9", 0.5f, false, tooMany));
+}
+
+TEST(SkeletalLayered, AppliesAfterAdditiveAndKeepsUntilCleared)
+{
+    auto asset = MakeAdditiveAsset();
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.5f);
+    player.SetAdditive("add", 1.0f, false);
+    // b 的 hip 是 (8,10,0)/90°/scale 2，完全覆盖 additive 后的 hip。
+    player.SetLayeredPose("b", 1.0f, false, {"hip"});
+    player.Tick(1.0f / 60);
+    EXPECT_NEAR(player.Models()[1](0, 3), 11.0f, 1e-2f);
+    const float scale = player.Models()[1].block<3, 3>(0, 0).col(0).norm();
+    EXPECT_NEAR(scale, 2.0f, 1e-3f);
+
+    // Play 不隐式清除 layered；显式 Clear 才关闭。
+    player.Play("c", true, 1, true);
+    EXPECT_TRUE(player.LayeredActive());
+    player.ClearLayeredPose();
+    EXPECT_FALSE(player.LayeredActive());
+}
+
 TEST(SkeletalBlend, BlendsLocalTrsBeforeHierarchyWithQuaternionNormalization)
 {
     SkeletalPlayback player(MakeAsset());

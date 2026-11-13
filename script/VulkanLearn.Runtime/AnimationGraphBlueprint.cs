@@ -15,6 +15,11 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     private string lastAdditiveClip = "";
     private float lastAdditiveAlpha;
     private bool lastAdditiveLoop;
+    private bool layerSubmitted;
+    private string lastLayerClip = "";
+    private float lastLayerAlpha;
+    private bool lastLayerLoop;
+    private string lastLayerMask = "";
     private bool cachedPoseSubmitted;
 
     public AnimationGraphDefinition Graph { get; private set; } = null!;
@@ -56,6 +61,7 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
                 blendSubmitted = false;
             }
             SubmitAdditive(next);
+            SubmitLayer(next);
         }
         else
         {
@@ -83,6 +89,7 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
             }
             SubmitBlendSpace(next);
             SubmitAdditive(next);
+            SubmitLayer(next);
         }
         // UE 的根 SaveCachedPose 保存最终输出；命令在下一帧生效，正好对应
         // “进入 Land 时使用上一帧姿态”的时序。
@@ -131,5 +138,34 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
         lastAdditiveClip = next.AdditiveClip;
         lastAdditiveAlpha = next.AdditiveAlpha;
         lastAdditiveLoop = next.AdditiveLoop;
+    }
+
+    // LayeredBoneBlend：只有 clip/alpha/loop/mask 变化时才重新提交，避免每帧重建 mask。
+    private void SubmitLayer(in AnimationGraphDecision next)
+    {
+        if (next.LayerClip.Length == 0)
+        {
+            if (!layerSubmitted) return;
+            Animation.ClearLayeredPose();
+            layerSubmitted = false;
+            lastLayerClip = "";
+            lastLayerMask = "";
+            return;
+        }
+        string mask = next.LayerMask is { Count: > 0 }
+            ? string.Join("|", next.LayerMask) : "";
+        if (layerSubmitted &&
+            string.Equals(lastLayerClip, next.LayerClip, StringComparison.Ordinal) &&
+            MathF.Abs(lastLayerAlpha - next.LayerAlpha) < 1e-4f &&
+            lastLayerLoop == next.LayerLoop &&
+            string.Equals(lastLayerMask, mask, StringComparison.Ordinal))
+            return;
+        Animation.SetLayeredPose(next.LayerClip, next.LayerAlpha, next.LayerLoop,
+            next.LayerMask);
+        layerSubmitted = true;
+        lastLayerClip = next.LayerClip;
+        lastLayerAlpha = next.LayerAlpha;
+        lastLayerLoop = next.LayerLoop;
+        lastLayerMask = mask;
     }
 }

@@ -600,6 +600,9 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   - `AdditiveClip` / `AdditiveAlpha` / `AdditiveLoop`：UE `ApplyAdditive`
     （仅 `LocalSpaceBase`）叠加在 Clip/BlendSamples/UseCachedPose 之上；不能叠在
     conduit 或子状态机上。alpha 范围 [0,1]
+  - `LayerClip` / `LayerAlpha` / `LayerLoop` / `LayerMask`：LayeredBoneBlend。
+    overlay 片段按 `LayerMask` 命中的骨骼逐关节混合到基础姿态；空 mask 视为全身，
+    不能与 conduit 或子状态机并用
   - `Slot`（string）是 UE Slot 的图级元数据：本切片由宿主 montage 承担，
     不做骨骼 mask
   - `BlendSamples[]`（`Clip` + `Threshold`）表示 1D BlendSpace；`BlendAxis` 目前只接受
@@ -720,12 +723,20 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   在状态姿态上、参与过渡混合之前。
 - `Slot`：只作为图级元数据输出（`AnimationGraphDecision.Slot`）。VL 的整身
   montage 仍由宿主 `PlayAction`/`PlayMontage` 承担，不支持 UE 的骨骼 mask 插槽。
+- `LayeredBoneBlend`：原生 `SetLayeredPose(clip, alpha, loop, mask)` 在
+  base → additive 之后按 mask 混合 overlay：命中关节权重为 `alpha`，未命中关节
+  保持 base；旋转用 slerp、平移/缩放线性。overlay 有独立时钟（rate 1、loop 或
+  clamp），不产生根位移/notify。mask 是骨骼名列表（≤64，未知名字拒绝，定义期
+  拒绝重复名字），空列表表示全身。`Play` 不会隐式清除 layer，只有显式
+  `ClearLayeredPose` 才关闭。
 - 批量命令：`animationCommands` 新增 `additive`（`enabled`/`clip`/`alpha`/`loop`）
   与 `cachedPose`（`enabled`/`capture`/`name`）候选；反馈发布
   `additive = { active, clip, alpha }` 与 `cachedPose = { active, name }`。
 - 限制：缓存是“保存时的局部姿态快照”，不是 UE 同一帧内多分支共享的 pose 图；
   根图 `SaveCachedPose` 每帧捕获并有一帧延迟。additive 不改变 Actor/胶囊，
   也不写曲线；暂不支持 MeshSpace/RotationOffset additive。
+  LayeredBoneBlend 只有单一 mask 与统一 alpha，没有 per-bone 权重曲线；
+  `Slot` 的 masked montage 仍未实现（montage 仍是整身覆盖）。
 
 ### 校验与边界
 
