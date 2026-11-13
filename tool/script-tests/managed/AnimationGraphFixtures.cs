@@ -77,6 +77,7 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
         mask |= Catch(512, BlendUnsortedThresholds());
         mask |= Catch(1024, BlendDuplicateClip());
         mask |= Catch(2048, BlendUnknownAxis());
+        mask |= Catch(32768, MaxTransitionsOutOfRange());
         mask |= Catch(4096, ConduitWithClip());
         mask |= Catch(8192, EntryRuleOnContentState());
         mask |= Catch(16384, EntryConduitWithoutFlag());
@@ -293,6 +294,20 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
                         }
                     }
                 }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition MaxTransitionsOutOfRange() => new()
+    {
+        Name = "MaxTransitionsOutOfRange", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                MaxTransitionsPerFrame = 0,
+                States = new[] { new AnimationGraphState { Name = "A", Clip = "Clip_A" } }
             }
         }
     };
@@ -750,6 +765,117 @@ public sealed class AnimationGraphRateProbeBlueprint : Blueprint
         "Jump_Idle_Land" => 2,
         _ => 6.6666665f
     };
+}
+
+// State Machine 设置探针：MaxTransitionsPerFrame 预算与 SkipFirstUpdateTransition 的
+// “首帧转移不混合”语义（UE AnimNode_StateMachine 类默认值 3 / true）。
+public sealed class AnimationGraphSettingsProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var one = new AnimationGraphRuntime(BuildChain(1, skipFirstUpdate: false));
+        var first = one.Update(Input());
+        var second = one.Update(Input());
+
+        var three = new AnimationGraphRuntime(BuildChain(3, skipFirstUpdate: false));
+        var threeFirst = three.Update(Input());
+
+        var two = new AnimationGraphRuntime(BuildChain(2, skipFirstUpdate: false));
+        var twoFirst = two.Update(Input());
+        var twoSecond = two.Update(Input());
+
+        var skip = new AnimationGraphRuntime(BuildChain(1, skipFirstUpdate: true));
+        var skipFirst = skip.Update(Input());
+
+        var nested = new AnimationGraphRuntime(BuildNested(skipFirstUpdate: true));
+        var nestedFirst = nested.Update(Input());
+
+        Transform.Position = new(
+            Flag(first.State == "B"),
+            Flag(second.State == "C"),
+            Flag(threeFirst.State == "C" && MathF.Abs(threeFirst.BlendSeconds - 0.4f) < 1e-4f));
+        Transform.Rotation = new(
+            Flag(MathF.Abs(skipFirst.BlendSeconds) < 1e-4f),
+            Flag(MathF.Abs(first.BlendSeconds - 0.4f) < 1e-4f),
+            Flag(twoFirst.State == "C" && twoSecond.State == "C"));
+        Transform.Scale = new(
+            Flag(skipFirst.State == "B" && MathF.Abs(skipFirst.BlendSeconds) < 1e-4f),
+            Flag(first.State == "B" && MathF.Abs(first.BlendSeconds - 0.4f) < 1e-4f),
+            Flag(nestedFirst.LeafState == "Y" && MathF.Abs(nestedFirst.BlendSeconds) < 1e-4f));
+    }
+
+    private static AnimationGraphDefinition BuildChain(int maxTransitions, bool skipFirstUpdate) => new()
+    {
+        Name = "SettingsProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                MaxTransitionsPerFrame = maxTransitions,
+                SkipFirstUpdateTransition = skipFirstUpdate,
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "B", Condition = AnimationGraphCondition.Always,
+                        BlendSeconds = 0.4f
+                    },
+                    new AnimationGraphTransition
+                    {
+                        From = "B", To = "C", Condition = AnimationGraphCondition.Always,
+                        BlendSeconds = 0.4f
+                    }
+                }
+            }
+        }
+    };
+
+    // 刚进入的内层状态机同样受 SkipFirstUpdateTransition 约束。
+    private static AnimationGraphDefinition BuildNested(bool skipFirstUpdate) => new()
+    {
+        Name = "SettingsNestedProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "L",
+                States = new[] { new AnimationGraphState { Name = "L", SubStateMachine = "Inner" } }
+            },
+            new AnimationGraphStateMachine
+            {
+                Name = "Inner", EntryState = "X",
+                SkipFirstUpdateTransition = skipFirstUpdate,
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "X", Clip = "Clip_X" },
+                    new AnimationGraphState { Name = "Y", Clip = "Clip_Y" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "X", To = "Y", Condition = AnimationGraphCondition.Always,
+                        BlendSeconds = 0.4f
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput Input() =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, 100, 100, 100, 0, 1f / 60,
+            "", 0, 1, false, true, 0);
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
 }
 
 // Conduit 语义探针：同帧落地、入口规则回落、链、环、最终 blend 与入口 conduit。

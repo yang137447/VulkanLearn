@@ -221,6 +221,7 @@ public sealed class AnimationGraphStateAlias
 public sealed class AnimationGraphStateMachine
 {
     public const int MaximumAliasesPerMachine = 32;
+    public const int MaximumTransitionsPerFrameLimit = 8;
 
     public string Name { get; init; } = "";
     public string EntryState { get; init; } = "";
@@ -228,6 +229,12 @@ public sealed class AnimationGraphStateMachine
     public string DirectionCurve { get; init; } = "";
     // UE bAllowConduitEntryStates：EntryState 是 conduit 时是否允许进入并跟随它。
     public bool AllowConduitEntryStates { get; init; }
+    // UE MaxTransitionsPerFrame：本状态机单帧最多同时发起的转移数。VL 默认 1 保持
+    // 既有行为；模板/新图可显式设 3 对齐 UE 类默认。
+    public int MaxTransitionsPerFrame { get; init; } = 1;
+    // UE bSkipFirstUpdateTransition：状态机首个更新帧发生的转移不带混合，
+    // 目标状态直接满权重。VL 默认 false 保持既有行为。
+    public bool SkipFirstUpdateTransition { get; init; }
     public IReadOnlyList<AnimationGraphState> States { get; init; } = Array.Empty<AnimationGraphState>();
     public IReadOnlyList<AnimationGraphStateAlias> Aliases { get; init; } =
         Array.Empty<AnimationGraphStateAlias>();
@@ -253,6 +260,10 @@ public sealed class AnimationGraphStateMachine
         if (Aliases.Count > MaximumAliasesPerMachine)
             throw new InvalidOperationException(
                 $"Animation graph state machine '{Name}' exceeds the state alias budget.");
+        if (MaxTransitionsPerFrame < 1 || MaxTransitionsPerFrame > MaximumTransitionsPerFrameLimit)
+            throw new InvalidOperationException(
+                $"Animation graph state machine '{Name}' max transitions per frame must be in " +
+                $"[1,{MaximumTransitionsPerFrameLimit}].");
         if (DirectionCurve is null || DirectionCurve.Trim().Length != DirectionCurve.Length ||
             DirectionCurve.Contains('\0'))
             throw new InvalidOperationException($"Animation graph state machine '{Name}' direction curve is invalid.");

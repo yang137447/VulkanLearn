@@ -578,11 +578,17 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   - `Name`、`EntryState`、可选 `DirectionCurve`
   - `States[]`、`Aliases[]`、`EntryTransitions[]`、`Transitions[]`、
     `AllowConduitEntryStates`（默认 false；EntryState 是 conduit 时必须显式开启）
+  - `MaxTransitionsPerFrame`（默认 1，范围 1..8）与 `SkipFirstUpdateTransition`
+    （默认 false）；UE `AnimNode_StateMachine` 的类默认值是 3 / true，
+    Third Person 图显式声明为 3 / true。VL 默认值保留原有预算与混合行为；
+    entry 帧会继续检查常规转移（与 UE 对齐）是这套设置引入的新行为
   - `Aliases[]` 是 UE State Alias 的等价物：每个 alias 声明一组来源状态（或
     `Global = true`）；transition 的 `From` 可以写 alias 名，求值时按当前状态是否
     属于该 alias 展开。alias 不是可进入状态，必须只出现在 `From`
-  - `EntryTransitions` 只在进入状态机当帧检查；之后每帧检查 `Transitions`
-  - 每个状态机每帧最多迁移一次，`From = "*"` 表示任意当前状态
+  - 进入状态机当帧先检查 `EntryTransitions`，随后在预算内继续检查 `Transitions`；
+    之后每帧只检查 `Transitions`
+  - 每个状态机每帧最多发起 `MaxTransitionsPerFrame` 条常规转移；entry transition
+    不占这个预算。`From = "*"` 表示任意当前状态
 - `AnimationGraphState`
   - `Clip`、`SubStateMachine`、`BlendSamples` 与 `Conduit` 必须四选一；外层 Idle/Walk/Jog 通过
     子状态机表达内层 entry/start/cycles/stop
@@ -680,11 +686,23 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   所在状态机当前状态的时间；经由入口 conduit 落地的内容状态，其
   `EntryFromState` 记录的是 conduit 名，而不是状态机的入口来源。
 
+### State Machine 设置
+
+- `MaxTransitionsPerFrame`：状态机在单次 `Update` 内允许发起的常规转移条数。
+  entry transition 不占预算；进入子状态机后该帧不再继续消耗本层预算。
+  conduit 链算作一条转移。
+- `SkipFirstUpdateTransition`：状态机（含刚进入的内层状态机）首个更新帧仍然
+  允许转移，但这一次转移不产生交叉淡入——输出 `BlendSeconds = 0` 且不启用
+  inertialization，目标状态直接满权重。后续更新帧恢复正常混合。
+- `ReinitializeOnBecomingRelevant`：VL 没有“状态机停止 tick 后重新变为相关”的
+  概念，该 UE 设置不实现；VL 的图宿主每帧都会求值。
+
 ### 校验与边界
 
 - `Validate()` 拒绝：重复状态机/状态/方向分支、未知 transition 目标或子状态机、
   状态机嵌套环、从 Entry 不可达的状态、空 clip、非有限或越界阈值、非法 yaw 区间、
-  空条件组合、SyncPhase 缺少 SyncGroup，以及状态机/状态/transition/条件预算超限。
+  空条件组合、SyncPhase 缺少 SyncGroup、`MaxTransitionsPerFrame` 越界，以及
+  状态机/状态/transition/条件预算超限。
   状态迁移本身允许成环（Idle↔Walk 必须成环）；“循环”校验只针对嵌套状态机引用。
 - 当前节点子集覆盖 StateMachine + SequencePlayer 语义、State Alias、
   SyncGroup/MarkerSync 数据、曲线条件、`VerticalSpeed`、Inertialization 标记与

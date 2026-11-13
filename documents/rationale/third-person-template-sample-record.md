@@ -56,6 +56,10 @@ Maps/SC_third_person/
   的混合参数。状态机新增 `AllowConduitEntryStates`。实现依据 UE 5.8
   `AnimNode_StateMachine.cpp` 的 `FindValidTransition`（入口规则、visited 状态缓存、
   同帧递归与 `SetStateInternal` 的 conduit 入口约束）。
+- `MaxTransitionsPerFrame` / `SkipFirstUpdateTransition`：按 UE
+  `FAnimNode_StateMachine` 的循环预算与首帧丢混合语义实现；Third Person 图显式
+  使用 UE 类默认值 3 / true，VL 自身的默认值保持 1 / false 以保留原有预算与混合
+  行为；entry 帧开始检查常规转移是与 UE 对齐的新行为。
 - `ThirdPersonLocomotionGraph`：两层状态机；`Idle` 与 `Walk / Run`
   BlendSpace1D（Speed 轴 0 = Walk_InPlace、230 = Walk、500 = Run），以及
   `Jump`/`Fall Loop`/`Land`，共享 `To Falling` / `To Land` alias。
@@ -100,10 +104,11 @@ UE 基准来自只读 T3D 导出
 
 - `animation_preflight_tests`：360/360 通过，覆盖片段骨骼子集导入与
   `SkeletalBlendSpace` 相位/端点/夹紧。
-- `script_tests --gtest_filter=ScriptLocomotionTest.*`：31/31 通过，覆盖
+- `script_tests --gtest_filter=ScriptLocomotionTest.*`：32/32 通过，覆盖
   alias/VerticalSpeed/BlendSpace（230/365/500、端点、三 sample 区间、0.1 s 重插值）
-  与 Conduit（同帧落地、入口规则回落、链、环、入口 conduit）；校验 mask 扩展到 32767。
-- 整套 `script_tests`：510 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
+  与 Conduit（同帧落地、入口规则回落、链、环、入口 conduit）、以及
+  `MaxTransitionsPerFrame`/`SkipFirstUpdateTransition`；校验 mask 扩展到 65535。
+- 整套 `script_tests`：511 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
   `vl-build-*` 时被本机沙箱拒绝）加 1 个偶发的
   `FormalGaspFootPlacementDynamicQualityUsesFrozenRawRootStanceWindows`。
   后者曾在同一资源上出现约 11 cm 支撑误差；2026-10-24 的主干二进制通过同一用例，
