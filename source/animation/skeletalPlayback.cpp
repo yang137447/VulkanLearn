@@ -189,6 +189,7 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     if (sampleTime == time && epoch == discontinuity && !wrapped && !IsBlending()) return;
     const float previousTime = time;
     auto locals = Sample(selected, sampleTime);
+    float blendSampleTime = -1;
     // BlendSpace1D：第二片段按 A 的归一化相位采样，再在局部 TRS 上加权混合。
     // 混合发生在一次性过渡混合之前，等价于 UE“状态输出 → 过渡混合”的顺序。
     if (blendSpaceActive && blendSpaceClip < asset->AnimationAsset().clips.size())
@@ -201,6 +202,7 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
         float blendTime = phase * blendDurationSeconds;
         if (!looping)
             blendTime = std::min(blendTime, std::max(0.0f, blendDurationSeconds - 1e-4f));
+        blendSampleTime = blendTime;
         auto blendPose = Sample(blendSpaceClip, blendTime);
         // 端点不走 ozz 混合，保证 0/1 与单独播放 A/B 的姿态逐元素一致。
         if (blendSpaceWeight >= 1.0f) locals = std::move(blendPose);
@@ -213,6 +215,7 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     locals = ApplyLayered(std::move(locals));
     // Masked Slot Montage 叠在基础姿态上，只覆盖 mask 命中的关节。
     locals = ApplySlotMontage(std::move(locals));
+    RebuildFrameCurves(sampleTime, blendSampleTime);
     if (!inertialization.Empty() && elapsed < blendDuration)
     {
         const auto target = ReadKinematics(locals, asset->mesh.joints.size());
@@ -313,8 +316,51 @@ LocalPose SkeletalPlayback::ApplyAdditive(LocalPose locals) const
     const auto rest = asset->mesh.runtime->joint_rest_poses();
     const LocalPose reference(rest.begin(), rest.end());
     const LocalPose sample = Sample(additiveClip, additiveTime);
+    const auto& clip = animation.clips[additiveClip];
+    if (clip.sequence.additiveAnimType == "RotationOffsetMeshSpace")
+        return ApplyMeshSpaceRotationAdditive(locals, sample, reference, additiveAlpha,
+            asset->mesh.joints);
     return ApplyLocalSpaceAdditive(locals, sample, reference, additiveAlpha,
         asset->mesh.joints.size());
+}
+
+namespace
+{
+float SampleFloatCurve(const FloatCurve& curve, float time)
+{
+    if (curve.times.empty()) return 0;
+    if (time <= curve.times.front()) return curve.values.front();
+    if (time >= curve.times.back()) return curve.values.back();
+    const auto upper = std::upper_bound(curve.times.begin(), curve.times.end(), time);
+    const size_t high = static_cast<size_t>(upper - curve.times.begin());
+    const size_t low = high - 1;
+    const float span = curve.times[high] - curve.times[low];
+    const float alpha = span > 0 ? (time - curve.times[low]) / span : 0;
+    return curve.values[low] + (curve.values[high] - curve.values[low]) * alpha;
+}
+}
+
+void SkeletalPlayback::RebuildFrameCurves(float baseTime, float blendTime)
+{
+    frameCurves.clear();
+    const auto& clips = asset->AnimationAsset().clips;
+    auto accumulate = [&](size_t index, float sampleTime, float weight)
+    {
+        if (index >= clips.size() || weight == 0 || sampleTime < 0) return;
+        for (const auto& curve : clips[index].sequence.curves)
+            frameCurves[curve.name] += SampleFloatCurve(curve, sampleTime) * weight;
+    };
+    if (baseTime >= 0 && selected < clips.size())
+    {
+        if (blendSpaceActive && blendSpaceClip < clips.size())
+        {
+            accumulate(selected, baseTime, 1.0f - blendSpaceWeight);
+            accumulate(blendSpaceClip, blendTime, blendSpaceWeight);
+        }
+        else accumulate(selected, baseTime, 1.0f);
+    }
+    if (additiveActive && additiveAlpha > 0)
+        accumulate(additiveClip, additiveTime, additiveAlpha);
 }
 
 void SkeletalPlayback::AdvanceLayerClock(float deltaSeconds)
@@ -408,6 +454,7 @@ void SkeletalPlayback::TickCachedPose(float deltaSeconds)
     locals = ApplyAdditive(std::move(locals));
     locals = ApplyLayered(std::move(locals));
     locals = ApplySlotMontage(std::move(locals));
+    RebuildFrameCurves(-1, -1);
     const float elapsed = IsBlending() ? std::min(blendElapsed + deltaSeconds, blendDuration) : 0;
     if (!inertialization.Empty() && elapsed < blendDuration)
     {

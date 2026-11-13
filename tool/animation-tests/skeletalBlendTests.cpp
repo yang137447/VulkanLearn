@@ -297,6 +297,63 @@ TEST(SkeletalAdditive, RejectsNonLocalSpaceAndClearsWithPlay)
     EXPECT_FALSE(player.AdditiveActive());
 }
 
+TEST(SkeletalAdditiveMeshSpace, RotatesInMeshSpaceAndIgnoresTranslationScale)
+{
+    auto asset = MakeAsset();
+    asset->clips.reserve(asset->clips.size() + 2);
+    asset->clips.push_back(MakeClip("base90", 0, 90, 1));       // hip local yaw 90
+    asset->clips.push_back(MakeClip("meshAdd", 5, 90, 2));      // hip yaw 90 + 平移/缩放
+    asset->clips.back().sequence.additiveAnimType = "RotationOffsetMeshSpace";
+
+    SkeletalPlayback base(asset);
+    base.Play("base90", true, 1, true);
+    base.Tick(0.5f);
+
+    SkeletalPlayback player(asset);
+    player.Play("base90", true, 1, true);
+    player.Tick(0.5f);
+    player.SetAdditive("meshAdd", 1.0f, false);
+    player.Tick(1.0f / 60);
+
+    // mesh 空间增量只改旋转：hip 的平移/缩放仍取 base。
+    const Eigen::Vector3f baseHip = base.Models()[1].block<3, 1>(0, 3);
+    const Eigen::Vector3f playerHip = player.Models()[1].block<3, 1>(0, 3);
+    EXPECT_TRUE(baseHip.isApprox(playerHip, 1e-4f));
+    const float scale = player.Models()[1].block<3, 3>(0, 0).col(0).norm();
+    EXPECT_NEAR(scale, 1.0f, 1e-3f);
+    // mesh 空间里 hip 90 + 增量 90 = 180（绕 Y），再转回局部仍是 180。
+    const Eigen::Matrix3f hipRotation = player.Models()[1].block<3, 3>(0, 0);
+    Eigen::Quaternionf orientation(hipRotation);
+    orientation.normalize();
+    const Eigen::Quaternionf expected(
+        Eigen::AngleAxisf(3.14159265358979323846f, Eigen::Vector3f::UnitY()));
+    EXPECT_LT(orientation.angularDistance(expected), 0.01f);
+}
+
+TEST(SkeletalAdditiveCurves, AccumulatesBaseAndWeightedAdditiveCurves)
+{
+    auto asset = MakeAsset();
+    asset->clips.reserve(asset->clips.size() + 1);
+    asset->clips[0].sequence.curves.push_back({"Bend", {0}, {1.0f}});
+    Clip additive = MakeClip("add", 5, 0, 1);
+    additive.sequence.curves.push_back({"Bend", {0}, {0.5f}});
+    additive.sequence.additiveAnimType = "LocalSpaceBase";
+    asset->clips.push_back(std::move(additive));
+
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.1f);
+    EXPECT_NEAR(player.FrameCurves().at("Bend"), 1.0f, 1e-5f);
+
+    player.SetAdditive("add", 0.5f, false);
+    player.Tick(1.0f / 60);
+    EXPECT_NEAR(player.FrameCurves().at("Bend"), 1.25f, 1e-5f);
+
+    player.SetAdditive("add", 0.0f, false);
+    player.Tick(1.0f / 60);
+    EXPECT_NEAR(player.FrameCurves().at("Bend"), 1.0f, 1e-5f);
+}
+
 TEST(SkeletalCachedPose, CaptureThenUseHoldsPoseWithoutClockAdvance)
 {
     auto asset = MakeAdditiveAsset();

@@ -15,7 +15,7 @@ public readonly record struct AnimationState(string Clip, float Time, float Dura
     string AdditiveClip = "", float AdditiveAlpha = 0, string CachedPose = "",
     string LayerClip = "", float LayerAlpha = 0, int LayerMaskCount = 0,
     string SlotMontageClip = "", float SlotMontageAlpha = 0, int SlotMontageMaskCount = 0,
-    bool SlotMontageCompleted = false);
+    bool SlotMontageCompleted = false, IReadOnlyDictionary<string, float>? Curves = null);
 public readonly record struct AnimationSyncMarker(string Name, float Time);
 public readonly record struct AnimationPlayerInfo(string SyncGroup, string SyncRole, string SyncMethod,
     float StartPosition, bool Loop, string SyncGroupScope = "Local");
@@ -940,6 +940,14 @@ public static partial class NativeBridge
             var slotAlpha = 0.0f;
             var slotMaskCount = 0;
             var slotCompleted = false;
+            Dictionary<string, float>? feedbackCurves = null;
+            if (value.TryGetProperty("curves", out var curveNode) &&
+                curveNode.ValueKind == JsonValueKind.Object)
+            {
+                feedbackCurves = new Dictionary<string, float>(StringComparer.Ordinal);
+                foreach (var curve in curveNode.EnumerateObject())
+                    feedbackCurves[curve.Name] = curve.Value.GetSingle();
+            }
             if (value.TryGetProperty("slotMontage", out var slotNode) &&
                 slotNode.ValueKind == JsonValueKind.Object &&
                 slotNode.TryGetProperty("active", out var slotActive) &&
@@ -980,7 +988,7 @@ public static partial class NativeBridge
                 montageSegment, montageSegmentId, blendClip, blendWeight,
                 additiveClip, additiveAlpha, cachedPoseName,
                 layerClip, layerAlpha, layerMaskCount,
-                slotClip, slotAlpha, slotMaskCount, slotCompleted);
+                slotClip, slotAlpha, slotMaskCount, slotCompleted, feedbackCurves);
             component.Animation.FootPlacementFeedback = value.TryGetProperty("footPlacement", out var placement)
                 ? new(placement.GetProperty("enabled").GetBoolean(), placement.GetProperty("active").GetBoolean(),
                     placement.GetProperty("pelvisOffset").GetSingle(), ReadFootPlacementFoot(placement.GetProperty("feet")[0]),

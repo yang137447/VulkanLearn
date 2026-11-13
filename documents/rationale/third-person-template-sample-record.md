@@ -68,6 +68,9 @@ Maps/SC_third_person/
   `Slot` 先作为图级元数据。Third Person 的 `Land` 改为
   `UseCachedPose = "Locomotion"` + `AdditiveClip = "MM_Land"`，与官方 ABP 的
   `UseCachedPose + ApplyAdditive(Alpha=1)` 一致。
+- Additive 扩展：`RotationOffsetMeshSpace` 按 UE 的“局部→mesh 空间→累加→回局部”
+  只处理旋转增量；`FrameCurves()` 汇总基础片段（BlendSpace 加权）与 additive
+  片段（×alpha）的同名曲线，并随反馈的 `curves` 发布（≤64 键、跳过 0 值）。
 - `ThirdPersonLocomotionGraph`：两层状态机；`Idle` 与 `Walk / Run`
   BlendSpace1D（Speed 轴 0 = Walk_InPlace、230 = Walk、500 = Run），以及
   `Jump`/`Fall Loop`/`Land`，共享 `To Falling` / `To Land` alias。
@@ -116,7 +119,7 @@ Pose Graph 的 UE 依据来自 `tool/animation/inspect_third_person_additive.py`
 
 回归证据（Release，`artifacts/third-person-test-build`）：
 
-- `animation_preflight_tests`：371/371 通过，覆盖片段骨骼子集导入、
+- `animation_preflight_tests`：373/373 通过，覆盖片段骨骼子集导入、
   `SkeletalBlendSpace` 相位/端点/夹紧、`SkeletalAdditive`/`SkeletalCachedPose`，
   `SkeletalLayered` 的 mask/alpha/顺序，以及 `SkeletalSlotMontage` 的
   masked overlay/完成语义。

@@ -598,7 +598,8 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   - `UseCachedPose`（string）表示以之前 `SaveCachedPose` 的快照作为本状态 Base；
     与 Clip/SubStateMachine/BlendSamples/Conduit 互斥，缓存姿态没有自己的片段时钟
   - `AdditiveClip` / `AdditiveAlpha` / `AdditiveLoop`：UE `ApplyAdditive`
-    （仅 `LocalSpaceBase`）叠加在 Clip/BlendSamples/UseCachedPose 之上；不能叠在
+    （`LocalSpaceBase` 或 `RotationOffsetMeshSpace`）叠加在
+    Clip/BlendSamples/UseCachedPose 之上；不能叠在
     conduit 或子状态机上。alpha 范围 [0,1]
   - `LayerClip` / `LayerAlpha` / `LayerLoop` / `LayerMask`：LayeredBoneBlend。
     overlay 片段按 `LayerMask` 命中的骨骼逐关节混合到基础姿态；空 mask 视为全身，
@@ -716,11 +717,17 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   使用状态但保留快照。首帧尚无姿态时捕获是静默 no-op，不会让同一批命令失败。
   处于 `UseCachedPose` 状态时捕获被忽略：此时最终姿态已含 additive，写回缓存
   会让下一帧把它当 Base 重复叠加（缩放/位移逐帧累积）。
-- `AdditiveClip`：只接受 `additiveAnimType = LocalSpaceBase` 的片段；增量按
-  `delta = additive * inverse(reference)` 计算，再以 `base * delta` 复合，权重
-  按 UE `BlendFromIdentityAndAccumulate` 把平移/旋转/缩放向 identity 收缩。
+- `AdditiveClip`：接受 `additiveAnimType = LocalSpaceBase` 与 `RotationOffsetMeshSpace`。
+  LocalSpaceBase 的增量为 `delta = additive * inverse(reference)`，再以
+  `base * delta` 复合；RotationOffsetMeshSpace 先把 base/additive/reference 的局部
+  旋转累乘成 mesh-space 旋转，在 mesh 空间做 `R_mesh * delta`，最后按修改后的父链
+  转回局部（只改旋转，平移/缩放不变）。权重按 UE
+  `BlendFromIdentityAndAccumulate` 把增量向 identity 收缩。
   additive 有独立时钟（rate 1、按 loop 或 clamp），不产生根位移/notify；它叠加
   在状态姿态上、参与过渡混合之前。
+- 曲线：每帧 `FrameCurves()` 汇总基础片段（BlendSpace 按 A/B 权重）与 additive
+  片段（× alpha）的同名曲线值；反馈 `curves = { name: value }`（跳过 0 值、最多
+  64 个键）。layered/slot 曲线不参与，曲线本身不驱动骨骼或图条件。
 - `Slot`：只作为图级元数据输出（`AnimationGraphDecision.Slot`）。VL 的整身
   montage 仍由宿主 `PlayAction`/`PlayMontage` 承担，不支持 UE 的骨骼 mask 插槽。
 - `LayeredBoneBlend`：原生 `SetLayeredPose(clip, alpha, loop, mask)` 在
@@ -734,7 +741,7 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   `additive = { active, clip, alpha }` 与 `cachedPose = { active, name }`。
 - 限制：缓存是“保存时的局部姿态快照”，不是 UE 同一帧内多分支共享的 pose 图；
   根图 `SaveCachedPose` 每帧捕获并有一帧延迟。additive 不改变 Actor/胶囊，
-  也不写曲线；暂不支持 MeshSpace/RotationOffset additive。
+  MeshSpace/RotationOffset 只处理旋转，不处理平移/缩放增量。
 
 ### Masked Slot Montage
 

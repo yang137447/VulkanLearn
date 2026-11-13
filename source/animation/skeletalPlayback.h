@@ -19,6 +19,7 @@
 #include <optional>
 #include <string>
 #include <string_view>
+#include <unordered_map>
 #include <utility>
 #include <cstdint>
 
@@ -142,6 +143,9 @@ public:
     // 本 tick 触发的事件；下一次 Tick 开始时重建。Play/Stop/Select/TransitionTo 补发的
     // end 先写入本缓冲并留存到下一 Tick，保证控制面事件不会被紧随其后的 Tick 丢掉。
     const std::vector<FiredNotify>& FiredNotifies() const { return firedNotifies; }
+    // 本帧曲线值：基础片段（BlendSpace 按权重）+ additive 片段（× alpha）。
+    // 只读快照，Key 为曲线名；layered/slot 曲线不参与，曲线也不驱动骨骼。
+    const std::unordered_map<std::string, float>& FrameCurves() const { return frameCurves; }
     // 调试读数；Tick 与每次 enter/leave 后重建，顺序与 notify 表（按 time）一致。
     const std::vector<ActiveNotifyState>& ActiveNotifyStates() const { return activeNotifyStates; }
     // 通用 modifier 队列由原生拥有；C# 只提交目标与窗口，播放器消费修改后的根位移。
@@ -490,6 +494,7 @@ private:
     size_t slotMontageMaskBones = 0;
     std::vector<NotifyEvent> slotNotifyEvents;
     std::vector<uint8_t> slotNotifyActive;
+    std::unordered_map<std::string, float> frameCurves;
     std::map<std::string, LocalPose> cachedPoses;
     bool useCachedPoseActive = false;
     std::string useCachedPoseName;
@@ -497,6 +502,7 @@ private:
     void TickCachedPose(float deltaSeconds);
     void AdvanceAdditiveClock(float deltaSeconds);
     LocalPose ApplyAdditive(LocalPose locals) const;
+    void RebuildFrameCurves(float baseTime, float blendTime);
     void AdvanceLayerClock(float deltaSeconds);
     LocalPose ApplyLayered(LocalPose locals) const;
     void AdvanceSlotMontageClock(float deltaSeconds);

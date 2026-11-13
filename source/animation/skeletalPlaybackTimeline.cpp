@@ -326,9 +326,10 @@ void SkeletalPlayback::SetAdditive(const std::string& clipId, float alpha, bool 
     const auto& clip = animation.clips[index];
     // 只有 LocalSpaceBase 增量能按 UE 的局部 TRS 复合执行；MeshSpace/RotationOffset
     // 需要另一套数学，显式拒绝而不是静默降级。
-    if (clip.sequence.additiveAnimType != "LocalSpaceBase")
+    if (clip.sequence.additiveAnimType != "LocalSpaceBase" &&
+        clip.sequence.additiveAnimType != "RotationOffsetMeshSpace")
         throw std::invalid_argument(
-            "Additive clip must be LocalSpaceBase: " + clipId);
+            "Additive clip must be LocalSpaceBase or RotationOffsetMeshSpace: " + clipId);
     // 同一片段保持自己的时钟（权重/循环可在不重启的情况下更新）。
     if (!additiveActive || additiveClip != index)
     {

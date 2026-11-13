@@ -180,4 +180,48 @@ inline LocalPose ApplyLayeredPose(const LocalPose& base, const LocalPose& overla
     }
     return WriteKinematics(base, target);
 }
+
+// UE AAT_RotationOffsetMeshSpace：先把基础姿态的局部旋转累乘成 mesh-space 旋转，
+// 在 mesh 空间按 identity→delta 的权重累加，再按修改后的父链转回局部。
+// delta = additiveMesh * inverse(referenceMesh)；平移/缩放不受影响。
+inline LocalPose ApplyMeshSpaceRotationAdditive(const LocalPose& base, const LocalPose& additive,
+    const LocalPose& reference, float alpha, const std::vector<Joint>& joints)
+{
+    if (alpha <= 0 || joints.empty()) return base;
+    const size_t jointCount = joints.size();
+    auto kinematics = ReadKinematics(base, jointCount);
+    const auto add = ReadKinematics(additive, jointCount);
+    const auto ref = ReadKinematics(reference, jointCount);
+    std::vector<Eigen::Quaternionf> baseMesh(jointCount);
+    std::vector<Eigen::Quaternionf> addMesh(jointCount);
+    std::vector<Eigen::Quaternionf> refMesh(jointCount);
+    std::vector<Eigen::Quaternionf> resultMesh(jointCount);
+    for (size_t joint = 0; joint < jointCount; ++joint)
+    {
+        const int parent = joints[joint].parent;
+        baseMesh[joint] = (parent >= 0 ? baseMesh[static_cast<size_t>(parent)] * kinematics[joint].rotation
+            : kinematics[joint].rotation).normalized();
+        addMesh[joint] = (parent >= 0 ? addMesh[static_cast<size_t>(parent)] * add[joint].rotation
+            : add[joint].rotation).normalized();
+        refMesh[joint] = (parent >= 0 ? refMesh[static_cast<size_t>(parent)] * ref[joint].rotation
+            : ref[joint].rotation).normalized();
+    }
+    const float weight = std::clamp(alpha, 0.0f, 1.0f);
+    for (size_t joint = 0; joint < jointCount; ++joint)
+    {
+        const Eigen::Quaternionf delta =
+            (addMesh[joint] * refMesh[joint].conjugate()).normalized();
+        const Eigen::Quaternionf weighted =
+            Eigen::Quaternionf::Identity().slerp(weight, delta).normalized();
+        resultMesh[joint] = (baseMesh[joint] * weighted).normalized();
+    }
+    for (size_t joint = 0; joint < jointCount; ++joint)
+    {
+        const int parent = joints[joint].parent;
+        kinematics[joint].rotation = (parent >= 0
+            ? resultMesh[static_cast<size_t>(parent)].conjugate() * resultMesh[joint]
+            : resultMesh[joint]).normalized();
+    }
+    return WriteKinematics(base, kinematics);
+}
 }

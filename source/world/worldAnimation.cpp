@@ -212,6 +212,18 @@ nlohmann::json World::ScriptAnimationFeedback() const
                         {"maskCount", player.SlotMontageMaskCount()},
                         {"completed", player.SlotMontageCompleted()}}}};
                 const auto& rootMotion = player.RootMotionDelta();
+                {
+                    // 基础片段 + additive 的逐帧曲线；限制 64 个键并跳过 0 值。
+                    nlohmann::json curves = nlohmann::json::object();
+                    int count = 0;
+                    for (const auto& entry : player.FrameCurves())
+                    {
+                        if (entry.second == 0 || count >= 64) continue;
+                        curves[entry.first] = entry.second;
+                        ++count;
+                    }
+                    feedback["curves"] = std::move(curves);
+                }
                 feedback["rootMotion"] = nlohmann::json::array(
                     {rootMotion.x(), rootMotion.y(), rootMotion.z()});
                 feedback["rootMotionYaw"] = player.RootMotionYawDelta();
