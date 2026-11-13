@@ -540,7 +540,9 @@ public sealed class AnimationGraphRuntime
             blendWeights[key] = target;
             return (clip, blendClip, target);
         }
-        float step = 5 * Math.Max(0, deltaTime);
+        float step = state.BlendWeightSpeedPerSec <= 0
+            ? float.MaxValue
+            : state.BlendWeightSpeedPerSec * Math.Max(0, deltaTime);
         float weight = Math.Clamp(target, current - step, current + step);
         blendWeights[key] = weight;
         return (clip, blendClip, weight);

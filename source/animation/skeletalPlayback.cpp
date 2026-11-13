@@ -454,6 +454,8 @@ float BranchSmoothstep(float axis, float from, float to)
 
 void SkeletalPlayback::EvaluateCachedPoseBranches(float deltaSeconds)
 {
+    // 暂停/停止时保留上一帧的同帧缓存；delta=0 仍按当前时间求值（首帧/暂停帧）。
+    if (!playing) return;
     frameCachedPoses.clear();
     const auto& clips = asset->AnimationAsset().clips;
     for (CachedPoseBranchState& branch : cachedPoseBranches)

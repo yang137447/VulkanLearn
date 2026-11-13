@@ -55,6 +55,8 @@ public sealed class AnimationGraphState
     public string BlendSpace { get; init; } = "";
     public IReadOnlyList<AnimationGraphBlendSample> BlendSamples { get; init; } =
         Array.Empty<AnimationGraphBlendSample>();
+    // BS_*.json 的 weightSpeedPerSec；0 表示不做平滑（当帧吸附到目标权重）。
+    public float BlendWeightSpeedPerSec { get; init; } = 5;
     // UE UseCachedPose：以之前 SaveCachedPose 的快照作为本状态 Base（不推进片段时钟）。
     public string UseCachedPose { get; init; } = "";
     // UE ApplyAdditive（LocalSpaceBase）：叠加在 Clip/BlendSamples/UseCachedPose 之上。
@@ -250,7 +252,7 @@ public sealed class AnimationGraphState
     // BlendSpace 资产解析后的等价状态：清除资产名、填入运行期 sample 列表，
     // 其余字段原样保留（含 additive/layer/slot 修饰）。
     internal AnimationGraphState WithBlendSamples(
-        IReadOnlyList<AnimationGraphBlendSample> samples) => new()
+        IReadOnlyList<AnimationGraphBlendSample> samples, float weightSpeedPerSec) => new()
     {
         Name = Name,
         Clip = Clip,
@@ -263,6 +265,7 @@ public sealed class AnimationGraphState
         BlendAxis = BlendAxis,
         BlendSpace = "",
         BlendSamples = samples,
+        BlendWeightSpeedPerSec = weightSpeedPerSec,
         UseCachedPose = UseCachedPose,
         AdditiveClip = AdditiveClip,
         AdditiveAlpha = AdditiveAlpha,
@@ -282,6 +285,10 @@ public sealed class AnimationGraphState
 
     private void ValidateBlendSamples()
     {
+        if (!float.IsFinite(BlendWeightSpeedPerSec) || BlendWeightSpeedPerSec < 0 ||
+            BlendWeightSpeedPerSec > 100)
+            throw new InvalidOperationException(
+                $"Animation graph state '{Name}' blend weight speed must be in [0,100].");
         if (BlendAxis != AnimationGraphBlendAxis.Speed)
             throw new InvalidOperationException(
                 $"Animation graph state '{Name}' uses unsupported blend axis '{BlendAxis}'.");
@@ -665,7 +672,7 @@ public sealed class AnimationGraphDefinition
                 var samples = space.Samples
                     .Select(sample => new AnimationGraphBlendSample(sample.Clip, sample.Threshold))
                     .ToArray();
-                states[stateIndex] = state.WithBlendSamples(samples);
+                states[stateIndex] = state.WithBlendSamples(samples, space.WeightSpeedPerSec);
             }
             machines[index] = new AnimationGraphStateMachine
             {

@@ -651,11 +651,11 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 
 ### BlendSpace1D
 
-- 资产：`BS_*.json`（`type: "blendSpace1D"`）由 SM 的 `skinning.blendSpaces`
+- 资产：`BS_*.json`（`type: "blendSpace1D"`）由 SKM 的 `skinning.blendSpaces`
   引用；字段为 `name`、`axis {name:"Speed",min,max}`、`interpolation`
   （`EaseInOut`；`Linear` 被接受但运行期仍按 EaseInOut）、`weightSpeedPerSec`、
   `samples[] {clip, threshold}`。sample 2..3 个、阈值严格递增、clip 不得重复且
-  必须属于同一 SKM 的 clips。
+  必须属于同一 SKM 的 clips；运行期按资产 `weightSpeedPerSec` 平滑（0 = 当帧吸附）。
 - 解析时机：组件在 World prepare 阶段创建，而 animation catalog 到 start 才下发；
   `AnimationGraphBlueprint` 在创建时尝试解析，若 catalog 尚未绑定则延迟到首次
   求值/首次访问 `GraphRuntime` 时解析并 Validate。
@@ -723,13 +723,14 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 
 ### Pose Graph：Cached Pose / Additive / Slot
 
-- `SaveCachedPose` / `UseCachedPose`：原生播放器按名字保存当前最终局部姿态
-  （含关节数的快照）。`UseCachedPose` 状态下不推进原片段时钟、不产生根位移与
-  notify，只把快照作为 Base；随后仍可叠加 additive。缓存是**实例级**的，
+- `SaveCachedPose` / `UseCachedPose`（快照路径）：原生播放器按名字保存当前最终
+  局部姿态（含关节数的快照）。`UseCachedPose` 状态下不推进原片段时钟、不产生
+  根位移与 notify，只把快照作为 Base；随后仍可叠加 additive。缓存是**实例级**的，
   同名缓存重复捕获会覆盖，`Play`/`Select`/`TransitionTo`/`Seek`/`Stop` 会退出
   使用状态但保留快照。首帧尚无姿态时捕获是静默 no-op，不会让同一批命令失败。
   处于 `UseCachedPose` 状态时捕获被忽略：此时最终姿态已含 additive，写回缓存
-  会让下一帧把它当 Base 重复叠加（缩放/位移逐帧累积）。
+  会让下一帧把它当 Base 重复叠加（缩放/位移逐帧累积）。这条限制只针对快照路径；
+  命名分支（见下节）在同帧写入、由 `UseCachedPose` 优先读取。
 - `AdditiveClip`：接受 `additiveAnimType = LocalSpaceBase` 与 `RotationOffsetMeshSpace`。
   LocalSpaceBase 的增量为 `delta = additive * inverse(reference)`，再以
   `base * delta` 复合；RotationOffsetMeshSpace 先把 base/additive/reference 的局部
@@ -764,12 +765,13 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 - blend 分支使用 `SetCachedPoseBranchAxis(name, value)` 下发轴值；权重按
   EaseInOut 成形并按 5/s 平滑（每个分支独立缓存），片段对规则与运行期
   BlendSpace 一致（2 sample 固定首 sample 为 A；3 sample 固定中间 sample 为 A）。
+  分支的平滑速度当前固定 5/s，不读取 `BS_*.json` 的 `weightSpeedPerSec`。
 - 分支是图级预计算：`Play`/`Select`/`Stop` 不会清空分支；替换/清空分支列表会
-  清空同帧缓存。
+  清空同帧缓存；播放器暂停/停止时分支不推进时钟，保留上一帧的同帧缓存。
 - 限制：不是任意 DAG（没有逐节点图、没有多个消费者各自加不同 modifier）；
   分支只产出 pose，不含 additive/layer/slot/notify/根位移；消费方再叠加这些层。
-- 限制：缓存是“保存时的局部姿态快照”，不是 UE 同一帧内多分支共享的 pose 图；
-  根图 `SaveCachedPose` 每帧捕获并有一帧延迟。additive 不改变 Actor/胶囊，
+- 限制：`CaptureCachedPose` 快照路径是“保存时的局部姿态快照”，有一帧延迟；
+  命名分支提供同帧姿态，但仍不是任意 DAG/多消费者 modifier 图。additive 不改变 Actor/胶囊，
   MeshSpace/RotationOffset 只处理旋转，不处理平移/缩放增量。
 
 ### Masked Slot Montage
