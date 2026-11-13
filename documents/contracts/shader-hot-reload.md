@@ -31,6 +31,12 @@ shadercache stats
 - 忽略 `**/generate/`、`shader/spv/`、临时/编辑器交换文件。
 - 根路径初始化时规范化；不跟随目录符号链接的扫描中，普通文件使用词法相对路径，
   文件符号链接仍解析物理目标。逐帧轮询不为每个普通文件重复规范化根路径。
+- 生产路径（`ShaderReloadRuntime::Initialize` 调用 `SetBackgroundScanEnabled(true)`）
+  把目录遍历放到后台线程：Windows 上逐文件 stat shader 源在同步路径会形成每
+  250 ms 一次的可见卡顿。
+  `Poll()` 只领取已完成的扫描结果；mtime/size 比对、BLAKE3、debounce 与状态机仍在 GT，
+  语义与同步路径相同，只推迟一到两帧。测试与运行时校验用的 `SetTestPollInterval` /
+  `SetTestScanSuspended` 会把扫描切回同步并丢弃 in-flight 结果，保持“调用即扫描”的确定性。
 - mtime/size 只做快速候选；BLAKE3-256 是最终变更判定。未变文件的重哈希分摊到
   4 次扫描，每项最多 4 轮复核一次；元数据改变、未稳定或未成功读取的候选立即
   哈希。分摊不改变同时间戳/同大小编辑的检测窗口，也不跳过提交前摘要校验。

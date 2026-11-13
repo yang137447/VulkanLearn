@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -365,6 +366,9 @@ private:
     std::unordered_set<PlatformMouseButton> rmlPressedMouseButtons;
     std::unordered_set<PlatformGamepadButton> rmlPressedGamepadButtons;
     std::chrono::steady_clock::time_point nextHotReloadCheck;
+    // 资产指纹扫描在后台线程执行：Windows 下逐文件 stat 一次约 20ms，
+    // 放在 GT 上会形成每 0.5s 一次的可见顿挫。GT 只负责领取已完成的结果。
+    std::future<AssetFingerprint> pendingAssetScan;
     uint64_t uiFrameIndex = 0;
     size_t previousUiVertexCount = 0;
     size_t previousUiIndexCount = 0;

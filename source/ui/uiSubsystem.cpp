@@ -129,6 +129,11 @@ RuntimeResult<void> UiSubsystem::Initialize(
 
 void UiSubsystem::Shutdown()
 {
+    // 后台指纹扫描只读 desc.assetRoot；Initialize 会覆写 desc，因此重新初始化
+    // 前必须先等它结束（析构时 future 也会阻塞，这里把语义显式化）。
+    if (pendingAssetScan.valid())
+        pendingAssetScan.wait();
+    pendingAssetScan = {};
     // 编辑器文档必须先于共享 RmlUi context 卸载；shell 只 detach 文档，
     // 不调用 Rml::Shutdown。
     SetEditorUiShell(nullptr);

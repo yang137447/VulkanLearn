@@ -813,6 +813,15 @@ and `fontFaces`. The developer names now select the RmlUi editor, not a library.
 the scene-name HUD. `ui.enabled=false` disables the complete UI subsystem.
 There is no developer-UI CMake switch.
 
+`ui.hotReload=true` polls `ui.assetRoot` every 500 ms. The fingerprint scan
+(`UiSubsystem::BuildAssetFingerprint`, one `stat` per file) runs on a background
+`std::async` task and GT only consumes a finished result; per-file `stat` on a
+large tree is slow enough to be a visible hitch when run inline. Document /
+localization parsing and commit still happen on GT, because they replace RmlUi
+state; a committed reload deliberately marks a `UiMutationKind::HotReload`
+mutation. Re-`Initialize` waits for an in-flight scan before overwriting `desc`.
+Evidence: `documents/rationale/performance-hitches-2026-11-14.md`.
+
 `workerThreadCount=1` renders synchronously; `2` consumes snapshots on RT.
 The normal shader build path produces overlay SPIR-V from `shader/glsl/`.
 

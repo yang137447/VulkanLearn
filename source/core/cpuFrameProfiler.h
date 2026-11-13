@@ -214,6 +214,14 @@ public:
         return ring.WindowFrameCount();
     }
 
+    // 最近一次 CommitFrame 的**单帧**原始耗时（不是窗口平均）。卡顿诊断用：
+    // 平均值会掩盖尖峰，需要知道这一帧具体花在哪个阶段。
+    const std::array<std::optional<double>, kCpuFrameStageCount>&
+    LastFrameDurations() const
+    {
+        return pendingDurations;
+    }
+
 private:
     CpuFrameTimingRing ring;
     std::array<double, kCpuFrameStageCount> currentMilliseconds{};

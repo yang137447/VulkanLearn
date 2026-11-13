@@ -24,6 +24,13 @@ void VulkanDebug::Init(vk::Instance instance)
 #endif
 }
 
+void VulkanDebug::Disable()
+{
+    pfnCmdBeginDebugUtilsLabelEXT = nullptr;
+    pfnCmdEndDebugUtilsLabelEXT = nullptr;
+    pfnSetDebugUtilsObjectNameEXT = nullptr;
+}
+
 void VulkanDebug::BeginRegion(vk::CommandBuffer cmd, const std::string& labelName, DebugCategory category)
 {
 #if !defined(NDEBUG)

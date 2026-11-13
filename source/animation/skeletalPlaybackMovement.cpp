@@ -1,4 +1,5 @@
 #include "skeletalPlaybackInternal.h"
+#include "Profiler.h"
 
 #include <algorithm>
 #include <cmath>
@@ -451,6 +452,7 @@ void SkeletalPlayback::ResetSlopeWarping(const char* reason)
 void SkeletalPlayback::ApplySlopeWarping(const Eigen::Matrix4f& component, bool grounded,
     const std::string& owner, float deltaSeconds, const GroundProbe& probe)
 {
+    PROFILE_SCOPE("Anim.SlopeWarping");
     if (!slopeWarping || !slopeWarping->Enabled() || deltaSeconds <= 0 ||
         explicitlyPaused || (!playing && !Completed())) return;
     FootPlacementSolver::ValidateComponent(component);
@@ -526,6 +528,7 @@ void SkeletalPlayback::SetPostProcess(std::shared_ptr<const PostProcessAsset> as
 
 void SkeletalPlayback::ApplyPostProcess(float deltaSeconds)
 {
+    PROFILE_SCOPE("Anim.PostProcess");
     if (!postProcess || !postProcess->Valid() || deltaSeconds <= 0 || explicitlyPaused ||
         (!playing && !Completed()))
         return;
@@ -641,6 +644,7 @@ void SkeletalPlayback::ResetFootPlacement(const char* reason)
 void SkeletalPlayback::ApplyFootPlacement(const Eigen::Matrix4f& component, bool grounded,
     const std::string& owner, float deltaSeconds, const GroundProbe& probe)
 {
+    PROFILE_SCOPE("Anim.FootPlacement");
     if (!footPlacement || !footPlacement->State().enabled || deltaSeconds <= 0 || explicitlyPaused ||
         (!playing && !Completed()) ||
         (footPlacementSource == preIkModels && !Completed())) return;

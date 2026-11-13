@@ -153,6 +153,7 @@ private:
         std::vector<const char*>& vulkanExtensions,
         DeveloperUiLaunchMode developerUiMode,
         PresentModePreference presentMode,
+        std::optional<bool> vulkanValidation,
         bool forceShaderRebuild);
     RuntimeResult<void> LoadInitialWorldAndRenderer(
         const std::string& initialSceneOverride);

@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cstdint>
+#include <cstring>
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -13,9 +14,68 @@ void VulkanManager::Init(std::vector<const char *> &extensions, SDL_Window *wind
 {
     instanceExtensions.resize(extensions.size());
     std::copy(extensions.begin(), extensions.end(), instanceExtensions.begin());
-#if defined(VULKANLEARN_ENABLE_VULKAN_VALIDATION)
-    instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+    instanceLayers.clear();
+    debugUtilsEnabled = false;
+    if (validationEnabled)
+    {
+        // 运行期开关：层未安装时必须降级，而不是让 vkCreateInstance 失败。
+        const std::vector<vk::LayerProperties> availableLayers =
+            vk::enumerateInstanceLayerProperties();
+        const bool hasValidation = std::any_of(
+            availableLayers.begin(), availableLayers.end(),
+            [](const vk::LayerProperties& layer)
+            {
+                return std::strcmp(
+                    layer.layerName, "VK_LAYER_KHRONOS_validation") == 0;
+            });
+        if (hasValidation)
+        {
+            instanceLayers.push_back("VK_LAYER_KHRONOS_validation");
+        }
+        else
+        {
+            validationEnabled = false;
+            std::cerr << "[Vulkan] Validation layer requested but "
+                         "VK_LAYER_KHRONOS_validation is not installed; "
+                         "continuing without it." << std::endl;
+        }
+    }
+
+    // debug utils 是独立扩展：Debug 构建的 VulkanDebug label 会调用它的命令，
+    // 因此不能只在启用校验层时才声明扩展（否则 --no-validation 会调用未启用的
+    // 扩展命令，属于未定义行为）。扩展不可用时 VulkanDebug::Disable() 关闭指针。
+    bool wantDebugUtils = validationEnabled;
+#if !defined(NDEBUG)
+    wantDebugUtils = true;
 #endif
+    if (wantDebugUtils)
+    {
+        const std::vector<vk::ExtensionProperties> availableExtensions =
+            vk::enumerateInstanceExtensionProperties();
+        const bool hasDebugUtils = std::any_of(
+            availableExtensions.begin(), availableExtensions.end(),
+            [](const vk::ExtensionProperties& extension)
+            {
+                return std::strcmp(
+                    extension.extensionName,
+                    VK_EXT_DEBUG_UTILS_EXTENSION_NAME) == 0;
+            });
+        if (hasDebugUtils)
+        {
+            instanceExtensions.push_back(VK_EXT_DEBUG_UTILS_EXTENSION_NAME);
+            debugUtilsEnabled = true;
+        }
+        else
+        {
+            std::cerr << "[Vulkan] " << VK_EXT_DEBUG_UTILS_EXTENSION_NAME
+                      << " is not available; debug labels disabled."
+                      << std::endl;
+        }
+    }
+    std::cout << "[Vulkan] Validation layer: "
+              << (validationEnabled ? "on" : "off")
+              << ", debug utils: " << (debugUtilsEnabled ? "on" : "off")
+              << std::endl;
 
     // 目标 0 = 主窗口。多窗口时这里会有第二个目标，且设备只创建一次。
     presentTargets.emplace_back();
@@ -96,7 +156,10 @@ void VulkanManager::CreateVkInstance()
     {
         throw std::runtime_error("Failed to create Vulkan instance.");
     }
-    VulkanDebug::Init(instance);
+    if (debugUtilsEnabled)
+        VulkanDebug::Init(instance);
+    else
+        VulkanDebug::Disable();
 }
 
 void VulkanManager::DestroyVkInstance()

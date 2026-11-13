@@ -98,6 +98,33 @@ TEST(LaunchOptions, PrerenderSkinFlagSelectsThePreSkinnedVariant)
     EXPECT_EQ(options.frameLimitHz, 60);
 }
 
+TEST(LaunchOptions, VulkanValidationKeepsTheCompileTimeDefault)
+{
+    const LaunchOptions options = Parse({"main.exe"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_FALSE(options.vulkanValidation.has_value());
+}
+
+TEST(LaunchOptions, ValidationFlagsOverrideTheCompileTimeDefault)
+{
+    const LaunchOptions enabled = Parse({"main.exe", "--validation"});
+    EXPECT_TRUE(enabled.errorMessage.empty()) << enabled.errorMessage;
+    ASSERT_TRUE(enabled.vulkanValidation.has_value());
+    EXPECT_TRUE(*enabled.vulkanValidation);
+
+    const LaunchOptions disabled = Parse({"main.exe", "--no-validation"});
+    EXPECT_TRUE(disabled.errorMessage.empty()) << disabled.errorMessage;
+    ASSERT_TRUE(disabled.vulkanValidation.has_value());
+    EXPECT_FALSE(*disabled.vulkanValidation);
+
+    const LaunchOptions combined =
+        Parse({"main.exe", "--no-validation", "--gpu-stats"});
+    EXPECT_TRUE(combined.errorMessage.empty()) << combined.errorMessage;
+    ASSERT_TRUE(combined.vulkanValidation.has_value());
+    EXPECT_FALSE(*combined.vulkanValidation);
+    EXPECT_TRUE(combined.gpuStats);
+}
+
 TEST(LaunchOptions, NoPrerenderSkinFlagFallsBackToPerPassSkinning)
 {
     // 关闭项必须覆盖默认值，否则 A/B 与回退路径无从验证。

@@ -11,6 +11,14 @@
 - 启动参数 `--no-prerender-skin`（`source/engine/launchOptions.*`）：预蒙皮默认开启，用该关闭项回落到逐 pass 蒙皮；开启时每帧在
   `hairSimulation` 之后、pass 循环之前录制 `SkinDeformPass`，并在 GPU 表中新增
   `skinnedDeform` 一行。
+- 启动参数 `--validation` / `--no-validation`（`source/engine/launchOptions.*`）：覆盖编译期
+  `VULKANLEARN_ENABLE_VULKAN_VALIDATION` 的默认值。`VulkanManager` 在创建 instance 前按该值
+  决定是否启用 `VK_LAYER_KHRONOS_validation`；层未安装时降级为关闭并打印一行
+  `[Vulkan] Validation layer requested but ... is not installed`。同一个二进制因此既能用
+  `--no-validation` 做帧率验收，也能在排查 VUID 时用 `--validation` 复现。校验层会显著
+  改变帧率，因此帧率结论必须注明它的开关状态。`VK_EXT_debug_utils` 与校验层解耦：
+  Debug 构建即使 `--no-validation` 也会在扩展可用时启用它，不可用时调用
+  `VulkanDebug::Disable()`，不会调用未启用扩展的命令。
 - 控制台命令 `gpustats`（`source/debugConsoleProcessCommand.cpp`）：把 `RuntimeCommandType::PrintGpuPassStats`
   排入 `CommandBus`，由 `RuntimeCommandExecutor` 在当前 GT tick 调用
   `RenderSystem::PrintGpuPassStats()`。它立即打印最近一次读回的窗口；没有可用样本时打印一行
@@ -261,6 +269,27 @@ Performance 页的 CPU 表只消费这份快照：标题与表头把 CPU 阶段�
 ```text
 [GPU] frame avg over 120: hairSimulation 0.18 ms | shadowCascade0 0.42 ms | ... | total 12.30 ms
 ```
+
+另有一个独立的 120 帧计数器，按自己的窗口向 `Info` 日志打印一张 **CPU 录制**表（`PassCpuRecordTimings`，
+`source/render/frame/renderFrameRecorder.cpp`）：
+
+```text
+pass CPU record (avg ms/frame): geometry 0.34 terrainFeedback 0.13 deferredLighting 0.03 ...
+```
+
+它按 RenderGraph pass 顺序统计 `PassRuntime::RecordPass()`（含 pass 前的图屏障与 pass 内的
+draw/descriptor 准备）在渲染线程上的 CPU 时间，只保留耗时最高的 8 项。这张表刻意独立于
+GPU timestamp 表：GPU 近空闲（< 1 ms）时，帧时间可能完全由这里的 CPU 录制决定。
+
+## 卡顿帧日志（`VL_HITCH_LOG`）
+
+设置环境变量 `VL_HITCH_LOG=1` 后，GT 会把**单帧**耗时 ≥ 20 ms 的帧打成一行
+`[Hitch] frame <总耗时> ms (pre-tick <x>, clock dt <y>): <各阶段单帧耗时>`，每秒最多 5 条。
+它不依赖 `--gpu-stats`：timestamp 采集会串行化 GPU，本身就会改变被测帧。
+
+`pre-tick` 是 `TickEngineFrame` 入口到 `RuntimeClock::TickDeltaSeconds()` 之间的时间
+（控制台、运行时命令、shader 热重载轮询等），不属于任何 `CpuFrameStage`；`clock dt`
+是 FPS 工具消费的同一份帧间隔。`VL_HITCH_LOG=0` 或空值视为关闭。
 
 ## 阴影 caster 剔除诊断
 

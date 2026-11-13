@@ -44,6 +44,8 @@ struct LaunchOptions
     // Auto keeps the existing mailbox-first policy. Immediate is the uncapped
     // benchmark path; it may tear and depends on the surface supporting it.
     PresentModePreference presentMode = PresentModePreference::Auto;
+    // 未设置时沿用编译期默认；--validation / --no-validation 可覆盖。
+    std::optional<bool> vulkanValidation;
     DeveloperUiLaunchMode developerUiMode = DeveloperUiLaunchMode::UseConfig;
     std::optional<int> workerThreadCountOverride;
     // 帧率验收工具：0 = 不限速（默认行为完全不变），正整数表示渲染主循环的目标节拍。

@@ -43,6 +43,7 @@
 #include "material/generator/materialDefinitionReloadBatch.h"
 #include "engine/terrainChunkStreamer.h"
 #include "platform/platformApplication.h"
+#include "vulkanManager.h"
 #include "platform/platformWindow.h"
 #include "profiler.h"
 #include "render/backend/rendererBackendVulkan.h"
@@ -153,6 +154,7 @@ RuntimeResult<void> EngineLoop::Init(
         platformApplication.GetVulkanExtensions(),
         launchOptions.developerUiMode,
         launchOptions.presentMode,
+        launchOptions.vulkanValidation,
         launchOptions.forceShaderRebuild);
     if (runtimeResult.IsFailure())
     {
@@ -463,6 +465,7 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
     std::vector<const char*>& vulkanExtensions,
     DeveloperUiLaunchMode developerUiMode,
     PresentModePreference presentMode,
+    std::optional<bool> vulkanValidation,
     bool forceShaderRebuild)
 {
     // Material parameter includes are generated before shader compilation so
@@ -483,6 +486,11 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
         forceShaderRebuild);
 
     rendererBackend = std::make_unique<RendererBackendVulkan>();
+    if (vulkanValidation.has_value())
+    {
+        VulkanManager::GetInstance().SetValidationEnabled(
+            *vulkanValidation);
+    }
     rendererBackend->Initialize(
         vulkanExtensions, window.GetNativeHandle(), presentMode);
     rendererBackendInitialized = true;

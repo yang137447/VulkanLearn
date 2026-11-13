@@ -142,6 +142,10 @@ public:
         presentModePreference = preference;
     }
 
+    // 运行期校验层开关：同一个二进制既能全速跑，也能在需要时开启校验。
+    // 未调用时沿用编译期默认（VULKANLEARN_ENABLE_VULKAN_VALIDATION）。
+    void SetValidationEnabled(bool enabled) { validationEnabled = enabled; }
+
 private:
     friend class VL::RHIDeviceVulkan;
 
@@ -245,11 +249,17 @@ private:
     VL::PresentTarget& defaultTarget() { return presentTargets.front(); }
 
     vk::Instance instance;
-    std::vector<const char *> instanceLayers = {
+    // Init 按 validationEnabled 填充；成员保留容量，避免每次构造分配。
+    std::vector<const char *> instanceLayers;
+    bool validationEnabled =
 #if defined(VULKANLEARN_ENABLE_VULKAN_VALIDATION)
-            "VK_LAYER_KHRONOS_validation"
+        true;
+#else
+        false;
 #endif
-    };
+    // VK_EXT_debug_utils 与校验层解耦：Debug 构建的 region/object label 需要它，
+    // 即使 --no-validation 也必须启用；Release 仅在启用校验层时顺带打开。
+    bool debugUtilsEnabled = false;
     std::vector<const char *> instanceExtensions = {};
     std::vector<const char *> deviceExtensions = {
             VK_KHR_SWAPCHAIN_EXTENSION_NAME};

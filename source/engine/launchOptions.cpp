@@ -172,6 +172,18 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        if (argument == "--validation")
+        {
+            options.vulkanValidation = true;
+            continue;
+        }
+
+        if (argument == "--no-validation")
+        {
+            options.vulkanValidation = false;
+            continue;
+        }
+
         if (argument == "--prerender-skin")
         {
             options.prerenderSkin = true;
@@ -423,6 +435,7 @@ void PrintLaunchUsage()
         << "       main.exe [--frame-limit <hz>]\n"
         << "       main.exe [--exit-after-frames <count>]\n"
         << "       main.exe [--present-mode <auto|fifo|mailbox|immediate>]\n"
+        << "       main.exe [--validation | --no-validation]\n"
         << "       main.exe [--gpu-stats]\n"
         << "       main.exe [--prerender-skin]\n"
         << "       main.exe [--perf-jsonl <path>]\n"
@@ -436,6 +449,7 @@ void PrintLaunchUsage()
         << "  --frame-limit <hz>                  Cap render frame pacing at 1..1000 Hz (default 0 = uncapped; fixed 60 Hz physics unchanged; this is a rate cap, not a frame count).\n"
         << "  --exit-after-frames <count>         Exit with code 0 after <count> completed frames (>= 1).\n"
         << "  --present-mode <mode>               Swapchain present mode: auto, fifo, mailbox, immediate (default auto = mailbox-first).\n"
+        << "  --validation / --no-validation     Override the compile-time Vulkan validation layer default for this process.\n"
         << "  --gpu-stats                         Log a per-pass GPU timestamp table every 120 frames (default off).\n"
         << "  --no-prerender-skin                 Disable per-frame pre-skinning and fall back to per-pass GPU skinning (default on).\n"
         << "  --perf-jsonl <path>                 Append one perf JSON line per second to <path> (creates parent directories; enables GPU collection).\n"

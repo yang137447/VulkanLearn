@@ -3,13 +3,17 @@
 #include "render/volumetricFog/volumetricFogRenderer.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <iostream>
+#include <map>
+#include <sstream>
 #include <utility>
 #include <vector>
 
 #include "BaseStructs.h"
 #include "commonFunction.h"
+#include "core/logStore.h"
 #include "passBarrier.h"
 #include "profiler.h"
 #include "renderGraph.h"
@@ -44,6 +48,62 @@
 
 namespace VL
 {
+
+// RT-only CPU accounting for pass recording. Only consumed when --gpu-stats is
+// enabled; it separates "which pass is expensive to record" from the GPU
+// timestamp table, which cannot see CPU-side draw/pipeline preparation.
+struct PassCpuRecordTimings
+{
+    std::map<std::string, double> microseconds;
+    uint32_t frames = 0;
+
+    struct Scope
+    {
+        PassCpuRecordTimings* owner = nullptr;
+        const std::string* name = nullptr;
+        std::chrono::steady_clock::time_point start;
+
+        // 只借用 pass 名（调用方的 renderPassName 活得更久）；--gpu-stats 关闭时
+        // 不复制字符串，避免给 RT 录制热路径加一次分配。
+        Scope(PassCpuRecordTimings* target, const std::string& passName)
+            : owner(target), name(&passName),
+              start(std::chrono::steady_clock::now())
+        {
+        }
+        ~Scope()
+        {
+            if (owner == nullptr) return;
+            owner->microseconds[*name] +=
+                std::chrono::duration<double, std::micro>(
+                    std::chrono::steady_clock::now() - start).count();
+        }
+    };
+
+    void Log() const
+    {
+        if (frames == 0 || microseconds.empty())
+            return;
+        std::vector<std::pair<std::string, double>> sorted(
+            microseconds.begin(), microseconds.end());
+        std::sort(sorted.begin(), sorted.end(),
+            [](const auto& left, const auto& right)
+            {
+                return left.second > right.second;
+            });
+        std::ostringstream message;
+        message << "pass CPU record (avg ms/frame):";
+        size_t emitted = 0;
+        for (const auto& entry : sorted)
+        {
+            if (emitted++ == 8) break;
+            message << ' ' << entry.first << ' '
+                    << (entry.second / 1000.0 / static_cast<double>(frames));
+        }
+        const std::string line = message.str();
+        VL::ProcessLog().Append(VL::LogSeverity::Info, "GPU", line);
+        std::cout << "[Diagnostics][Info] " << line << std::endl;
+    }
+};
 
 void RenderFrameRecorder::UpdateGlobalUBO(
     vk::CommandBuffer& commandBuffer,
@@ -396,7 +456,11 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
     }
     // Backend owns swapchain frame synchronization. RenderSystem only records
     // pass work into the command buffer it receives for this image.
-    VL::RendererFrameContext frameContext = ctx.backend.BeginFrame(ctx.currentFrame);
+    VL::RendererFrameContext frameContext;
+    {
+        PROFILE_SCOPE("RT.BeginFrame");
+        frameContext = ctx.backend.BeginFrame(ctx.currentFrame);
+    }
     if (!frameContext.ready)
     {
         // acquire 失败没有提交；保留帧号和截图请求，等待 GT 重建 swapchain。
@@ -406,23 +470,35 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
     ctx.renderScene.camera.previousViewProjection =
         ctx.submittedViewProjection && ctx.submittedCameraGeneration == ctx.renderScene.worldGeneration
         ? *ctx.submittedViewProjection : ctx.renderScene.camera.viewProjection;
-    ctx.uiOverlayRenderer.CollectRetiredTextures();
+    {
+        PROFILE_SCOPE("RT.CollectRetiredUiTextures");
+        ctx.uiOverlayRenderer.CollectRetiredTextures();
+    }
     // 每帧重新累计：诊断输出只描述刚刚录制完的这一帧。
     *ctx.frameShadowCasterCullStats = {};
     uint32_t frameIndex = frameContext.frameIndex;
     ctx.swapChainImageIndex = frameContext.swapchainImageIndex;
     // GT publishes dynamic mesh content instead of writing host-visible buffers.
     // Apply it to this image's slot before any pass records a draw.
-    ApplyQueuedDynamicMeshUpdates(
-        ctx.dynamicMeshQueue,
-        ctx.renderScene,
-        ctx.resolvedScene,
-        ctx.swapChainImageIndex % RenderableObject::DynamicMeshFrameSlotCount);
+    {
+        PROFILE_SCOPE("RT.ApplyDynamicMesh");
+        ApplyQueuedDynamicMeshUpdates(
+            ctx.dynamicMeshQueue,
+            ctx.renderScene,
+            ctx.resolvedScene,
+            ctx.swapChainImageIndex % RenderableObject::DynamicMeshFrameSlotCount);
+    }
     // ghost 权重按 swapchain 槽写入；必须在拿到本帧 slot 之后更新，避免覆盖
     // 另一 frame-in-flight 仍在读取的 buffer。
     // 草稿 binding 先于 ghost/选中状态应用，保证本帧 shader 读到同一份组号表。
-    ctx.hairRuntime.ApplyTressfxGroupBindingPreviewRequests(ctx.renderScene, ctx.resolvedScene);
-    ctx.hairRuntime.ApplyTressfxBrushPreviewRequests(ctx.renderScene, ctx.resolvedScene, ctx.swapChainImageIndex);
+    {
+        PROFILE_SCOPE("RT.HairGroupPreview");
+        ctx.hairRuntime.ApplyTressfxGroupBindingPreviewRequests(ctx.renderScene, ctx.resolvedScene);
+    }
+    {
+        PROFILE_SCOPE("RT.HairBrushPreview");
+        ctx.hairRuntime.ApplyTressfxBrushPreviewRequests(ctx.renderScene, ctx.resolvedScene, ctx.swapChainImageIndex);
+    }
     vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
     // 每帧固定同一个 World-local streaming state；不要让世界交换发生在
     // BeginFrame 消费和帧末回读之间时出现两份 ring/page table。
@@ -497,10 +573,13 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
             ctx.backend.GetFrameFenceCount());
     }
     // P3：消费已完成回读 -> ApplyFeedback（命中推进 epoch、miss 入请求队列）。
-    ctx.terrainRuntime.ConsumeTerrainFeedback(
-        terrainFeedbackStreaming,
-        frameContext.completedEpoch,
-        frameIndex);
+    {
+        PROFILE_SCOPE("RT.TerrainFeedback");
+        ctx.terrainRuntime.ConsumeTerrainFeedback(
+            terrainFeedbackStreaming,
+            frameContext.completedEpoch,
+            frameIndex);
+    }
     if (terrainFeedbackStreaming)
     {
         // Consume 可能推进 lastConsumedFeedbackEpoch；再次写回上下文，使
@@ -704,11 +783,15 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
         ctx.recordParticleSimulation(commandBuffer, frameIndex);
 
         const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
+        static PassCpuRecordTimings passCpuTimings;
         for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
         {
             const auto& renderPassName = renderPassOrdered[passIndex];
             std::string renderPassScopeName = "RenderPass:" + renderPassName;
             PROFILE_SCOPE(renderPassScopeName.c_str());
+            PassCpuRecordTimings::Scope passCpuScope(
+                ctx.gpuPassStatsLoggingEnabled ? &passCpuTimings : nullptr,
+                renderPassName);
             const auto& renderPass = renderGraph.GetRenderpasses().at(renderPassName);
             if (ctx.renderScene.environment.type == VL::EnvironmentType::None)
             {
@@ -827,6 +910,13 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
             {
                 ctx.shadowCasterCullStatsFramesSinceLog = 0;
                 ctx.logShadowCasterCullStats();
+            }
+            ++passCpuTimings.frames;
+            if (passCpuTimings.frames >= VL::kGpuPassTimingWindowFrames)
+            {
+                passCpuTimings.Log();
+                passCpuTimings.frames = 0;
+                passCpuTimings.microseconds.clear();
             }
         }
         ctx.logLocalShadowCasterStatistics();
@@ -951,7 +1041,10 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
     ctx.gpuTimer.EndFrame();
     // RenderSystem only records pass commands. Queue, semaphore, fence,
     // swapchain, present, and retire epoch details stay backend-owned.
-    ctx.backend.SubmitFrame(frameContext, ctx.currentFrame);
+    {
+        PROFILE_SCOPE("RT.SubmitPresent");
+        ctx.backend.SubmitFrame(frameContext, ctx.currentFrame);
+    }
     // 提交成功后才确认 dirty：失败路径由 TerrainUploadTransaction 析构 Abort。
     terrainUploadTransaction.Commit();
     terrainLayerUploadTransaction.Commit();

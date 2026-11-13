@@ -1786,6 +1786,12 @@ GPU 计时、billboard/ribbon 的场景光照（全部灯 + IBL）、逐发射�
   调试回读、CPU 帧级预算统计与 particle graphics pass 的 GPU timestamp 计时已支持
   （`particlestats`/`particledump` 的 `gpuMs` 与逐 emitter 项）；非全局 emitter
   的 GPU overdraw 通过 `particledump.overdrawFragments` 提供，带宽仅有读取规模估算。
+
+  软深度的 descriptor pool / N 个 per-image set / N 个参数 UBO 是**按 swapchain image
+  集合**一次性创建的，因此资源签名必须覆盖全部 image 的 `sceneDepth` view/sampler 与
+  `particleSoftDepth` view，而不是只哈希当前 image。只哈希当前 image 会让签名随
+  swapchain image 轮换每帧变化，触发每帧销毁重建。当前实现对整个 image 集合做
+  FNV-1a 签名。证据：`documents/rationale/performance-hitches-2026-11-14.md`。
   World 级和发射器级运行时增删都已支持，粒子级 spawn/destroy 仍没有。LOD 最多 4 档：
   每档同时缩放连续发射预算（`spawnRateScale`）与渲染尺寸（`renderScale`），
   `fadeRange>0` 时在档位边界前用 smoothstep 插值，`fadeRange=0` 保持旧硬切；

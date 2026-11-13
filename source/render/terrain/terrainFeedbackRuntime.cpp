@@ -9,6 +9,7 @@
 
 #include "material.h"
 #include "materialInstance.h"
+#include "Profiler.h"
 #include "renderGraph.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererTerrainLoader.h"
@@ -183,8 +184,11 @@ void TerrainFeedbackRuntime::ConsumeTerrainFeedback(
 
     // BeginFrame 已经等待过该 frameIndex 的 fence；TryConsume 再用 epoch
     // 复核一次，避免 swapchain/frame ring 重建后误读尚未完成的槽。
-    std::optional<VL::TerrainFeedbackFrameSummary> summary =
-        streaming->feedbackRing->TryConsume(frameIndex, completedEpoch);
+    std::optional<VL::TerrainFeedbackFrameSummary> summary;
+    {
+        PROFILE_SCOPE("Terrain.SummaryConsume");
+        summary = streaming->feedbackRing->TryConsume(frameIndex, completedEpoch);
+    }
     if (!summary.has_value())
         return;
 
@@ -193,22 +197,30 @@ void TerrainFeedbackRuntime::ConsumeTerrainFeedback(
         summary->copiedEpoch);
     // P3：feedback -> 命中页推进 lastSeenEpoch；miss 页按 priority 进入请求队列。
     // 请求在本帧 BuildUploadBatch 之前完成，所以同帧就能把新页写进 GPU。
-    streaming->latestFeedbackApply = streaming->pageManager.ApplyFeedback(
-        *summary,
-        completedEpoch,
-        streaming->maxPageRequestsPerFrame,
-        streaming->pendingPageRequests);
+    {
+        PROFILE_SCOPE("Terrain.CoverageFeedback");
+        streaming->latestFeedbackApply = streaming->pageManager.ApplyFeedback(
+            *summary,
+            completedEpoch,
+            streaming->maxPageRequestsPerFrame,
+            streaming->pendingPageRequests);
+    }
     // L4b：层号+层页+mip 的专用 feedback 是主路径；只有它本帧不可用时才
     // 退回 L4a 的覆盖页推导（启动/首帧/backpressure）。
     bool appliedExactLayerFeedback = false;
     if (streaming->layerVTRequested && streaming->layerFeedbackRing)
     {
         const std::optional<VL::TerrainLayerFeedbackFrameSummary>
-            layerSummary = streaming->layerFeedbackRing->TryConsume(
-                frameIndex,
-                completedEpoch);
+            layerSummary = [&]
+            {
+                PROFILE_SCOPE("Terrain.LayerSummaryConsume");
+                return streaming->layerFeedbackRing->TryConsume(
+                    frameIndex,
+                    completedEpoch);
+            }();
         if (layerSummary.has_value())
         {
+            PROFILE_SCOPE("Terrain.ExactLayerFeedback");
             appliedExactLayerFeedback = ApplyTerrainLayerExactFeedback(
                 streaming,
                 *layerSummary,
@@ -218,11 +230,15 @@ void TerrainFeedbackRuntime::ConsumeTerrainFeedback(
     }
     if (!appliedExactLayerFeedback)
     {
+        PROFILE_SCOPE("Terrain.CoverageLayerFallback");
         // L4a：覆盖页推导只作为回退/prefetch，不再与精确路径同时写驻留。
         ApplyTerrainLayerFeedback(
             streaming, *summary, completedEpoch, frameIndex);
     }
-    StoreTerrainFeedbackSummary(streaming, *summary);
+    {
+        PROFILE_SCOPE("Terrain.FeedbackSummary");
+        StoreTerrainFeedbackSummary(streaming, *summary);
+    }
 }
 
 void TerrainFeedbackRuntime::ApplyTerrainLayerFeedback(

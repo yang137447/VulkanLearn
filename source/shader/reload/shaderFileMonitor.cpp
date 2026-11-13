@@ -87,6 +87,8 @@ void ShaderFileMonitor::Initialize(
     std::chrono::milliseconds interval,
     size_t stablePolls)
 {
+    // 重入初始化时先丢弃引用旧 glslRoot 的后台扫描。
+    ResetPendingScan();
     glslRoot = std::filesystem::weakly_canonical(
         shaderRoot / "glsl");
     if (!std::filesystem::is_directory(glslRoot))
@@ -118,15 +120,50 @@ std::optional<ShaderFileMonitor::ChangeBatch> ShaderFileMonitor::Poll()
     {
         return std::nullopt;
     }
-    if (now - lastScanTime < pollInterval)
+
+    std::map<std::string, TrackedSource> scannedSources;
+    bool haveScan = false;
+    if (pendingScan.valid() &&
+        pendingScan.wait_for(std::chrono::milliseconds(0)) ==
+            std::future_status::ready)
+    {
+        // 后台目录遍历完成：比对/哈希/防抖仍在 GT，顺序与同步路径一致。
+        scannedSources = pendingScan.get();
+        haveScan = true;
+    }
+    else if (now - lastScanTime >= pollInterval)
+    {
+        lastScanTime = now;
+        if (!backgroundScan)
+        {
+            ScanSources(scannedSources);
+            haveScan = true;
+        }
+        else if (!pendingScan.valid())
+        {
+            try
+            {
+                pendingScan = std::async(std::launch::async, [this]
+                {
+                    std::map<std::string, TrackedSource> scanned;
+                    ScanSources(scanned);
+                    return scanned;
+                });
+            }
+            catch (const std::exception&)
+            {
+                // 线程创建失败时退化为同步扫描，热重载不应因此失效。
+                ScanSources(scannedSources);
+                haveScan = true;
+            }
+        }
+    }
+
+    if (!haveScan)
     {
         return std::nullopt;
     }
-    lastScanTime = now;
-
-    std::map<std::string, TrackedSource> scannedSources;
     ++scanCount;
-    ScanSources(scannedSources);
 
     ChangeBatch batch;
     const bool firstScan = !baselineSeeded;
@@ -382,6 +419,13 @@ void ShaderFileMonitor::ScanSources(
         iterationError.clear();
         iterator.increment(iterationError);
     }
+}
+
+void ShaderFileMonitor::ResetPendingScan()
+{
+    if (pendingScan.valid())
+        pendingScan.wait();
+    pendingScan = {};
 }
 
 std::string ShaderFileMonitor::HashSourceOrDefer(

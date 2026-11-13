@@ -1,4 +1,5 @@
 #include "skeletalPlaybackInternal.h"
+#include "Profiler.h"
 
 #include <algorithm>
 #include <atomic>
@@ -180,16 +181,24 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     const float elapsed = IsBlending() ? std::min(blendElapsed + deltaSeconds, blendDuration) : 0;
     if (sampleTime == time && epoch == discontinuity && !wrapped && !IsBlending()) return;
     const float previousTime = time;
-    auto locals = Sample(selected, sampleTime);
-    if (!inertialization.Empty() && elapsed < blendDuration)
+    LocalPose locals;
     {
-        const auto target = ReadKinematics(locals, asset->mesh.joints.size());
-        locals = WriteKinematics(std::move(locals), inertialization.Evaluate(target, elapsed));
+        PROFILE_SCOPE("Anim.Sample");
+        locals = Sample(selected, sampleTime);
+        if (!inertialization.Empty() && elapsed < blendDuration)
+        {
+            const auto target = ReadKinematics(locals, asset->mesh.joints.size());
+            locals = WriteKinematics(std::move(locals), inertialization.Evaluate(target, elapsed));
+        }
+        else if (!blendSource.empty() && elapsed < blendDuration)
+            locals = Crossfade(blendSource, std::move(locals), elapsed / blendDuration, asset->mesh);
     }
-    else if (!blendSource.empty() && elapsed < blendDuration)
-        locals = Crossfade(blendSource, std::move(locals), elapsed / blendDuration, asset->mesh);
     std::shared_ptr<const std::vector<Eigen::Matrix4f>> nextModels;
-    auto nextPoses = Evaluate(locals, epoch, nextModels);
+    std::vector<std::shared_ptr<const SkinPose>> nextPoses;
+    {
+        PROFILE_SCOPE("Anim.Evaluate");
+        nextPoses = Evaluate(locals, epoch, nextModels);
+    }
     poses.swap(nextPoses);
     jointModels.swap(nextModels);
     preIkModels = jointModels;

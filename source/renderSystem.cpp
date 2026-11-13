@@ -1105,10 +1105,18 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
     // 调试 parity 命令在帧边界执行；内部 WaitIdle + 单次 submit。
     RunTerrainPageBakeParityIfRequested();
 
-    const bool consumedSnapshot = ConsumeLatestSnapshotIntoRenderScene();
+    bool consumedSnapshot = false;
+    {
+        PROFILE_SCOPE("RT.ConsumeSnapshot");
+        consumedSnapshot = ConsumeLatestSnapshotIntoRenderScene();
+    }
     if (consumedSnapshot)
     {
-        if (!offlineMode) BuildResolvedRenderScene();
+        if (!offlineMode)
+        {
+            PROFILE_SCOPE("RT.ResolveScene");
+            BuildResolvedRenderScene();
+        }
         if (!offlineMode && currentRenderScene.worldGeneration != initializedRenderWorldGeneration)
         {
             InitializeCurrentRenderSceneResources();
@@ -1131,6 +1139,7 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
 
     if (!offlineMode)
     {
+        PROFILE_SCOPE("RT.ParticlesAndDecals");
         // World 事务提交路径会直接设置 initializedRenderWorldGeneration，
         // 因此粒子同步不能只挂在 generation 变化的初始化分支上；这里按冻结
         // RenderScene 做幂等同步，新增/移除发射器才创建或销毁 GPU 池。
@@ -1174,7 +1183,10 @@ void RenderSystem::RenderLatestSnapshotOrLastGood()
         // 变化时才创建/退休纹理，不能等到 pass 录制阶段再加载。
         decalRenderer.Synchronize(currentRenderScene);
     }
-    RecordAndSubmitCurrentRenderScene();
+    {
+        PROFILE_SCOPE("RT.RecordSubmit");
+        RecordAndSubmitCurrentRenderScene();
+    }
 }
 
 void RenderSystem::BuildResolvedRenderScene()

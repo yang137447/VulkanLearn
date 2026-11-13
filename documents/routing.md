@@ -68,6 +68,7 @@
 | `source/renderGraph.h`、`source/renderGraph*.cpp` | `contracts/vulkanlearn-architecture.html` | Render graph reload production lifecycle、Render graph resource retire ownership、World graph retire queue validation、RenderGraph resource package lifecycle handle adoption |
 | `source/passBarrier.*`、`shader/glsl/uiOverlay.*` | `contracts/debug-draw.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/shader-hot-reload.md` | — |
 | `source/renderSystem.*` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md`、`contracts/scene-wind.md` | RenderSystem frame boundary、Draw frame boundary、Resolved draw resource ownership |
+| `source/VulkanManager.*`、`source/vulkanDebug.*` | `contracts/gpu-pass-timing.md` | — |
 | `source/render/frame/**` | `contracts/vulkanlearn-architecture.html`、`contracts/gpu-pass-timing.md` | — |
 | `source/render/shadow/**` | `contracts/vulkanlearn-architecture.html`、`contracts/csm-shadow-map-m1.md` | — |
 | `source/render/postprocess/**` | `contracts/vulkanlearn-architecture.html` | — |

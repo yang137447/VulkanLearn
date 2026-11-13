@@ -1,4 +1,5 @@
 #include "world/world.h"
+#include "Profiler.h"
 #include "animation/skeletalPlayback.h"
 #include "animation/animationScriptData.h"
 #include "script/scriptScene.h"
@@ -765,6 +766,7 @@ void World::TickScriptAnimations(float deltaSeconds, const Animation::GroundProb
                 const Eigen::Vector3f actorPosition = ScriptVector(actor, "position");
                 constexpr float degreesToRadians = 3.14159265358979323846f / 180.0f;
                 const float actorYaw = ScriptVector(actor, "rotation").y() * degreesToRadians;
+                PROFILE_SCOPE("Anim.PlayerTick");
                 mesh.animation->Tick(deltaSeconds, &mesh.model, &actorPosition, actorYaw);
             }
             else if (deltaSeconds > 0)
@@ -791,6 +793,7 @@ void World::TickScriptAnimations(float deltaSeconds, const Animation::GroundProb
             // 唯一播放器先完成搜索/基础姿态与视觉根，再同步接地；各 section 领取同批不可变结果。
             if (ground)
             {
+                PROFILE_SCOPE("Anim.Grounding");
                 mesh.animation->ApplySlopeWarping(mesh.model, actor.value("grounded", false),
                     actor.at("id").get<std::string>(), deltaSeconds, *ground);
                 mesh.animation->ApplyFootPlacement(mesh.model, actor.value("grounded", false),
@@ -805,17 +808,21 @@ void World::TickScriptAnimations(float deltaSeconds, const Animation::GroundProb
                 mesh.animation->ResetRootOffset("ground-unavailable");
                 mesh.animation->ApplyPostProcess(deltaSeconds);
             }
+            // 骨骼物理在 PostProcess 之后、蒙皮快照之前：kinematic 刚体跟随当前姿态，
+            // simulated 结果写回全局矩阵，再由播放器还原成局部姿态。
+            // 每个播放器每帧只能步进一次：同一角色的多个 mesh section 共享播放器，
+            // 若按 section 求解会重复推进同一个 Jolt 世界，既浪费帧时间也放大物理步长。
+            const auto bonePhysics = bonePhysicsSolvers.find(mesh.sceneObjectIdentity);
+            if (bonePhysics != bonePhysicsSolvers.end() && deltaSeconds > 0)
+            {
+                PROFILE_SCOPE("Anim.BonePhysics");
+                std::vector<Eigen::Matrix4f> globals;
+                mesh.animation->CopyPoseGlobals(mesh.model, globals);
+                if (bonePhysics->second->Solve(globals, deltaSeconds))
+                    mesh.animation->ApplyPoseGlobals(mesh.model, globals);
+            }
         }
-        // 骨骼物理在 PostProcess 之后、蒙皮快照之前：kinematic 刚体跟随当前姿态，
-        // simulated 结果写回全局矩阵，再由播放器还原成局部姿态。
-        const auto bonePhysics = bonePhysicsSolvers.find(mesh.sceneObjectIdentity);
-        if (bonePhysics != bonePhysicsSolvers.end() && deltaSeconds > 0)
-        {
-            std::vector<Eigen::Matrix4f> globals;
-            mesh.animation->CopyPoseGlobals(mesh.model, globals);
-            if (bonePhysics->second->Solve(globals, deltaSeconds))
-                mesh.animation->ApplyPoseGlobals(mesh.model, globals);
-        }
+        PROFILE_SCOPE("Anim.Pose");
         mesh.skinPose = mesh.animation->Pose(mesh.skinSection);
         mesh.localBoundsMin = mesh.skinPose->boundsMin;
         mesh.localBoundsMax = mesh.skinPose->boundsMax;
