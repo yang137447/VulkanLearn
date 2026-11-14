@@ -660,8 +660,10 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 - 资产：`BS_*.json`（`type: "blendSpace1D"`）由 SKM 的 `skinning.blendSpaces`
   引用；字段为 `name`、`axis {name:"Speed",min,max}`、`interpolation`
   （`EaseInOut`；`Linear` 被接受但运行期仍按 EaseInOut）、`weightSpeedPerSec`、
-  `samples[] {clip, threshold}`。sample 2..3 个、阈值严格递增、clip 不得重复且
-  必须属于同一 SKM 的 clips；运行期按资产 `weightSpeedPerSec` 平滑（0 = 当帧吸附）。
+  `samples[] {clip, threshold, rate?, syncGroup?}`。sample 2..3 个、阈值严格递增、
+  clip 不得重复且必须属于同一 SKM 的 clips；运行期按资产 `weightSpeedPerSec` 平滑
+  （0 = 当帧吸附）。`rate` ∈ (0,4] 缩放该 sample 的播放速度；`syncGroup` 指定 marker
+  名，A/B 都含该 marker 时按相邻 marker 区间映射相位，否则回退整段归一化。
 - 解析时机：组件在 World prepare 阶段创建，而 animation catalog 到 start 才下发；
   `AnimationGraphBlueprint` 在创建时尝试解析，若 catalog 尚未绑定则延迟到首次
   求值/首次访问 `GraphRuntime` 时解析并 Validate。

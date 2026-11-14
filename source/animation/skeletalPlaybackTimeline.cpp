@@ -275,13 +275,18 @@ void SkeletalPlayback::Stop()
     syncPendingHasTime = false;
 }
 
-void SkeletalPlayback::SetBlendSpace1D(const std::string& clipA, const std::string& clipB, float weight)
+void SkeletalPlayback::SetBlendSpace1D(const std::string& clipA, const std::string& clipB,
+    float weight, float rate, const std::string& syncGroup)
 {
     const auto& animation = asset->AnimationAsset();
     if (animation.clips.empty())
         throw std::invalid_argument("Blend space requires animation clips");
     if (!std::isfinite(weight))
         throw std::invalid_argument("Blend space weight must be finite");
+    if (!std::isfinite(rate) || rate <= 0 || rate > 4)
+        throw std::invalid_argument("Blend space rate must be in (0,4]");
+    if (syncGroup.size() > 64 || syncGroup.find('\0') != std::string::npos)
+        throw std::invalid_argument("Blend space sync group is invalid");
     if (clipB.empty() || clipB.size() > 256)
         throw std::invalid_argument("Blend space target clip is invalid");
     if (clipA != SelectedClipId())
@@ -299,6 +304,8 @@ void SkeletalPlayback::SetBlendSpace1D(const std::string& clipA, const std::stri
     // 先完成全部校验再改状态；失败时保持上一帧的姿态输出。
     blendSpaceClip = index;
     blendSpaceWeight = std::clamp(weight, 0.0f, 1.0f);
+    blendSpaceRate = rate;
+    blendSpaceSyncGroup = syncGroup;
     blendSpaceActive = true;
 }
 
@@ -306,6 +313,8 @@ void SkeletalPlayback::ClearBlendSpace()
 {
     blendSpaceActive = false;
     blendSpaceWeight = 0;
+    blendSpaceRate = 1;
+    blendSpaceSyncGroup.clear();
 }
 
 std::string SkeletalPlayback::BlendSpaceClipId() const

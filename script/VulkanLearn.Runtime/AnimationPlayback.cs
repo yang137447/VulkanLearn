@@ -38,7 +38,8 @@ public readonly record struct MontageNotifyInfo(string Kind, string Track, strin
 public readonly record struct WarpTarget(Vector3 Location, Quaternion? Rotation = null);
 public readonly record struct MontageWindowInfo(string Target, float Start, float End);
 // BS_*.json 展开后的 1D BlendSpace；C# 图在创建时把它解析成运行期 BlendSamples。
-public readonly record struct AnimationBlendSpaceSample(string Clip, float Threshold);
+public readonly record struct AnimationBlendSpaceSample(string Clip, float Threshold,
+    float Rate = 1, string SyncGroup = "");
 public sealed record AnimationBlendSpaceDefinition(string Name, float WeightSpeedPerSec,
     string Interpolation, IReadOnlyList<AnimationBlendSpaceSample> Samples);
 // BP_*.json 的逐骨权重；未列出的骨骼按 1.0（UE BlendProfile 语义）。
@@ -97,7 +98,8 @@ internal sealed record PoseDriverCommand(bool Enabled, string Asset);
 internal sealed record PostProcessCommand(bool Enabled, string Asset);
 internal sealed record BonePhysicsCommand(bool Enabled, string Asset, bool Debug);
 // BlendSpace1D 是播放命令之后的附加候选：只更新第二片段与权重，不推进第二时钟。
-internal sealed record BlendSpaceCommand(bool Enabled, string ClipA, string ClipB, float Weight)
+internal sealed record BlendSpaceCommand(bool Enabled, string ClipA, string ClipB, float Weight,
+    float Rate = 1, string SyncGroup = "")
 {
     public static readonly BlendSpaceCommand Disabled = new(false, "", "", 0);
 }
@@ -331,7 +333,8 @@ public sealed class AnimationPlayback
 
     // UE BlendSpace1D：A 是唯一时钟片段，B 按 A 的归一化相位采样后加权混合。
     // 权重越界按 [0,1] 夹紧；A/B 必须是 catalog 里的片段，A 必须等于本帧已播放的片段。
-    public void SetBlendSpace(string clipA, string clipB, float weight)
+    public void SetBlendSpace(string clipA, string clipB, float weight,
+        float rate = 1, string syncGroup = "")
     {
         CheckRequest();
         if (!ClipIds.Contains(clipA, StringComparer.Ordinal))
@@ -339,12 +342,16 @@ public sealed class AnimationPlayback
         if (!ClipIds.Contains(clipB, StringComparer.Ordinal))
             throw new ArgumentException($"Unknown animation clip: {clipB}", nameof(clipB));
         if (!float.IsFinite(weight)) throw new ArgumentOutOfRangeException(nameof(weight));
+        if (!float.IsFinite(rate) || rate <= 0 || rate > 4)
+            throw new ArgumentOutOfRangeException(nameof(rate));
+        if (syncGroup.Length > 64 || syncGroup.Contains('\0'))
+            throw new ArgumentException("Blend sync group is invalid.", nameof(syncGroup));
         if (string.Equals(clipA, clipB, StringComparison.Ordinal))
         {
             ClearBlendSpace();
             return;
         }
-        PendingBlendSpace = new(true, clipA, clipB, Math.Clamp(weight, 0, 1));
+        PendingBlendSpace = new(true, clipA, clipB, Math.Clamp(weight, 0, 1), rate, syncGroup);
     }
 
     public void ClearBlendSpace()
@@ -907,7 +914,10 @@ public static partial class NativeBridge
                 var samples = space.Value.GetProperty("samples").EnumerateArray()
                     .Select(sample => new AnimationBlendSpaceSample(
                         sample.GetProperty("clip").GetString()!,
-                        sample.GetProperty("threshold").GetSingle())).ToArray();
+                        sample.GetProperty("threshold").GetSingle(),
+                        sample.TryGetProperty("rate", out var rate) ? rate.GetSingle() : 1,
+                        sample.TryGetProperty("syncGroup", out var group)
+                            ? group.GetString() ?? "" : "")).ToArray();
                 animation.BlendSpaces[space.Name] = new AnimationBlendSpaceDefinition(
                     space.Name,
                     space.Value.TryGetProperty("weightSpeedPerSec", out var speed) ? speed.GetSingle() : 5,
@@ -1308,7 +1318,8 @@ public static partial class NativeBridge
             {
                 commands.Add(new { component = mesh.Id, mode = "blendSpace",
                     enabled = blendSpace.Enabled, clipA = blendSpace.ClipA,
-                    clipB = blendSpace.ClipB, weight = blendSpace.Weight });
+                    clipB = blendSpace.ClipB, weight = blendSpace.Weight,
+                    rate = blendSpace.Rate, syncGroup = blendSpace.SyncGroup });
                 mesh.Animation.PendingBlendSpace = null;
             }
             if (mesh.Animation.PendingAdditive is { } additive)

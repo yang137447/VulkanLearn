@@ -196,13 +196,23 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     // 混合发生在一次性过渡混合之前，等价于 UE“状态输出 → 过渡混合”的顺序。
     if (blendSpaceActive && blendSpaceClip < asset->AnimationAsset().clips.size())
     {
-        const auto& blendClip = asset->AnimationAsset().clips[blendSpaceClip].runtime;
+        const auto& blendAsset = asset->AnimationAsset().clips[blendSpaceClip];
+        const auto& blendClip = blendAsset.runtime;
         const float phase = rangeEnd > rangeStart
             ? std::clamp((sampleTime - rangeStart) / (rangeEnd - rangeStart), 0.0f, 1.0f)
             : 0.0f;
         const float blendDurationSeconds = blendClip ? blendClip->duration() : 0.0f;
-        float blendTime = phase * blendDurationSeconds;
-        if (!looping)
+        float blendTime = phase * blendDurationSeconds * blendSpaceRate;
+        if (!blendSpaceSyncGroup.empty())
+        {
+            const auto& sourceAsset = asset->AnimationAsset().clips[selected];
+            blendTime = MapBlendSpaceMarkerPhase(sourceAsset, sampleTime, blendAsset,
+                blendSpaceSyncGroup, blendTime);
+        }
+        if (blendDurationSeconds > 0 && blendTime >= blendDurationSeconds)
+            blendTime = looping ? std::fmod(blendTime, blendDurationSeconds)
+                : std::max(0.0f, blendDurationSeconds - 1e-4f);
+        else if (!looping)
             blendTime = std::min(blendTime, std::max(0.0f, blendDurationSeconds - 1e-4f));
         blendSampleTime = blendTime;
         auto blendPose = Sample(blendSpaceClip, blendTime);

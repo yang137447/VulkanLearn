@@ -208,6 +208,22 @@ BlendSpaceAsset ParseBlendSpace(const nlohmann::json& json, const std::string& b
         BlendSpaceSample entry;
         entry.clip = sample["clip"].get<std::string>();
         entry.threshold = sample["threshold"].get<float>();
+        if (sample.contains("rate"))
+        {
+            if (!sample["rate"].is_number() || !std::isfinite(sample["rate"].get<double>()))
+                throw fail("samples[].rate", "must be finite");
+            entry.rate = sample["rate"].get<float>();
+            if (!(entry.rate > 0.0f) || entry.rate > 4.0f)
+                throw fail("samples[].rate", "must be in (0,4]");
+        }
+        if (sample.contains("syncGroup"))
+        {
+            if (!sample["syncGroup"].is_string())
+                throw fail("samples[].syncGroup", "must be a string");
+            entry.syncGroup = sample["syncGroup"].get<std::string>();
+            if (entry.syncGroup.size() > 64 || entry.syncGroup.find('\0') != std::string::npos)
+                throw fail("samples[].syncGroup", "is invalid");
+        }
         if (!(entry.threshold > previous))
             throw fail("samples[].threshold", "must be strictly increasing");
         if (!clips.insert(entry.clip).second)
@@ -386,7 +402,8 @@ nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset)
     {
         auto samples = nlohmann::json::array();
         for (const BlendSpaceSample& sample : space.samples)
-            samples.push_back({{"clip", sample.clip}, {"threshold", sample.threshold}});
+            samples.push_back({{"clip", sample.clip}, {"threshold", sample.threshold},
+                {"rate", sample.rate}, {"syncGroup", sample.syncGroup}});
         blendSpaces[space.name] = {{"weightSpeedPerSec", space.weightSpeedPerSec},
             {"interpolation", space.interpolation}, {"samples", std::move(samples)}};
     }

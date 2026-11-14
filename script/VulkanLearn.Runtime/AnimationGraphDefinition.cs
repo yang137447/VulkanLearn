@@ -13,7 +13,8 @@ public static class AnimationGraphBlendAxis
 }
 
 // 每个 sample 是一个片段坐标；阈值必须严格递增，顺序即混合邻接顺序。
-public readonly record struct AnimationGraphBlendSample(string Clip, float Threshold);
+public readonly record struct AnimationGraphBlendSample(string Clip, float Threshold,
+    float Rate = 1, string SyncGroup = "");
 // BP_*.json 解析后的逐骨权重；未列出的骨骼按 1.0。
 public readonly record struct AnimationGraphBoneWeight(string Bone, float Weight);
 
@@ -777,7 +778,8 @@ public sealed class AnimationGraphDefinition
                         $"Animation graph state '{machine.Name}/{state.Name}' references unknown " +
                         $"blend space '{state.BlendSpace}'.");
                 var samples = space.Samples
-                    .Select(sample => new AnimationGraphBlendSample(sample.Clip, sample.Threshold))
+                    .Select(sample => new AnimationGraphBlendSample(sample.Clip, sample.Threshold,
+                        sample.Rate, sample.SyncGroup))
                     .ToArray();
                 states[stateIndex] = state.WithBlendSamples(samples, space.WeightSpeedPerSec);
             }
@@ -809,7 +811,8 @@ public sealed class AnimationGraphDefinition
                     $"Cached pose branch '{branch.Name}' references unknown blend space " +
                     $"'{branch.BlendSpace}'.");
             branches[index] = branch.WithBlendSamples(space.Samples
-                .Select(sample => new AnimationGraphBlendSample(sample.Clip, sample.Threshold))
+                .Select(sample => new AnimationGraphBlendSample(sample.Clip, sample.Threshold,
+                    sample.Rate, sample.SyncGroup))
                 .ToArray());
         }
         return new AnimationGraphDefinition

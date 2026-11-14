@@ -92,6 +92,8 @@ public readonly record struct AnimationGraphDecision(
     bool InPlace = true,
     string BlendClip = "",
     float BlendWeight = 0,
+    float BlendRate = 1,
+    string BlendSyncGroup = "",
     IReadOnlyList<string>? ConduitPath = null,
     string UseCachedPose = "",
     string AdditiveClip = "",
@@ -303,6 +305,8 @@ public sealed class AnimationGraphRuntime
         string clip = leafState.Clip;
         string blendClip = "";
         float blendWeight = 0;
+        float blendRate = 1;
+        string blendSyncGroup = "";
         string statePath = BuildStatePath();
         // 发生任何状态迁移或路径变化都从目标权重起步；重新进入同一路径也不能
         // 继承上一段播放的残留权重。
@@ -317,6 +321,8 @@ public sealed class AnimationGraphRuntime
             clip = sample.Clip;
             blendClip = sample.BlendClip;
             blendWeight = sample.Weight;
+            blendRate = sample.Rate;
+            blendSyncGroup = sample.SyncGroup;
         }
         else blendWeights.Remove(statePath);
         float stateTime = ResolveStateTime(leafMachine, leafState, input);
@@ -367,6 +373,8 @@ public sealed class AnimationGraphRuntime
             true,
             blendClip,
             blendWeight,
+            blendRate,
+            blendSyncGroup,
             conduitPath.Count > 0 ? conduitPath.ToArray() : null,
             leafState.UseCachedPose,
             leafState.AdditiveClip,
@@ -557,7 +565,7 @@ public sealed class AnimationGraphRuntime
     // 再按 5/s 向目标插值。A 固定为状态基准 sample（两个 sample 取 0，三个取 1），
     // B 只取基准左右相邻的 sample：这样跨内部 sample 边界时 A 的时钟不换片、
     // 相位不会重启；B 的权重按片段分别缓存，换片段对时从各自的历史值继续。
-    private (string Clip, string BlendClip, float Weight) ResolveBlendSample(
+    private (string Clip, string BlendClip, float Weight, float Rate, string SyncGroup) ResolveBlendSample(
         AnimationGraphState state, in AnimationGraphInput input, string statePath, float deltaTime)
     {
         var samples = state.BlendSamples;
@@ -565,21 +573,29 @@ public sealed class AnimationGraphRuntime
         int baseIndex = samples.Count >= 3 ? 1 : 0;
         string clip = samples[baseIndex].Clip;
         string blendClip;
+        float rate = 1;
+        string syncGroup = "";
         float target;
         if (baseIndex == 0)
         {
             blendClip = samples[1].Clip;
+            rate = samples[1].Rate;
+            syncGroup = samples[1].SyncGroup;
             target = SmoothstepAlpha(axis, samples[0].Threshold, samples[1].Threshold);
         }
         else if (axis <= samples[1].Threshold)
         {
             // 低段：A 是中间 sample，B 是首 sample；轴越低 B 权重越高。
             blendClip = samples[0].Clip;
+            rate = samples[0].Rate;
+            syncGroup = samples[0].SyncGroup;
             target = 1 - SmoothstepAlpha(axis, samples[0].Threshold, samples[1].Threshold);
         }
         else
         {
             blendClip = samples[2].Clip;
+            rate = samples[2].Rate;
+            syncGroup = samples[2].SyncGroup;
             target = SmoothstepAlpha(axis, samples[1].Threshold, samples[2].Threshold);
         }
 
@@ -588,14 +604,14 @@ public sealed class AnimationGraphRuntime
         if (!blendWeights.TryGetValue(key, out float current) || !float.IsFinite(current))
         {
             blendWeights[key] = target;
-            return (clip, blendClip, target);
+            return (clip, blendClip, target, rate, syncGroup);
         }
         float step = state.BlendWeightSpeedPerSec <= 0
             ? float.MaxValue
             : state.BlendWeightSpeedPerSec * Math.Max(0, deltaTime);
         float weight = Math.Clamp(target, current - step, current + step);
         blendWeights[key] = weight;
-        return (clip, blendClip, weight);
+        return (clip, blendClip, weight, rate, syncGroup);
     }
 
     private static float SmoothstepAlpha(float axis, float from, float to)

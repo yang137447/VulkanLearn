@@ -30,6 +30,9 @@ struct BlendSpaceSample
 {
     std::string clip;
     float threshold = 0;
+    // 每 sample 播放速率与 marker 同步名（空 = 整段归一化相位）。
+    float rate = 1;
+    std::string syncGroup;
 };
 
 struct BlendSpaceAsset
@@ -196,7 +199,8 @@ public:
     // UE BlendSpace1D 的运行时：A 仍是唯一推进时钟的片段（根位移/notify 仍属于它），
     // B 只按 A 的归一化相位采样后与 A 做加权局部姿态混合。clipA 必须与当前选中
     // 片段一致；权重在 [0,1] 内夹紧，0 = 纯 A，1 = 纯 B。切片段/Seek/Montage 会清除它。
-    void SetBlendSpace1D(const std::string& clipA, const std::string& clipB, float weight);
+    void SetBlendSpace1D(const std::string& clipA, const std::string& clipB, float weight,
+        float rate = 1, const std::string& syncGroup = "");
     void ClearBlendSpace();
     bool BlendSpaceActive() const { return blendSpaceActive; }
     float BlendSpaceWeight() const { return blendSpaceActive ? blendSpaceWeight : 0.0f; }
@@ -524,6 +528,8 @@ private:
     bool blendSpaceActive = false;
     size_t blendSpaceClip = 0;
     float blendSpaceWeight = 0;
+    float blendSpaceRate = 1;
+    std::string blendSpaceSyncGroup;
     // Additive 来源与缓存姿态；缓存按名字保存当前最终局部姿态。
     bool additiveActive = false;
     size_t additiveClip = 0;

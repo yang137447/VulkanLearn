@@ -130,17 +130,17 @@ Pose Graph 的 UE 依据来自 `tool/animation/inspect_third_person_additive.py`
 
 回归证据（Release，`artifacts/third-person-test-build`）：
 
-- `animation_preflight_tests`：378/378 通过，覆盖片段骨骼子集导入、
+- `animation_preflight_tests`：382/382 通过，覆盖片段骨骼子集导入、
   `SkeletalBlendSpace` 相位/端点/夹紧、`SkeletalAdditive`/`SkeletalCachedPose`，
   `SkeletalLayered` 的 mask/alpha/顺序，以及 `SkeletalSlotMontage` 的
-  masked overlay/完成语义。
-- `script_tests --gtest_filter=ScriptLocomotionTest.*`：36/36 通过，覆盖
+  masked overlay/完成语义，以及 `SkeletalSlotMontage` 的 BlendProfile 权重。
+- `script_tests --gtest_filter=ScriptLocomotionTest.*`：37/37 通过，覆盖
   alias/VerticalSpeed/BlendSpace（230/365/500、端点、三 sample 区间、0.1 s 重插值）
   与 Conduit（同帧落地、入口规则回落、链、环、入口 conduit）、以及
   `MaxTransitionsPerFrame`/`SkipFirstUpdateTransition`/Automatic Rule/
   MinTimeBeforeReentry/Transition Request、Pose Graph 决策输出与
-  LayeredBoneBlend 字段；校验 mask 扩展到 7864319。
-- 整套 `script_tests`：515 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
+  LayeredBoneBlend/BlendProfile 字段；校验 mask 扩展到 7864319。
+- 整套 `script_tests`：516 通过；失败为 19 个 `ScriptBuildTest`（在工程根创建
   `vl-build-*` 时被本机沙箱拒绝）加 1 个偶发的
   `FormalGaspFootPlacementDynamicQualityUsesFrozenRawRootStanceWindows`。
   后者曾在同一资源上出现约 11 cm 支撑误差；2026-10-24 的主干二进制通过同一用例，

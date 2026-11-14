@@ -181,6 +181,39 @@ inline LocalPose ApplyLayeredPose(const LocalPose& base, const LocalPose& overla
     return WriteKinematics(base, target);
 }
 
+// 同 syncGroup 名的 marker 区间映射：A 的 marker 段相位映射到 B 的对应段。
+inline std::vector<float> BlendSpaceMarkerTimes(const Clip& clip, const std::string& name)
+{
+    std::vector<float> times;
+    for (const auto& marker : clip.sequence.syncMarkers)
+        if (marker.name == name) times.push_back(marker.time);
+    std::sort(times.begin(), times.end());
+    return times;
+}
+
+inline float MapBlendSpaceMarkerPhase(const Clip& a, float aTime,
+    const Clip& b, const std::string& name, float fallback)
+{
+    const auto aTimes = BlendSpaceMarkerTimes(a, name);
+    const auto bTimes = BlendSpaceMarkerTimes(b, name);
+    if (aTimes.size() < 2 || bTimes.size() < 2) return fallback;
+    const float aDuration = a.runtime ? a.runtime->duration() : 0;
+    const float bDuration = b.runtime ? b.runtime->duration() : 0;
+    if (aDuration <= 0 || bDuration <= 0) return fallback;
+    size_t index = 0;
+    while (index + 1 < aTimes.size() && aTime >= aTimes[index + 1]) ++index;
+    const float a0 = aTimes[index];
+    const float a1 = index + 1 < aTimes.size() ? aTimes[index + 1] : aTimes[0] + aDuration;
+    if (a1 <= a0) return fallback;
+    const float phase = std::clamp((aTime - a0) / (a1 - a0), 0.0f, 1.0f);
+    const float b0 = bTimes[index % bTimes.size()];
+    float b1 = bTimes[(index + 1) % bTimes.size()];
+    if (b1 <= b0) b1 += bDuration;
+    float mapped = b0 + phase * (b1 - b0);
+    if (mapped >= bDuration) mapped -= bDuration;
+    return mapped;
+}
+
 // UE AAT_RotationOffsetMeshSpace：先把基础姿态的局部旋转累乘成 mesh-space 旋转，
 // 在 mesh 空间按 identity→delta 的权重累加，再按修改后的父链转回局部。
 // delta = additiveMesh * inverse(referenceMesh)；平移/缩放不受影响。

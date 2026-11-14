@@ -221,7 +221,8 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
         if (blendSubmitted && string.Equals(lastBlendClip, next.BlendClip, StringComparison.Ordinal) &&
             MathF.Abs(lastBlendWeight - next.BlendWeight) < 1e-4f)
             return;
-        Animation.SetBlendSpace(next.Clip, next.BlendClip, next.BlendWeight);
+        Animation.SetBlendSpace(next.Clip, next.BlendClip, next.BlendWeight,
+            next.BlendRate, next.BlendSyncGroup);
         blendSubmitted = true;
         lastBlendClip = next.BlendClip;
         lastBlendWeight = next.BlendWeight;

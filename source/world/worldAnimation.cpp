@@ -752,10 +752,16 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                 const std::string clipA = request.at("clipA").get<std::string>();
                 const std::string clipB = request.at("clipB").get<std::string>();
                 const float weight = request.at("weight").get<float>();
+                const float rate = request.contains("rate") && request.at("rate").is_number()
+                    ? request.at("rate").get<float>() : 1.0f;
+                const std::string syncGroup = request.contains("syncGroup") &&
+                    request.at("syncGroup").is_string()
+                    ? request.at("syncGroup").get<std::string>() : std::string();
                 if (clipA.empty() || clipA.size() > 256 || clipB.empty() || clipB.size() > 256 ||
-                    !std::isfinite(weight))
+                    !std::isfinite(weight) || !std::isfinite(rate) || rate <= 0 || rate > 4 ||
+                    syncGroup.size() > 64)
                     throw std::invalid_argument("Script.InvalidBlendSpaceRequest");
-                candidate.SetBlendSpace1D(clipA, clipB, weight);
+                candidate.SetBlendSpace1D(clipA, clipB, weight, rate, syncGroup);
             }
         }
         else if (request.value("mode", std::string()) == "additive")
