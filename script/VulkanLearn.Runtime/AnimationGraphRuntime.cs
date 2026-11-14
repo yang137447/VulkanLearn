@@ -108,7 +108,8 @@ public readonly record struct AnimationGraphDecision(
     bool LayerLoop = false,
     IReadOnlyList<string>? LayerMask = null,
     IReadOnlyList<AnimationGraphBoneWeight>? LayerWeights = null,
-    IReadOnlyList<AnimationGraphBoneWeight>? SlotWeights = null);
+    IReadOnlyList<AnimationGraphBoneWeight>? SlotWeights = null,
+    string PoseGraphNode = "");
 
 public sealed class AnimationGraphRuntime
 {
@@ -427,7 +428,8 @@ public sealed class AnimationGraphRuntime
             layerLoop,
             layerMask,
             layerWeights,
-            slotWeights);
+            slotWeights,
+            leafState.PoseNode);
     }
 
     // 只读诊断入口；不会推进状态机。

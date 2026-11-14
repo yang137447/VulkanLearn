@@ -124,6 +124,15 @@ public readonly record struct CachedPoseBranchSample(string Clip, float Threshol
 public sealed record CachedPoseBranchDefinition(string Name,
     IReadOnlyList<CachedPoseBranchSample> Samples, float Rate, bool Loop,
     string IdleClip = "", float IdleThreshold = 0);
+// 原生 Pose Graph（B1）：节点定义一次性下发，参数每帧下发。
+public readonly record struct PoseGraphSampleDefinition(string Clip, float Threshold,
+    float Rate, string SyncGroup);
+public sealed record PoseGraphNodeDefinition(string Id, string Kind, string[] Inputs,
+    string Clip, PoseGraphSampleDefinition[] Samples, float Rate, bool Loop,
+    float StartPosition, float Alpha, AnimationBoneWeight[] Weights,
+    string CacheName, string SlotName, string RootSource);
+internal sealed record PoseGraphCommand(PoseGraphNodeDefinition[] Nodes);
+internal sealed record PoseGraphValueCommand(string Id, float Value);
 internal sealed record CachedPoseBranchesCommand(CachedPoseBranchDefinition[] Branches);
 
 // catalog 曲线键：times/values 等长且已按时间排序；C# 只在本地做线性 clamp 采样。
@@ -164,6 +173,8 @@ public sealed class AnimationPlayback
     internal AdditiveCommand? PendingAdditive;
     internal CachedPoseCommand? PendingCachedPose;
     internal CachedPoseBranchesCommand? PendingCachedPoseBranches;
+    internal PoseGraphCommand? PendingPoseGraph;
+    internal readonly List<PoseGraphValueCommand> PendingPoseGraphValues = [];
     internal readonly Dictionary<string, float> PendingCachedPoseAxes = new(StringComparer.Ordinal);
     internal LayeredPoseCommand? PendingLayeredPose;
     internal string[] MontageSlotMask = [];
@@ -432,6 +443,32 @@ public sealed class AnimationPlayback
     {
         CheckRequest();
         PendingCachedPoseBranches = new(Array.Empty<CachedPoseBranchDefinition>());
+    }
+
+    // 原生多播放器 Pose Graph：节点定义一次性注册，参数用 SetPoseGraphValue 每帧下发。
+    public void SetPoseGraph(IReadOnlyList<PoseGraphNodeDefinition> nodes)
+    {
+        CheckRequest();
+        ArgumentNullException.ThrowIfNull(nodes);
+        if (nodes.Count == 0 || nodes.Count > 128)
+            throw new ArgumentException("Pose graph node budget exceeded.", nameof(nodes));
+        PendingPoseGraph = new(nodes.ToArray());
+    }
+
+    public void ClearPoseGraph()
+    {
+        CheckRequest();
+        PendingPoseGraph = new(Array.Empty<PoseGraphNodeDefinition>());
+        PendingPoseGraphValues.Clear();
+    }
+
+    public void SetPoseGraphValue(string id, float value)
+    {
+        CheckRequest();
+        if (string.IsNullOrWhiteSpace(id) || id.Length > 128 || id.Contains('\0'))
+            throw new ArgumentException("Pose graph node id is invalid.", nameof(id));
+        if (!float.IsFinite(value)) throw new ArgumentOutOfRangeException(nameof(value));
+        PendingPoseGraphValues.Add(new(id, value));
     }
 
     public void SetCachedPoseBranchAxis(string name, float value)
@@ -1360,6 +1397,35 @@ public static partial class NativeBridge
                     name = cachedPose.Name, blend = cachedPose.BlendSeconds });
                 mesh.Animation.PendingCachedPose = null;
             }
+            if (mesh.Animation.PendingPoseGraph is { } poseGraph)
+            {
+                commands.Add(new
+                {
+                    component = mesh.Id, mode = "poseGraph",
+                    nodes = poseGraph.Nodes.Select(node => new
+                    {
+                        id = node.Id, kind = node.Kind, inputs = node.Inputs,
+                        clip = node.Clip, rate = node.Rate, loop = node.Loop,
+                        startPosition = node.StartPosition, alpha = node.Alpha,
+                        cacheName = node.CacheName, slotName = node.SlotName,
+                        rootSource = node.RootSource,
+                        samples = node.Samples.Select(sample => new
+                        {
+                            clip = sample.Clip, threshold = sample.Threshold,
+                            rate = sample.Rate, syncGroup = sample.SyncGroup
+                        }).ToArray(),
+                        weights = node.Weights.Select(weight => new
+                        {
+                            bone = weight.Bone, weight = weight.Weight
+                        }).ToArray()
+                    }).ToArray()
+                });
+                mesh.Animation.PendingPoseGraph = null;
+            }
+            foreach (var value in mesh.Animation.PendingPoseGraphValues)
+                commands.Add(new { component = mesh.Id, mode = "poseGraphValue",
+                    id = value.Id, value = value.Value });
+            mesh.Animation.PendingPoseGraphValues.Clear();
             if (mesh.Animation.PendingLayeredPose is { } layered)
             {
                 commands.Add(new { component = mesh.Id, mode = "layeredPose",

@@ -417,7 +417,8 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             mode == "configurePoseDriver" || mode == "configurePostProcess" ||
             mode == "configureBonePhysics" || mode == "blendSpace" ||
             mode == "additive" || mode == "layeredPose" || mode == "cachedPose" ||
-            mode == "cachedPoseBranches" || mode == "cachedPoseBranchAxis";
+            mode == "cachedPoseBranches" || mode == "cachedPoseBranchAxis" ||
+            mode == "poseGraph" || mode == "poseGraphValue";
         if (!player || (!postProcessConfiguration && candidates.count(player)))
             throw std::invalid_argument("Script.InvalidAnimationTarget");
         const auto existing = candidates.find(player);
@@ -857,6 +858,87 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                 throw std::invalid_argument("Script.InvalidCachedPoseBranchAxisRequest");
             candidate.SetCachedPoseBranchAxis(
                 request["name"].get<std::string>(), request["value"].get<float>());
+        }
+        else if (request.value("mode", std::string()) == "poseGraph")
+        {
+            if (!request.contains("nodes") || !request.at("nodes").is_array())
+                throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+            std::vector<Animation::SkeletalPlayback::PoseGraphNode> nodes;
+            for (const auto& node : request.at("nodes"))
+            {
+                if (!node.is_object() || !node.contains("id") || !node["id"].is_string() ||
+                    !node.contains("kind") || !node["kind"].is_string())
+                    throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                Animation::SkeletalPlayback::PoseGraphNode parsed;
+                parsed.id = node["id"].get<std::string>();
+                const std::string kind = node["kind"].get<std::string>();
+                using Kind = Animation::SkeletalPlayback::PoseGraphNode::Kind;
+                if (kind == "SequencePlayer") parsed.kind = Kind::SequencePlayer;
+                else if (kind == "BlendSpacePlayer") parsed.kind = Kind::BlendSpacePlayer;
+                else if (kind == "Blend") parsed.kind = Kind::Blend;
+                else if (kind == "ApplyAdditive") parsed.kind = Kind::ApplyAdditive;
+                else if (kind == "LayeredBoneBlend") parsed.kind = Kind::LayeredBoneBlend;
+                else if (kind == "SaveCachedPose") parsed.kind = Kind::SaveCachedPose;
+                else if (kind == "UseCachedPose") parsed.kind = Kind::UseCachedPose;
+                else if (kind == "Slot") parsed.kind = Kind::Slot;
+                else if (kind == "Output") parsed.kind = Kind::Output;
+                else throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                if (node.contains("inputs") && node["inputs"].is_array())
+                    for (const auto& input : node["inputs"])
+                    {
+                        if (!input.is_string())
+                            throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                        parsed.inputs.push_back(input.get<std::string>());
+                    }
+                if (node.contains("clip") && node["clip"].is_string())
+                    parsed.clip = node["clip"].get<std::string>();
+                if (node.contains("rate")) parsed.rate = node["rate"].get<float>();
+                if (node.contains("loop")) parsed.loop = node["loop"].get<bool>();
+                if (node.contains("startPosition"))
+                    parsed.startPosition = node["startPosition"].get<float>();
+                if (node.contains("alpha")) parsed.alpha = node["alpha"].get<float>();
+                if (node.contains("cacheName") && node["cacheName"].is_string())
+                    parsed.cacheName = node["cacheName"].get<std::string>();
+                if (node.contains("slotName") && node["slotName"].is_string())
+                    parsed.slotName = node["slotName"].get<std::string>();
+                if (node.contains("rootSource") && node["rootSource"].is_string())
+                    parsed.rootSource = node["rootSource"].get<std::string>();
+                if (node.contains("samples") && node["samples"].is_array())
+                    for (const auto& sample : node["samples"])
+                    {
+                        if (!sample.is_object() || !sample.contains("clip") ||
+                            !sample["clip"].is_string() || !sample.contains("threshold") ||
+                            !sample["threshold"].is_number())
+                            throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                        Animation::SkeletalPlayback::PoseGraphSample parsedSample;
+                        parsedSample.clip = sample["clip"].get<std::string>();
+                        parsedSample.threshold = sample["threshold"].get<float>();
+                        // 原生 B1 图的 BlendSpace sample 只带 threshold；per-sample rate /
+                        // syncGroup 仍由旧 BlendSpace 路径支持，图路径后续补齐。
+                        parsed.samples.push_back(std::move(parsedSample));
+                    }
+                if (node.contains("weights") && node["weights"].is_array())
+                    for (const auto& weight : node["weights"])
+                    {
+                        if (!weight.is_object() || !weight.contains("bone") ||
+                            !weight["bone"].is_string() || !weight.contains("weight") ||
+                            !weight["weight"].is_number())
+                            throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                        parsed.weights.push_back({weight["bone"].get<std::string>(),
+                            weight["weight"].get<float>()});
+                    }
+                nodes.push_back(std::move(parsed));
+            }
+            if (nodes.empty()) candidate.ClearPoseGraph();
+            else candidate.SetPoseGraph(std::move(nodes));
+        }
+        else if (request.value("mode", std::string()) == "poseGraphValue")
+        {
+            if (!request.contains("id") || !request["id"].is_string() ||
+                !request.contains("value") || !request["value"].is_number())
+                throw std::invalid_argument("Script.InvalidPoseGraphValueRequest");
+            candidate.SetPoseGraphValue(request["id"].get<std::string>(),
+                request["value"].get<float>());
         }
         else if (request.value("mode", std::string()) == "layeredPose")
         {

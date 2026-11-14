@@ -40,6 +40,8 @@ public sealed class AnimationPoseNode
     // SaveCachedPose / UseCachedPose / Slot
     public string CacheName { get; init; } = "";
     public string SlotName { get; init; } = "";
+    // Output 节点的根位移/notify 来源（Player 节点 id）。
+    public string RootSource { get; init; } = "";
 
     internal AnimationPoseNode WithBlendSamples(IReadOnlyList<AnimationGraphBlendSample> samples) => new()
     {
@@ -55,8 +57,17 @@ public sealed class AnimationPoseNode
         Alpha = Alpha,
         Weights = Weights,
         CacheName = CacheName,
-        SlotName = SlotName
+        SlotName = SlotName,
+        RootSource = RootSource
     };
+
+    internal PoseGraphNodeDefinition ToDefinition() => new(
+        Id, Kind.ToString(), Inputs.ToArray(), Clip,
+        BlendSamples.Select(sample => new PoseGraphSampleDefinition(
+            sample.Clip, sample.Threshold, sample.Rate, sample.SyncGroup)).ToArray(),
+        Rate, Loop, StartPosition, Alpha,
+        Weights.Select(weight => new AnimationBoneWeight(weight.Bone, weight.Weight)).ToArray(),
+        CacheName, SlotName, RootSource);
 }
 
 // 扁平化结果：字段与 AnimationGraphDecision 的子集一一对应。

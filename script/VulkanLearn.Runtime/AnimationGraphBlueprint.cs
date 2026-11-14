@@ -25,6 +25,9 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     private float lastSlotAlpha = 1;
     private bool cachedPoseSubmitted;
     private bool cachedPoseBranchesSubmitted;
+    private bool nativePoseGraphActive;
+    private bool poseGraphSubmitted;
+    private float lastPlanarSpeed;
     private readonly Dictionary<string, float> cachedPoseBranchAxes = new(StringComparer.Ordinal);
 
     public AnimationGraphDefinition Graph { get; private set; } = null!;
@@ -92,10 +95,38 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     protected void EvaluateGraph(in AnimationGraphInput input)
     {
         EnsureGraphPrepared();
+        lastPlanarSpeed = input.PlanarSpeed;
+        if (!poseGraphSubmitted && Graph.PoseGraph is { Nodes.Count: > 0 } poseGraph &&
+            CanEvaluateNatively(poseGraph))
+        {
+            Animation.SetPoseGraph(poseGraph.Nodes.Select(node => node.ToDefinition()).ToArray());
+            nativePoseGraphActive = true;
+            poseGraphSubmitted = true;
+        }
         SubmitCachedPoseBranches();
         SubmitCachedPoseBranchAxes(input.PlanarSpeed);
         decision = runtime!.Update(input);
         SubmitDecision(decision);
+    }
+
+    // 原生图目前要求：单 Output、每个 UseCachedPose 都由图内 Save 提供、
+    // BlendSpacePlayer 已解析 samples。
+    private static bool CanEvaluateNatively(AnimationPoseGraph graph)
+    {
+        var saves = new HashSet<string>(StringComparer.Ordinal);
+        int outputs = 0;
+        foreach (var node in graph.Nodes)
+        {
+            if (node.Kind == AnimationPoseNodeKind.SaveCachedPose) saves.Add(node.CacheName);
+            if (node.Kind == AnimationPoseNodeKind.Output) ++outputs;
+            if (node.Kind == AnimationPoseNodeKind.BlendSpacePlayer &&
+                node.BlendSamples is not { Count: > 0 }) return false;
+        }
+        if (outputs != 1) return false;
+        foreach (var node in graph.Nodes)
+            if (node.Kind == AnimationPoseNodeKind.UseCachedPose && !saves.Contains(node.CacheName))
+                return false;
+        return true;
     }
 
     // 命名分支只在图就绪后提交一次；轴值按平面速度逐帧下发（变化才发）。
@@ -128,6 +159,14 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
 
     protected virtual void SubmitDecision(in AnimationGraphDecision next)
     {
+        if (nativePoseGraphActive && next.PoseGraphNode.Length > 0 && Graph.PoseGraph is { } poseGraph)
+        {
+            // 原生图拥有完整姿态链；这里只下发每帧轴值，不再提交旧扁平命令。
+            foreach (var node in poseGraph.Nodes)
+                if (node.Kind == AnimationPoseNodeKind.BlendSpacePlayer)
+                    Animation.SetPoseGraphValue(node.Id, lastPlanarSpeed);
+            return;
+        }
         var playback = Animation.State;
         if (next.UseCachedPose.Length > 0)
         {

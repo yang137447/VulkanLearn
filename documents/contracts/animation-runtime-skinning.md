@@ -763,8 +763,11 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   节点表达）；`Slot` 节点当前只是插入点，montage overlay 仍由宿主播放层承担。
   过渡（`TransitionTo`/inertialization）仍作用在图输出姿态之上。
 - 限制：单 Output、单 additive/layer 链；BlendSpace 仍 1D/Speed、2..3 sample；
-  无图内 Montage/Transition 节点；C# 侧 `SetPoseGraph` 桥接与 Third Person 迁移
-  尚未接入（本阶段只提供原生运行时与测试）。
+  无图内 Montage/Transition 节点。C# 桥已接通（`poseGraph`/`poseGraphValue`），
+  但只有满足“每个 `UseCachedPose` 都有图内 `SaveCachedPose` 生产者”的图才走原生；
+  Third Person 的 Locomotion 来自内层状态机，暂未能在图内表达 Save，因此仍走旧
+  扁平化路径。图内 BlendSpace sample 目前只带 threshold，per-sample rate/syncGroup
+  仍由旧 BlendSpace 路径支持。
 
 - `SaveCachedPose` / `UseCachedPose`（快照路径）：原生播放器按名字保存当前最终
   局部姿态（含关节数的快照）。`UseCachedPose` 状态下不推进原片段时钟、不产生
