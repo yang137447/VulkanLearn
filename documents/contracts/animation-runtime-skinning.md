@@ -729,6 +729,20 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 - `ReinitializeOnBecomingRelevant`：VL 没有“状态机停止 tick 后重新变为相关”的
   概念，该 UE 设置不实现；VL 的图宿主每帧都会求值。
 
+### Pose-node graph（前端模型，纯代码）
+
+- `AnimationPoseGraph` 是 C# 纯代码节点图：节点 + 输入引用，支持
+  `SequencePlayer`、`BlendSpacePlayer`、`Blend`、`ApplyAdditive`、
+  `LayeredBoneBlend`、`SaveCachedPose`、`UseCachedPose`、`Slot`、`Output`；
+  没有可视化编辑器。
+- 校验：节点 id 唯一、单一 `Output`、无环、输入数量正确、所有节点从 Output
+  可达、缓存名唯一；`UseCachedPose` 必须引用图内的 `SaveCachedPose`。
+- 求值：拓扑序记忆化求值，`Save/Use` 按名字同帧连接；结果扁平化为
+  `AnimationPoseResult`，字段对应现有原生决策子集。
+- 扁平化限制：`Blend` 只支持两个单片段 player；每条链最多一个 additive、
+  一个 layered、一个 slot；`BlendSpacePlayer` 只能作基底；尚未接入状态机或
+  原生多播放器，`ThirdPersonLocomotionGraph` 仍走现有路径。
+
 ### Pose Graph：Cached Pose / Additive / Slot
 
 - `SaveCachedPose` / `UseCachedPose`（快照路径）：原生播放器按名字保存当前最终

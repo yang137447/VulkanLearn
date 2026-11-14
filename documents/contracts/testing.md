@@ -413,6 +413,8 @@ sample/权重选择，以及 Conduit 的同帧落地、入口规则回落、链�
 它只证明图决策与局部混合，不证明资源侧姿态观感。
 原生 `SkeletalAdditive` 验证 LocalSpaceBase 增量的平移/旋转/缩放复合与 alpha
 收缩，`SkeletalCachedPose` 验证快照冻结、无根位移与 additive 叠加。
+纯代码 `AnimationPoseGraph` 由 `PoseGraphFlattensNodesCachesAndRejectsCycles`
+验证拓扑求值、Save/Use 同帧、Blend/Additive/Layer/Slot 扁平化与环/未知输入拒绝。
 
 `EditorUiTest.MotionMatching*` 验证同代查询/代价、Selected/Continue/前五名、
 文字转义、固定槽位、展开状态的暂停静默、隐藏条件、短视口滚动/输入隔离和单行摘要；

@@ -60,6 +60,9 @@ Maps/SC_third_person/
   `FAnimNode_StateMachine` 的循环预算与首帧丢混合语义实现；Third Person 图显式
   使用 UE 类默认值 3 / true，VL 自身的默认值保持 1 / false 以保留原有预算与混合
   行为；entry 帧开始检查常规转移是与 UE 对齐的新行为。
+- `AnimationPoseGraph`：纯代码节点图（无编辑器），把 Player/Blend/Additive/
+  Layer/Slot/CachedPose 求值后扁平化到现有原生决策；尚未替换状态机输出，
+  先用于验证节点语义与后续迁移。
 - `AutomaticRule` / `MinTimeBeforeReentry` / `TransitionRequest`：按剩余时间触发
   （开启后忽略普通条件）、按状态机时钟冷却、事件请求在下一个 `Update` 内消费一次；
   automatic 只在源状态就是当前播放片段时有效，loop 按当前循环剩余时间计算。
