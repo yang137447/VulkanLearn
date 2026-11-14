@@ -914,8 +914,18 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                         Animation::SkeletalPlayback::PoseGraphSample parsedSample;
                         parsedSample.clip = sample["clip"].get<std::string>();
                         parsedSample.threshold = sample["threshold"].get<float>();
-                        // 原生 B1 图的 BlendSpace sample 只带 threshold；per-sample rate /
-                        // syncGroup 仍由旧 BlendSpace 路径支持，图路径后续补齐。
+                        if (sample.contains("rate"))
+                        {
+                            if (!sample["rate"].is_number())
+                                throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                            parsedSample.rate = sample["rate"].get<float>();
+                        }
+                        if (sample.contains("syncGroup"))
+                        {
+                            if (!sample["syncGroup"].is_string())
+                                throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                            parsedSample.syncGroup = sample["syncGroup"].get<std::string>();
+                        }
                         parsed.samples.push_back(std::move(parsedSample));
                     }
                 if (node.contains("weights") && node["weights"].is_array())

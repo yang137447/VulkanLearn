@@ -70,6 +70,13 @@ void SkeletalPlayback::SetPoseGraph(std::vector<PoseGraphNode> nodes)
                     node.samples[sample - 1].threshold))
                     throw std::invalid_argument(
                         "Pose graph sample thresholds must increase: " + node.id);
+                if (!std::isfinite(node.samples[sample].rate) ||
+                    node.samples[sample].rate <= 0 || node.samples[sample].rate > 4)
+                    throw std::invalid_argument(
+                        "Pose graph sample rate is invalid: " + node.id);
+                if (node.samples[sample].syncGroup.size() > 64)
+                    throw std::invalid_argument(
+                        "Pose graph sample sync group is too long: " + node.id);
             }
         }
         else
@@ -269,7 +276,19 @@ LocalPose SkeletalPlayback::EvaluatePoseGraph(float deltaSeconds)
             LocalPose firstPose = Sample(firstClip, state.time);
             const float phase = duration > 0 ? std::clamp(state.time / duration, 0.0f, 1.0f) : 0;
             const float secondDuration = clips.at(secondClip).runtime->duration();
-            LocalPose secondPose = Sample(secondClip, phase * secondDuration);
+            // per-sample rate：B 的周期按 rate 比例缩放；同 syncGroup 有 marker 时
+            // 用 marker 区间映射相位，否则回退整段归一化。
+            const float rateScale = node.samples[first].rate > 0
+                ? node.samples[second].rate / node.samples[first].rate : 1.0f;
+            float secondTime = phase * secondDuration * rateScale;
+            if (!node.samples[second].syncGroup.empty())
+                secondTime = MapBlendSpaceMarkerPhase(clips.at(firstClip), state.time,
+                    clips.at(secondClip), node.samples[second].syncGroup, secondTime);
+            if (node.loop && secondDuration > 0)
+                secondTime = std::fmod(secondTime, secondDuration);
+            else secondTime = std::min(secondTime,
+                std::max(0.0f, secondDuration - 1e-4f));
+            LocalPose secondPose = Sample(secondClip, secondTime);
             if (state.weight <= 0) poseGraphNodePoses[node.id] = std::move(firstPose);
             else if (state.weight >= 1) poseGraphNodePoses[node.id] = std::move(secondPose);
             else poseGraphNodePoses[node.id] = Crossfade(firstPose, std::move(secondPose),

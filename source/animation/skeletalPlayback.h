@@ -269,6 +269,9 @@ public:
     {
         std::string clip;
         float threshold = 0;
+        // 图内 BlendSpacePlayer 的 per-sample 播放速率与 marker 同步组。
+        float rate = 1;
+        std::string syncGroup;
     };
     struct PoseGraphNode
     {
