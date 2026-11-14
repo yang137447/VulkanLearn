@@ -576,16 +576,33 @@ void SkeletalPlayback::CaptureCachedPose(const std::string& name)
     cachedPoses[name] = displayedLocals;
 }
 
-void SkeletalPlayback::UseCachedPose(const std::string& name)
+void SkeletalPlayback::UseCachedPose(const std::string& name, float blendSeconds)
 {
     if (name.empty() || name.size() > 128)
         throw std::invalid_argument("Cached pose name is invalid");
+    if (!std::isfinite(blendSeconds) || blendSeconds < 0 || blendSeconds > 10)
+        throw std::invalid_argument("Cached pose blend must be in [0,10]");
+    // 宿主每帧都会重复提交 UseCachedPose；同一状态只允许初始化一次混合。
+    if (useCachedPoseActive && useCachedPoseName == name) return;
     const bool isBranch = std::any_of(cachedPoseBranches.begin(), cachedPoseBranches.end(),
         [&](const CachedPoseBranchState& branch) { return branch.definition.name == name; });
     if (!isBranch && cachedPoses.find(name) == cachedPoses.end())
         throw std::invalid_argument("Unknown cached pose: " + name);
     useCachedPoseName = name;
     useCachedPoseActive = true;
+    // 进入缓存姿态（如 Fall→Land）必须能把当前姿态作为混合源，否则会硬切。
+    if (blendSeconds > 0 && !displayedLocals.empty())
+    {
+        blendSource = displayedLocals;
+        blendDuration = blendSeconds;
+        blendElapsed = 0;
+        inertialization.Clear();
+    }
+    else
+    {
+        blendSource.clear();
+        inertialization.Clear();
+    }
 }
 
 void SkeletalPlayback::ClearCachedPose()
@@ -611,8 +628,21 @@ void SkeletalPlayback::SetCachedPoseBranches(std::vector<CachedPoseBranch> branc
                 "Cached pose branch requires 1..3 samples: " + branch.name);
         if (!std::isfinite(branch.rate) || branch.rate <= 0 || branch.rate > 4)
             throw std::invalid_argument("Cached pose branch rate is invalid: " + branch.name);
+        if (!std::isfinite(branch.idleThreshold) || branch.idleThreshold < 0)
+            throw std::invalid_argument("Cached pose branch idle threshold is invalid: " + branch.name);
         CachedPoseBranchState state;
         state.definition = std::move(branch);
+        if (!state.definition.idleClip.empty())
+        {
+            size_t idle = 0;
+            while (idle < animation.clips.size() &&
+                animation.clips[idle].id != state.definition.idleClip)
+                ++idle;
+            if (idle == animation.clips.size())
+                throw std::invalid_argument(
+                    "Unknown cached pose branch idle clip: " + state.definition.idleClip);
+            state.idleClipIndex = idle;
+        }
         for (const CachedPoseBranchSample& sample : state.definition.samples)
         {
             size_t index = 0;
@@ -689,6 +719,9 @@ LocalPose SkeletalPlayback::Sample(size_t clipIndex, float sampleTime) const
 
 LocalPose SkeletalPlayback::PreviewPose(float aheadSeconds) const
 {
+    // 缓存姿态没有自己的片段时钟：离开 Land 时若仍按旧片段采样，会把“缓存姿态 vs
+    // 旧片段”的差异当成巨大速度，惯性化导致落地后骨骼单帧乱飞。
+    if (useCachedPoseActive) return displayedLocals;
     if (!playing || Duration() == 0) return displayedLocals;
     const float rangeStart = PlaybackRangeStart();
     const float rangeEnd = PlaybackRangeEnd();
@@ -710,6 +743,23 @@ LocalPose SkeletalPlayback::PreviewPose(float aheadSeconds) const
         clipSampleTime = sample.clipTime;
     }
     auto locals = Sample(sampleClip, clipSampleTime);
+    // 惯性化源速度必须沿“实际输出姿态曲线”估计；BlendSpace 的 B 片段也属于该曲线，
+    // 否则从 Walk/Run 混合态停下时会把 A/B 差异误当成巨大速度，导致骨骼单帧乱飞。
+    if (blendSpaceActive && blendSpaceClip < asset->AnimationAsset().clips.size())
+    {
+        const auto& blendClip = asset->AnimationAsset().clips[blendSpaceClip].runtime;
+        const float phase = rangeEnd > rangeStart
+            ? std::clamp((sampleTime - rangeStart) / (rangeEnd - rangeStart), 0.0f, 1.0f)
+            : 0.0f;
+        const float blendDurationSeconds = blendClip ? blendClip->duration() : 0.0f;
+        float blendTime = phase * blendDurationSeconds;
+        if (!looping)
+            blendTime = std::min(blendTime, std::max(0.0f, blendDurationSeconds - 1e-4f));
+        LocalPose blendPose = Sample(blendSpaceClip, blendTime);
+        if (blendSpaceWeight >= 1.0f) locals = std::move(blendPose);
+        else if (blendSpaceWeight > 0.0f)
+            locals = Crossfade(locals, std::move(blendPose), blendSpaceWeight, asset->mesh);
+    }
     const float elapsed = std::min(blendElapsed + aheadSeconds, blendDuration);
     if (!inertialization.Empty() && elapsed < blendDuration)
     {
@@ -732,6 +782,8 @@ void SkeletalPlayback::TransitionTo(const std::string& clipId, float seconds, bo
         throw std::invalid_argument("Transition time must be inside the clip");
     if (!std::isfinite(blendSeconds) || blendSeconds < 0)
         throw std::invalid_argument("Transition duration must be finite and nonnegative");
+    // 首帧尚无 displayed 姿态：任何混合/速度估计都没有源，退化为硬切。
+    if (displayedLocals.empty()) blendSeconds = 0;
     // 根消费策略属于位移所有权边界。平滑过渡不能同时保证首帧连续和立即移除旧根，
     // 因而策略切换必须由调用方显式选零时长硬切；普通 MM 的 in-place 策略保持不变。
     if (blendSeconds > 0 && removeRoot != inPlace)

@@ -241,7 +241,8 @@ public:
     // UE SaveCachedPose/UseCachedPose 的单机近似：保存当前最终局部姿态，
     // 之后以该快照为 Base（不推进片段时钟、不产生根位移/notify），可再叠加 additive。
     void CaptureCachedPose(const std::string& name);
-    void UseCachedPose(const std::string& name);
+    // blendSeconds > 0 时从当前 displayed 姿态交叉淡入缓存姿态；0 = 硬切。
+    void UseCachedPose(const std::string& name, float blendSeconds = 0);
     void ClearCachedPose();
     // 命名 pose 分支：每 Tick 在主状态采样之前求值，结果进入同帧缓存，
     // UseCachedPose 优先读取它；不是任意 DAG，只支持 clip 或 1D blend 分支。
@@ -256,6 +257,9 @@ public:
         std::vector<CachedPoseBranchSample> samples;
         float rate = 1;
         bool loop = true;
+        // 速度轴低于阈值时用 Idle 子状态，模拟 UE 的 Locomotion 状态机输出。
+        std::string idleClip;
+        float idleThreshold = 0;
     };
     void SetCachedPoseBranches(std::vector<CachedPoseBranch> branches);
     void ClearCachedPoseBranches();
@@ -564,6 +568,8 @@ private:
     {
         CachedPoseBranch definition;
         std::vector<size_t> clipIndices;
+        size_t idleClipIndex = static_cast<size_t>(-1);
+        float idleTime = 0;
         float time = 0;
         float weight = 0;
         bool weightValid = false;

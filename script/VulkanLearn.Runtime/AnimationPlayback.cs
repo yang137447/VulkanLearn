@@ -108,9 +108,9 @@ internal sealed record AdditiveCommand(bool Enabled, string Clip, float Alpha, b
 {
     public static readonly AdditiveCommand Disabled = new(false, "", 0, false);
 }
-internal sealed record CachedPoseCommand(bool Enabled, bool Capture, string Name)
+internal sealed record CachedPoseCommand(bool Enabled, bool Capture, string Name, float BlendSeconds = 0)
 {
-    public static readonly CachedPoseCommand Disabled = new(false, false, "");
+    public static readonly CachedPoseCommand Disabled = new(false, false, "", 0);
 }
 // LayeredBoneBlend：overlay 片段按骨骼 mask 混合到当前姿态。
 internal sealed record LayeredPoseCommand(bool Enabled, string Clip, float Alpha, bool Loop,
@@ -122,7 +122,8 @@ internal sealed record LayeredPoseCommand(bool Enabled, string Clip, float Alpha
 // 图级命名 pose 分支：每帧在主状态之前求值，UseCachedPose 同帧读取。
 public readonly record struct CachedPoseBranchSample(string Clip, float Threshold);
 public sealed record CachedPoseBranchDefinition(string Name,
-    IReadOnlyList<CachedPoseBranchSample> Samples, float Rate, bool Loop);
+    IReadOnlyList<CachedPoseBranchSample> Samples, float Rate, bool Loop,
+    string IdleClip = "", float IdleThreshold = 0);
 internal sealed record CachedPoseBranchesCommand(CachedPoseBranchDefinition[] Branches);
 
 // catalog 曲线键：times/values 等长且已按时间排序；C# 只在本地做线性 clamp 采样。
@@ -386,12 +387,14 @@ public sealed class AnimationPlayback
         PendingCachedPose = new(true, true, name);
     }
 
-    public void UseCachedPose(string name)
+    public void UseCachedPose(string name, float blendSeconds = 0)
     {
         CheckRequest();
         if (string.IsNullOrWhiteSpace(name) || name.Length > 128 || name.Contains('\0'))
             throw new ArgumentException("Cached pose name is invalid.", nameof(name));
-        PendingCachedPose = new(true, false, name);
+        if (!float.IsFinite(blendSeconds) || blendSeconds < 0 || blendSeconds > 10)
+            throw new ArgumentOutOfRangeException(nameof(blendSeconds));
+        PendingCachedPose = new(true, false, name, blendSeconds);
     }
 
     public void ClearCachedPose()
@@ -1336,6 +1339,8 @@ public static partial class NativeBridge
                     branches = cachedBranches.Branches.Select(branch => new
                     {
                         name = branch.Name,
+                        idleClip = branch.IdleClip,
+                        idleThreshold = branch.IdleThreshold,
                         samples = branch.Samples.Select(sample => new
                         {
                             clip = sample.Clip, threshold = sample.Threshold
@@ -1352,7 +1357,7 @@ public static partial class NativeBridge
             {
                 commands.Add(new { component = mesh.Id, mode = "cachedPose",
                     enabled = cachedPose.Enabled, capture = cachedPose.Capture,
-                    name = cachedPose.Name });
+                    name = cachedPose.Name, blend = cachedPose.BlendSeconds });
                 mesh.Animation.PendingCachedPose = null;
             }
             if (mesh.Animation.PendingLayeredPose is { } layered)

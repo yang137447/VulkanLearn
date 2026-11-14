@@ -56,6 +56,7 @@ public sealed class AnimationGraphState
     public string BlendAxis { get; init; } = AnimationGraphBlendAxis.Speed;
     // BS_*.json 的资产名；宿主创建时解析成 BlendSamples，未解析时校验失败。
     public string BlendSpace { get; init; } = "";
+    // 速度 <= IdleThreshold 时改播 Idle 子状态（模拟 UE Locomotion 状态机）。
     public IReadOnlyList<AnimationGraphBlendSample> BlendSamples { get; init; } =
         Array.Empty<AnimationGraphBlendSample>();
     // BS_*.json 的 weightSpeedPerSec；0 表示不做平滑（当帧吸附到目标权重）。
@@ -656,6 +657,9 @@ public sealed class AnimationGraphCachedPoseBranch
     public string Name { get; init; } = "";
     public string Clip { get; init; } = "";
     public string BlendSpace { get; init; } = "";
+    // 速度 <= IdleThreshold 时改播 Idle 子状态（模拟 UE Locomotion 状态机）。
+    public string IdleClip { get; init; } = "";
+    public float IdleThreshold { get; init; }
     public IReadOnlyList<AnimationGraphBlendSample> BlendSamples { get; init; } =
         Array.Empty<AnimationGraphBlendSample>();
     public float Rate { get; init; } = 1;
@@ -676,6 +680,14 @@ public sealed class AnimationGraphCachedPoseBranch
                 "Clip, BlendSpace or BlendSamples.");
         if (!float.IsFinite(Rate) || Rate <= 0 || Rate > 4)
             throw new InvalidOperationException($"Cached pose branch '{Name}' rate is invalid.");
+        if (!float.IsFinite(IdleThreshold) || IdleThreshold < 0 || IdleThreshold > 10000)
+            throw new InvalidOperationException(
+                $"Cached pose branch '{Name}' idle threshold is invalid.");
+        if (!string.IsNullOrWhiteSpace(IdleClip) &&
+            (IdleClip.Trim().Length != IdleClip.Length || IdleClip.Length > 128 ||
+             IdleClip.Contains('\0')))
+            throw new InvalidOperationException(
+                $"Cached pose branch '{Name}' idle clip is invalid.");
         if (hasClip)
         {
             if (Clip.Trim().Length != Clip.Length || Clip.Length > 128 || Clip.Contains('\0'))
@@ -714,6 +726,8 @@ public sealed class AnimationGraphCachedPoseBranch
         Name = Name,
         Clip = Clip,
         BlendSpace = "",
+        IdleClip = IdleClip,
+        IdleThreshold = IdleThreshold,
         BlendSamples = samples,
         Rate = Rate,
         Loop = Loop

@@ -796,12 +796,21 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             const std::string name = request.at("name").get<std::string>();
             if (name.empty() || name.size() > 128)
                 throw std::invalid_argument("Script.InvalidCachedPoseRequest");
+            float blendSeconds = 0;
+            if (request.contains("blend"))
+            {
+                if (!request.at("blend").is_number())
+                    throw std::invalid_argument("Script.InvalidCachedPoseRequest");
+                blendSeconds = request.at("blend").get<float>();
+                if (!std::isfinite(blendSeconds) || blendSeconds < 0 || blendSeconds > 10)
+                    throw std::invalid_argument("Script.InvalidCachedPoseRequest");
+            }
             if (!request.at("enabled").get<bool>())
                 candidate.ClearCachedPose();
             else if (request.at("capture").get<bool>())
                 candidate.CaptureCachedPose(name);
             else
-                candidate.UseCachedPose(name);
+                candidate.UseCachedPose(name, blendSeconds);
         }
         else if (request.value("mode", std::string()) == "cachedPoseBranches")
         {
@@ -820,6 +829,14 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                 branch.name = node["name"].get<std::string>();
                 branch.rate = node["rate"].get<float>();
                 branch.loop = node["loop"].get<bool>();
+                if (node.contains("idleClip") && node["idleClip"].is_string())
+                    branch.idleClip = node["idleClip"].get<std::string>();
+                if (node.contains("idleThreshold"))
+                {
+                    if (!node["idleThreshold"].is_number())
+                        throw std::invalid_argument("Script.InvalidCachedPoseBranchesRequest");
+                    branch.idleThreshold = node["idleThreshold"].get<float>();
+                }
                 for (const auto& sample : node["samples"])
                 {
                     if (!sample.is_object() || !sample.contains("clip") ||

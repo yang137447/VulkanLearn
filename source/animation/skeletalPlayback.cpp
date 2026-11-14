@@ -492,6 +492,24 @@ void SkeletalPlayback::EvaluateCachedPoseBranches(float deltaSeconds)
         }
         const auto axisEntry = cachedPoseBranchAxes.find(definition.name);
         const float axis = axisEntry != cachedPoseBranchAxes.end() ? axisEntry->second : 0.0f;
+        // Locomotion 状态机在低速时播 Idle，而不是 BlendSpace 的首 sample。
+        if (branch.idleClipIndex < clips.size() && axis <= definition.idleThreshold)
+        {
+            const auto& idle = clips.at(branch.idleClipIndex);
+            const float idleDuration = idle.runtime ? idle.runtime->duration() : 0.0f;
+            if (idleDuration > 0)
+            {
+                if (deltaSeconds > 0)
+                {
+                    branch.idleTime += deltaSeconds * definition.rate;
+                    branch.idleTime = definition.loop
+                        ? std::fmod(branch.idleTime, idleDuration)
+                        : std::min(branch.idleTime, idleDuration - 1e-4f);
+                }
+                frameCachedPoses[definition.name] = Sample(branch.idleClipIndex, branch.idleTime);
+                continue;
+            }
+        }
         size_t first = baseIndex;
         size_t second = baseIndex;
         float target = 0;

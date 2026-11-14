@@ -109,7 +109,7 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
                         .Select(sample => new CachedPoseBranchSample(sample.Clip, sample.Threshold))
                         .ToArray()
                     : new[] { new CachedPoseBranchSample(branch.Clip, 0) },
-                branch.Rate, branch.Loop)).ToArray();
+                branch.Rate, branch.Loop, branch.IdleClip, branch.IdleThreshold)).ToArray();
         Animation.SetCachedPoseBranches(definitions);
         cachedPoseBranchesSubmitted = true;
     }
@@ -131,7 +131,7 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
         var playback = Animation.State;
         if (next.UseCachedPose.Length > 0)
         {
-            Animation.UseCachedPose(next.UseCachedPose);
+            Animation.UseCachedPose(next.UseCachedPose, next.BlendSeconds);
             cachedPoseSubmitted = true;
             // 缓存姿态没有自己的片段时钟；离开缓存状态时再显式清除。
             if (blendSubmitted)
@@ -154,8 +154,11 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
             {
                 if (next.Crossfade || next.StartPosition > 0)
                 {
+                    // BlendSpace 目标的实际姿态是 A/B 混合，但原生惯性化只能按单一目标
+                    // 片段估速度；进入混合态时改用普通交叉淡入，避免起步脚步抖动。
                     Animation.PlayTransition(next.Clip, next.StartPosition, next.Loop,
-                        next.BlendSeconds, InPlace, 1, next.Crossfade && next.Inertialization,
+                        next.BlendSeconds, InPlace, 1,
+                        next.Crossfade && next.Inertialization && next.BlendClip.Length == 0,
                         next.Crossfade ? next.SyncGroup : "",
                         next.Crossfade ? next.SyncPhase : -1);
                 }
@@ -172,7 +175,9 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
         }
         // UE 的根 SaveCachedPose 保存最终输出；命令在下一帧生效，正好对应
         // “进入 Land 时使用上一帧姿态”的时序。
-        if (Graph.SaveCachedPose.Length > 0)
+        // 同一帧不能再发 Capture：C# 只有一个 pending 槽，会覆盖 UseCachedPose，
+        // 导致 Land 从未进入缓存姿态（原生继续播 Fall，表现为落地卡住）。
+        if (Graph.SaveCachedPose.Length > 0 && next.UseCachedPose.Length == 0)
             Animation.CaptureCachedPose(Graph.SaveCachedPose);
         SubmitSlotMask(next);
     }
