@@ -153,8 +153,10 @@ inline LocalPose ApplyLocalSpaceAdditive(const LocalPose& base, const LocalPose&
         const Eigen::Vector3f weightedTranslation = deltaTranslation * alpha;
         const Eigen::Vector3f weightedScale =
             identityScale + (deltaScale - identityScale) * alpha;
-        target[joint].translation += target[joint].rotation * weightedTranslation;
-        target[joint].rotation = (target[joint].rotation * weightedRotation).normalized();
+        // UE FTransform::AccumulateWithAdditiveScale：平移直接相加，旋转为 delta * base
+        // （预乘），不是 base * delta；顺序错会让旋转过的骨骼把 additive 甩飞。
+        target[joint].translation += weightedTranslation;
+        target[joint].rotation = (weightedRotation * target[joint].rotation).normalized();
         target[joint].scale = target[joint].scale.cwiseProduct(weightedScale);
     }
     return WriteKinematics(base, target);
@@ -246,7 +248,7 @@ inline LocalPose ApplyMeshSpaceRotationAdditive(const LocalPose& base, const Loc
             (addMesh[joint] * refMesh[joint].conjugate()).normalized();
         const Eigen::Quaternionf weighted =
             Eigen::Quaternionf::Identity().slerp(weight, delta).normalized();
-        resultMesh[joint] = (baseMesh[joint] * weighted).normalized();
+        resultMesh[joint] = (weighted * baseMesh[joint]).normalized();
     }
     for (size_t joint = 0; joint < jointCount; ++joint)
     {
