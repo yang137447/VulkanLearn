@@ -97,6 +97,8 @@ void SkeletalPlayback::SetPoseGraph(std::vector<PoseGraphNode> nodes)
             if (node.inputs.size() != 1)
                 throw std::invalid_argument("Pose graph Output requires one input");
         }
+        if (node.kind == PoseGraphNode::Kind::Select && node.inputs.size() != 2)
+            throw std::invalid_argument("Pose graph Select requires two inputs");
     }
     RebuildPoseGraphOrder();
     const PoseGraphNode& output = poseGraphNodes.at(poseGraphOutput);
@@ -281,6 +283,14 @@ LocalPose SkeletalPlayback::EvaluatePoseGraph(float deltaSeconds)
             poseGraphNodePoses[node.id] = Crossfade(pose(node.inputs.at(0)),
                 pose(node.inputs.at(1)), alpha, asset->mesh);
         }
+        else if (node.kind == PoseGraphNode::Kind::Select)
+        {
+            // 选择值由宿主每帧下发（0 = 第一个输入，1 = 第二个输入）；
+            // 未下发时保持上一次选择，Land 期间缓存不会被改写。
+            const auto value = poseGraphValues.find(node.id);
+            const bool second = value != poseGraphValues.end() && value->second >= 0.5f;
+            poseGraphNodePoses[node.id] = pose(node.inputs.at(second ? 1 : 0));
+        }
         else if (node.kind == PoseGraphNode::Kind::ApplyAdditive)
         {
             const auto value = poseGraphValues.find(node.id);
@@ -344,6 +354,23 @@ LocalPose SkeletalPlayback::EvaluatePoseGraph(float deltaSeconds)
             poseGraphNodePoses[node.id] = pose(node.inputs.at(0));
         }
     }
-    return poseGraphNodePoses.at(poseGraphNodes.at(poseGraphOutput).id);
+    const size_t result = poseGraphEntry < poseGraphNodes.size()
+        ? poseGraphEntry : poseGraphOutput;
+    return poseGraphNodePoses.at(poseGraphNodes.at(result).id);
+}
+
+void SkeletalPlayback::SetPoseGraphEntry(const std::string& id)
+{
+    if (!poseGraphActive)
+        throw std::invalid_argument("Pose graph is not active");
+    if (id.empty())
+    {
+        poseGraphEntry = static_cast<size_t>(-1);
+        return;
+    }
+    const auto found = poseGraphIndex.find(id);
+    if (found == poseGraphIndex.end())
+        throw std::invalid_argument("Unknown pose graph entry node: " + id);
+    poseGraphEntry = found->second;
 }
 } // namespace VL::Animation

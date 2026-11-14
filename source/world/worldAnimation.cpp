@@ -418,7 +418,7 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             mode == "configureBonePhysics" || mode == "blendSpace" ||
             mode == "additive" || mode == "layeredPose" || mode == "cachedPose" ||
             mode == "cachedPoseBranches" || mode == "cachedPoseBranchAxis" ||
-            mode == "poseGraph" || mode == "poseGraphValue";
+            mode == "poseGraph" || mode == "poseGraphValue" || mode == "poseGraphEntry";
         if (!player || (!postProcessConfiguration && candidates.count(player)))
             throw std::invalid_argument("Script.InvalidAnimationTarget");
         const auto existing = candidates.find(player);
@@ -876,6 +876,7 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                 if (kind == "SequencePlayer") parsed.kind = Kind::SequencePlayer;
                 else if (kind == "BlendSpacePlayer") parsed.kind = Kind::BlendSpacePlayer;
                 else if (kind == "Blend") parsed.kind = Kind::Blend;
+                else if (kind == "Select") parsed.kind = Kind::Select;
                 else if (kind == "ApplyAdditive") parsed.kind = Kind::ApplyAdditive;
                 else if (kind == "LayeredBoneBlend") parsed.kind = Kind::LayeredBoneBlend;
                 else if (kind == "SaveCachedPose") parsed.kind = Kind::SaveCachedPose;
@@ -939,6 +940,12 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                 throw std::invalid_argument("Script.InvalidPoseGraphValueRequest");
             candidate.SetPoseGraphValue(request["id"].get<std::string>(),
                 request["value"].get<float>());
+        }
+        else if (request.value("mode", std::string()) == "poseGraphEntry")
+        {
+            if (!request.contains("id") || !request["id"].is_string())
+                throw std::invalid_argument("Script.InvalidPoseGraphEntryRequest");
+            candidate.SetPoseGraphEntry(request["id"].get<std::string>());
         }
         else if (request.value("mode", std::string()) == "layeredPose")
         {

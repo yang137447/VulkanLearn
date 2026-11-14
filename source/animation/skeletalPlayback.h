@@ -277,6 +277,7 @@ public:
             SequencePlayer,
             BlendSpacePlayer,
             Blend,
+            Select,
             ApplyAdditive,
             LayeredBoneBlend,
             SaveCachedPose,
@@ -303,6 +304,8 @@ public:
     bool PoseGraphActive() const { return poseGraphActive; }
     // 每帧驱动参数：BlendSpace 轴、Blend/Additive/Layer 的 alpha。
     void SetPoseGraphValue(const std::string& id, float value);
+    // 状态机当前状态的输出节点；求值返回该节点而非图级 Output（空 = Output）。
+    void SetPoseGraphEntry(const std::string& id);
     void SetCachedPoseBranchAxis(const std::string& name, float value);
     bool CachedPoseActive() const { return useCachedPoseActive; }
     std::string CachedPoseName() const { return useCachedPoseActive ? useCachedPoseName : std::string(); }
@@ -628,6 +631,7 @@ private:
     std::unordered_map<std::string, size_t> poseGraphIndex;
     std::vector<size_t> poseGraphOrder;
     size_t poseGraphOutput = static_cast<size_t>(-1);
+    size_t poseGraphEntry = static_cast<size_t>(-1);
     size_t poseGraphRoot = static_cast<size_t>(-1);
     std::vector<PoseGraphPlayerState> poseGraphStates;
     std::unordered_map<std::string, float> poseGraphValues;

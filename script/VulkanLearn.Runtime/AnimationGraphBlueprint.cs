@@ -27,6 +27,7 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     private bool cachedPoseBranchesSubmitted;
     private bool nativePoseGraphActive;
     private bool poseGraphSubmitted;
+    private string lastPoseGraphEntry = "";
     private float lastPlanarSpeed;
     private readonly Dictionary<string, float> cachedPoseBranchAxes = new(StringComparer.Ordinal);
 
@@ -162,9 +163,25 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
         if (nativePoseGraphActive && next.PoseGraphNode.Length > 0 && Graph.PoseGraph is { } poseGraph)
         {
             // 原生图拥有完整姿态链；这里只下发每帧轴值，不再提交旧扁平命令。
+            if (!string.Equals(lastPoseGraphEntry, next.PoseGraphNode, StringComparison.Ordinal))
+            {
+                // 状态输出节点必须显式切换，否则原生图会一直返回 Output（Land 链）。
+                Animation.SetPoseGraphEntry(next.PoseGraphNode);
+                lastPoseGraphEntry = next.PoseGraphNode;
+            }
             foreach (var node in poseGraph.Nodes)
+            {
                 if (node.Kind == AnimationPoseNodeKind.BlendSpacePlayer)
                     Animation.SetPoseGraphValue(node.Id, lastPlanarSpeed);
+                else if (node.Kind == AnimationPoseNodeKind.Select && node.Inputs.Count == 2)
+                {
+                    // Locomotion 的 Idle/WalkRun 选择：叶子状态的 PoseNode 指向哪个输入。
+                    if (next.PoseGraphNode == node.Inputs[1])
+                        Animation.SetPoseGraphValue(node.Id, 1);
+                    else if (next.PoseGraphNode == node.Inputs[0])
+                        Animation.SetPoseGraphValue(node.Id, 0);
+                }
+            }
             return;
         }
         var playback = Animation.State;

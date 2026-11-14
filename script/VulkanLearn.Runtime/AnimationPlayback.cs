@@ -175,6 +175,7 @@ public sealed class AnimationPlayback
     internal CachedPoseBranchesCommand? PendingCachedPoseBranches;
     internal PoseGraphCommand? PendingPoseGraph;
     internal readonly List<PoseGraphValueCommand> PendingPoseGraphValues = [];
+    internal string? PendingPoseGraphEntry;
     internal readonly Dictionary<string, float> PendingCachedPoseAxes = new(StringComparer.Ordinal);
     internal LayeredPoseCommand? PendingLayeredPose;
     internal string[] MontageSlotMask = [];
@@ -469,6 +470,12 @@ public sealed class AnimationPlayback
             throw new ArgumentException("Pose graph node id is invalid.", nameof(id));
         if (!float.IsFinite(value)) throw new ArgumentOutOfRangeException(nameof(value));
         PendingPoseGraphValues.Add(new(id, value));
+    }
+
+    public void SetPoseGraphEntry(string id)
+    {
+        CheckRequest();
+        PendingPoseGraphEntry = id ?? "";
     }
 
     public void SetCachedPoseBranchAxis(string name, float value)
@@ -1426,6 +1433,11 @@ public static partial class NativeBridge
                 commands.Add(new { component = mesh.Id, mode = "poseGraphValue",
                     id = value.Id, value = value.Value });
             mesh.Animation.PendingPoseGraphValues.Clear();
+            if (mesh.Animation.PendingPoseGraphEntry is { } entry)
+            {
+                commands.Add(new { component = mesh.Id, mode = "poseGraphEntry", id = entry });
+                mesh.Animation.PendingPoseGraphEntry = null;
+            }
             if (mesh.Animation.PendingLayeredPose is { } layered)
             {
                 commands.Add(new { component = mesh.Id, mode = "layeredPose",

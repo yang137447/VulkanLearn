@@ -8,6 +8,7 @@ public enum AnimationPoseNodeKind
     SequencePlayer,
     BlendSpacePlayer,
     Blend,
+    Select,
     ApplyAdditive,
     LayeredBoneBlend,
     SaveCachedPose,
@@ -190,6 +191,7 @@ public sealed class AnimationPoseGraph
             AnimationPoseNodeKind.SaveCachedPose => 1,
             AnimationPoseNodeKind.Slot => 1,
             AnimationPoseNodeKind.Blend => 2,
+            AnimationPoseNodeKind.Select => 2,
             AnimationPoseNodeKind.ApplyAdditive => 2,
             AnimationPoseNodeKind.LayeredBoneBlend => 2,
             _ => throw new InvalidOperationException(
@@ -250,6 +252,11 @@ public sealed class AnimationPoseGraph
                         $"Pose graph node '{node.Id}' requires a slot name.");
                 break;
             case AnimationPoseNodeKind.Blend:
+            case AnimationPoseNodeKind.Select:
+                if (node.Inputs.Count != 2)
+                    throw new InvalidOperationException(
+                        $"Pose graph node '{node.Id}' Select requires two inputs.");
+                break;
             case AnimationPoseNodeKind.ApplyAdditive:
             case AnimationPoseNodeKind.LayeredBoneBlend:
                 break;
@@ -257,7 +264,8 @@ public sealed class AnimationPoseGraph
     }
 
     // entryNode：状态自己的 PoseNode；为空时才回退到图级 Output。
-    public AnimationPoseResult Evaluate(float planarSpeed, string entryNode = "")
+    public AnimationPoseResult Evaluate(float planarSpeed, string entryNode = "",
+        IReadOnlyDictionary<string, float>? values = null)
     {
         if (!float.IsFinite(planarSpeed))
             throw new ArgumentOutOfRangeException(nameof(planarSpeed));
@@ -286,6 +294,9 @@ public sealed class AnimationPoseGraph
                 AnimationPoseNodeKind.BlendSpacePlayer => EvaluateBlendSpace(node, planarSpeed),
                 AnimationPoseNodeKind.Blend => EvaluateBlend(node,
                     EvaluateNode(node.Inputs[0]), EvaluateNode(node.Inputs[1]), node.Alpha),
+                AnimationPoseNodeKind.Select => EvaluateNode(node.Inputs[
+                    values is not null && values.TryGetValue(node.Id, out var select) &&
+                    select >= 0.5f ? 1 : 0]),
                 AnimationPoseNodeKind.ApplyAdditive => EvaluateAdditive(node,
                     EvaluateNode(node.Inputs[0]), EvaluateNode(node.Inputs[1])),
                 AnimationPoseNodeKind.LayeredBoneBlend => EvaluateLayer(node,
