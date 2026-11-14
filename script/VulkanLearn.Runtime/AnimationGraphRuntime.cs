@@ -347,7 +347,7 @@ public sealed class AnimationGraphRuntime
         string saveCachedPose = definition.SaveCachedPose;
         if (leafState.PoseNode.Length > 0 && definition.PoseGraph is not null)
         {
-            var pose = definition.PoseGraph.Evaluate(input.PlanarSpeed);
+            var pose = definition.PoseGraph.Evaluate(input.PlanarSpeed, leafState.PoseNode);
             clip = pose.Clip;
             loop = pose.Loop;
             startPosition = pose.StartPosition >= 0 ? pose.StartPosition : input.StartPosition(clip);

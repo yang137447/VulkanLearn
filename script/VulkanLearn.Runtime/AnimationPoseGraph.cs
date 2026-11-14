@@ -245,10 +245,14 @@ public sealed class AnimationPoseGraph
         }
     }
 
-    public AnimationPoseResult Evaluate(float planarSpeed)
+    // entryNode：状态自己的 PoseNode；为空时才回退到图级 Output。
+    public AnimationPoseResult Evaluate(float planarSpeed, string entryNode = "")
     {
         if (!float.IsFinite(planarSpeed))
             throw new ArgumentOutOfRangeException(nameof(planarSpeed));
+        if (!string.IsNullOrWhiteSpace(entryNode) &&
+            !Nodes.Any(node => string.Equals(node.Id, entryNode, StringComparison.Ordinal)))
+            throw new InvalidOperationException($"Pose graph entry node '{entryNode}' is missing.");
         var byId = Nodes.ToDictionary(node => node.Id, StringComparer.Ordinal);
         var memo = new Dictionary<string, PoseValue>(StringComparer.Ordinal);
         var visiting = new HashSet<string>(StringComparer.Ordinal);
@@ -287,7 +291,7 @@ public sealed class AnimationPoseGraph
             return value;
         }
 
-        var result = EvaluateNode(OutputNode ?? "");
+        var result = EvaluateNode(!string.IsNullOrWhiteSpace(entryNode) ? entryNode : OutputNode ?? "");
         return new AnimationPoseResult(result.Clip, result.Loop, result.Rate, result.StartPosition,
             result.BlendSamples, result.BlendClip, result.BlendWeight,
             result.AdditiveClip, result.AdditiveAlpha, result.AdditiveLoop,
