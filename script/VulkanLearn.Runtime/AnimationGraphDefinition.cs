@@ -52,6 +52,8 @@ public sealed class AnimationGraphState
     public float StartPosition { get; init; } = -1;
     public AnimationGraphMode Mode { get; init; } = AnimationGraphMode.Grounded;
     public string SubStateMachine { get; init; } = "";
+    // 状态输出改为 pose-node graph 的节点 id；与其它输出声明互斥。
+    public string PoseNode { get; init; } = "";
     // 非空表示 BlendSpace1D；runtime 按轴值在相邻 sample 间输出片段对与权重。
     public string BlendAxis { get; init; } = AnimationGraphBlendAxis.Speed;
     // BS_*.json 的资产名；宿主创建时解析成 BlendSamples，未解析时校验失败。
@@ -104,12 +106,25 @@ public sealed class AnimationGraphState
         bool hasBlend = BlendSamples is { Count: > 0 };
         bool hasBlendAsset = !string.IsNullOrWhiteSpace(BlendSpace);
         bool hasCachedPose = !string.IsNullOrWhiteSpace(UseCachedPose);
+        bool hasPoseNode = !string.IsNullOrWhiteSpace(PoseNode);
         int declarations = (hasClip ? 1 : 0) + (hasMachine ? 1 : 0) + (hasBlend ? 1 : 0) +
-            (hasBlendAsset ? 1 : 0) + (Conduit ? 1 : 0) + (hasCachedPose ? 1 : 0);
+            (hasBlendAsset ? 1 : 0) + (Conduit ? 1 : 0) + (hasCachedPose ? 1 : 0) +
+            (hasPoseNode ? 1 : 0);
         if (declarations != 1)
             throw new InvalidOperationException(
                 $"Animation graph state '{Name}' must declare exactly one of " +
                 "Clip, SubStateMachine, BlendSpace, BlendSamples, Conduit or UseCachedPose.");
+        if (hasPoseNode)
+        {
+            if (PoseNode.Trim().Length != PoseNode.Length || PoseNode.Length > 128 ||
+                PoseNode.Contains('\0'))
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' pose node id is invalid.");
+            if (AdditiveClip.Length > 0 || LayerClip.Length > 0)
+                throw new InvalidOperationException(
+                    $"Animation graph state '{Name}' pose node cannot be combined with " +
+                    "state-level additive/layer.");
+        }
         if (hasBlendAsset)
         {
             if (BlendSpace.Trim().Length != BlendSpace.Length || BlendSpace.Length > 128 ||
@@ -279,6 +294,7 @@ public sealed class AnimationGraphState
         StartPosition = StartPosition,
         Mode = Mode,
         SubStateMachine = SubStateMachine,
+        PoseNode = PoseNode,
         BlendAxis = BlendAxis,
         BlendSpace = "",
         BlendSamples = samples,
@@ -317,6 +333,7 @@ public sealed class AnimationGraphState
         StartPosition = StartPosition,
         Mode = Mode,
         SubStateMachine = SubStateMachine,
+        PoseNode = PoseNode,
         BlendAxis = BlendAxis,
         BlendSpace = BlendSpace,
         BlendSamples = BlendSamples,
@@ -755,6 +772,8 @@ public sealed class AnimationGraphDefinition
         Array.Empty<AnimationGraphDirectionBranch>();
     public IReadOnlyList<AnimationGraphStateMachine> StateMachines { get; init; } =
         Array.Empty<AnimationGraphStateMachine>();
+    // 纯代码 pose-node graph；状态通过 PoseNode 引用节点。
+    public AnimationPoseGraph? PoseGraph { get; init; }
 
     // 把 BS_*.json 资产名展开成运行期 BlendSamples；没有资产引用时原样返回。
     public AnimationGraphDefinition ResolveBlendSpaces(
@@ -772,6 +791,8 @@ public sealed class AnimationGraphDefinition
                 if (state is not null && !string.IsNullOrWhiteSpace(state.BlendSpace)) { any = true; break; }
             if (any) break;
         }
+        if (!any && PoseGraph is not null)
+            any = PoseGraph.Nodes.Any(node => !string.IsNullOrWhiteSpace(node.BlendSpace));
         if (!any) return this;
 
         var machines = new AnimationGraphStateMachine[StateMachines.Count];
@@ -836,8 +857,35 @@ public sealed class AnimationGraphDefinition
             RootStateMachine = RootStateMachine,
             SaveCachedPose = SaveCachedPose,
             CachedPoseBranches = branches,
+            PoseGraph = ResolvePoseGraphBlendSpaces(blendSpaces),
             DirectionBranches = DirectionBranches,
             StateMachines = machines
+        };
+    }
+
+    // PoseGraph 节点里的 BS_*.json 引用展开成运行期 samples；未引用时原样返回。
+    private AnimationPoseGraph? ResolvePoseGraphBlendSpaces(
+        IReadOnlyDictionary<string, AnimationBlendSpaceDefinition> blendSpaces)
+    {
+        if (PoseGraph is null) return null;
+        if (!PoseGraph.Nodes.Any(node => !string.IsNullOrWhiteSpace(node.BlendSpace))) return PoseGraph;
+        var nodes = new AnimationPoseNode[PoseGraph.Nodes.Count];
+        for (int index = 0; index < nodes.Length; ++index)
+        {
+            var node = PoseGraph.Nodes[index];
+            if (string.IsNullOrWhiteSpace(node.BlendSpace)) { nodes[index] = node; continue; }
+            if (!blendSpaces.TryGetValue(node.BlendSpace, out var space))
+                throw new InvalidOperationException(
+                    $"Pose graph node '{node.Id}' references unknown blend space '{node.BlendSpace}'.");
+            nodes[index] = node.WithBlendSamples(space.Samples
+                .Select(sample => new AnimationGraphBlendSample(sample.Clip, sample.Threshold,
+                    sample.Rate, sample.SyncGroup)).ToArray());
+        }
+        return new AnimationPoseGraph
+        {
+            Name = PoseGraph.Name,
+            OutputNode = PoseGraph.OutputNode,
+            Nodes = nodes
         };
     }
 
@@ -894,6 +942,7 @@ public sealed class AnimationGraphDefinition
             RootStateMachine = RootStateMachine,
             SaveCachedPose = SaveCachedPose,
             CachedPoseBranches = CachedPoseBranches,
+            PoseGraph = PoseGraph,
             DirectionBranches = DirectionBranches,
             StateMachines = machines
         };
@@ -975,6 +1024,36 @@ public sealed class AnimationGraphDefinition
             machine.Validate(machines);
             stateCount += machine.States.Count;
             transitionCount += machine.Transitions.Count + machine.EntryTransitions.Count;
+        }
+        // Pose-node 图：状态引用必须存在；有引用就必须提供图。
+        var poseNodeIds = new HashSet<string>(StringComparer.Ordinal);
+        var poseNodeReferenced = new HashSet<string>(StringComparer.Ordinal);
+        bool usesPoseNodes = false;
+        foreach (var machine in StateMachines)
+            foreach (var state in machine.States)
+                if (state.PoseNode.Length > 0)
+                {
+                    usesPoseNodes = true;
+                    if (PoseGraph is null)
+                        throw new InvalidOperationException(
+                            $"Animation graph state '{machine.Name}/{state.Name}' references a pose " +
+                            "node but the graph has no PoseGraph.");
+                    if (poseNodeIds.Count == 0)
+                        foreach (var node in PoseGraph.Nodes) poseNodeIds.Add(node.Id);
+                    if (!poseNodeIds.Contains(state.PoseNode))
+                        throw new InvalidOperationException(
+                            $"Animation graph state '{machine.Name}/{state.Name}' references unknown " +
+                            $"pose node '{state.PoseNode}'.");
+                    poseNodeReferenced.Add(state.PoseNode);
+                }
+        if (PoseGraph is not null)
+        {
+            PoseGraph.Validate(poseNodeReferenced.ToArray(),
+                CachedPoseBranches is null ? null :
+                    CachedPoseBranches.Select(branch => branch.Name).ToArray());
+            if (!usesPoseNodes)
+                throw new InvalidOperationException(
+                    "PoseGraph is declared but no state references a pose node.");
         }
         if (stateCount > MaximumStates)
             throw new InvalidOperationException("Animation graph state budget exceeded.");

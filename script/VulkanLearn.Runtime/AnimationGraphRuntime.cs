@@ -325,6 +325,47 @@ public sealed class AnimationGraphRuntime
             blendSyncGroup = sample.SyncGroup;
         }
         else blendWeights.Remove(statePath);
+        // Pose-node graph：状态输出改为节点求值；结果仍是同一份扁平化 decision。
+        bool loop = leafState.Loop;
+        float startPosition = leafState.StartPosition >= 0
+            ? leafState.StartPosition : input.StartPosition(clip);
+        string useCachedPose = leafState.UseCachedPose;
+        string additiveClip = leafState.AdditiveClip;
+        float additiveAlpha = additiveClip.Length > 0 ? leafState.AdditiveAlpha : 0;
+        bool additiveLoop = leafState.AdditiveLoop;
+        string layerClip = leafState.LayerClip;
+        float layerAlpha = layerClip.Length > 0 ? leafState.LayerAlpha : 0;
+        bool layerLoop = leafState.LayerLoop;
+        IReadOnlyList<string>? layerMask = leafState.LayerMask.Count > 0 ? leafState.LayerMask : null;
+        IReadOnlyList<AnimationGraphBoneWeight>? layerWeights =
+            leafState.LayerWeights.Count > 0 ? leafState.LayerWeights : null;
+        string slot = leafState.Slot;
+        IReadOnlyList<string>? slotMask = leafState.SlotMask.Count > 0 ? leafState.SlotMask : null;
+        IReadOnlyList<AnimationGraphBoneWeight>? slotWeights =
+            leafState.SlotWeights.Count > 0 ? leafState.SlotWeights : null;
+        float slotAlpha = leafState.SlotAlpha;
+        string saveCachedPose = definition.SaveCachedPose;
+        if (leafState.PoseNode.Length > 0 && definition.PoseGraph is not null)
+        {
+            var pose = definition.PoseGraph.Evaluate(input.PlanarSpeed);
+            clip = pose.Clip;
+            loop = pose.Loop;
+            startPosition = pose.StartPosition >= 0 ? pose.StartPosition : input.StartPosition(clip);
+            blendClip = pose.BlendClip;
+            blendWeight = pose.BlendWeight;
+            additiveClip = pose.AdditiveClip;
+            additiveAlpha = pose.AdditiveAlpha;
+            additiveLoop = pose.AdditiveLoop;
+            layerClip = pose.LayerClip;
+            layerAlpha = pose.LayerAlpha;
+            layerLoop = pose.LayerLoop;
+            layerWeights = pose.LayerWeights.Count > 0 ? pose.LayerWeights : null;
+            slot = pose.Slot;
+            slotWeights = pose.SlotWeights.Count > 0 ? pose.SlotWeights : null;
+            slotAlpha = pose.SlotAlpha;
+            useCachedPose = pose.UseCachedPose;
+            if (pose.SaveCachedPose.Length > 0) saveCachedPose = pose.SaveCachedPose;
+        }
         float stateTime = ResolveStateTime(leafMachine, leafState, input);
         bool completed = clip.Length > 0 && input.Clip == clip && input.ClipCompleted;
         string direction = ResolveDirection(leafState, leafMachine.Definition, input);
@@ -349,9 +390,6 @@ public sealed class AnimationGraphRuntime
         float syncPhase = transitionForOutput is not null && transitionForOutput.SyncPhaseFromSource &&
             !interruptedStart ? input.SyncPhase : -1;
         bool crossfade = transitionForOutput?.Crossfade == true && blend > 0;
-        float startPosition = leafState.StartPosition >= 0
-            ? leafState.StartPosition : input.StartPosition(clip);
-
         return new AnimationGraphDecision(
             root.State,
             leafMachine.State,
@@ -359,7 +397,7 @@ public sealed class AnimationGraphRuntime
             FindState(root.Definition, root.State).Mode,
             tag,
             clip,
-            leafState.Loop,
+            loop,
             direction,
             blend,
             inertialization,
@@ -376,20 +414,20 @@ public sealed class AnimationGraphRuntime
             blendRate,
             blendSyncGroup,
             conduitPath.Count > 0 ? conduitPath.ToArray() : null,
-            leafState.UseCachedPose,
-            leafState.AdditiveClip,
-            leafState.AdditiveClip.Length > 0 ? leafState.AdditiveAlpha : 0,
-            leafState.AdditiveLoop,
-            leafState.Slot,
-            leafState.SlotMask.Count > 0 ? leafState.SlotMask : null,
-            leafState.SlotAlpha,
-            definition.SaveCachedPose,
-            leafState.LayerClip,
-            leafState.LayerClip.Length > 0 ? leafState.LayerAlpha : 0,
-            leafState.LayerLoop,
-            leafState.LayerMask.Count > 0 ? leafState.LayerMask : null,
-            leafState.LayerWeights.Count > 0 ? leafState.LayerWeights : null,
-            leafState.SlotWeights.Count > 0 ? leafState.SlotWeights : null);
+            useCachedPose,
+            additiveClip,
+            additiveAlpha,
+            additiveLoop,
+            slot,
+            slotMask,
+            slotAlpha,
+            saveCachedPose,
+            layerClip,
+            layerAlpha,
+            layerLoop,
+            layerMask,
+            layerWeights,
+            slotWeights);
     }
 
     // 只读诊断入口；不会推进状态机。

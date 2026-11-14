@@ -29,6 +29,8 @@ public sealed class AnimationPoseNode
     public float StartPosition { get; init; } = -1;
     public IReadOnlyList<AnimationGraphBlendSample> BlendSamples { get; init; } =
         Array.Empty<AnimationGraphBlendSample>();
+    // BlendSpacePlayer 的 BS_*.json 资产名；宿主解析后填入 BlendSamples。
+    public string BlendSpace { get; init; } = "";
 
     // Blend / ApplyAdditive / LayeredBoneBlend / Slot
     public float Alpha { get; init; } = 1;
@@ -38,6 +40,23 @@ public sealed class AnimationPoseNode
     // SaveCachedPose / UseCachedPose / Slot
     public string CacheName { get; init; } = "";
     public string SlotName { get; init; } = "";
+
+    internal AnimationPoseNode WithBlendSamples(IReadOnlyList<AnimationGraphBlendSample> samples) => new()
+    {
+        Id = Id,
+        Kind = Kind,
+        Inputs = Inputs,
+        Clip = Clip,
+        Loop = Loop,
+        Rate = Rate,
+        StartPosition = StartPosition,
+        BlendSpace = "",
+        BlendSamples = samples,
+        Alpha = Alpha,
+        Weights = Weights,
+        CacheName = CacheName,
+        SlotName = SlotName
+    };
 }
 
 // 扁平化结果：字段与 AnimationGraphDecision 的子集一一对应。
@@ -71,7 +90,8 @@ public sealed class AnimationPoseGraph
     public string OutputNode { get; init; } = "";
     public IReadOnlyList<AnimationPoseNode> Nodes { get; init; } = Array.Empty<AnimationPoseNode>();
 
-    public void Validate()
+    public void Validate(IReadOnlyCollection<string>? entryNodes = null,
+        IReadOnlyCollection<string>? knownCachedPoses = null)
     {
         if (string.IsNullOrWhiteSpace(Name))
             throw new InvalidOperationException("Pose graph name is required.");
@@ -95,9 +115,13 @@ public sealed class AnimationPoseGraph
             if (node.Kind == AnimationPoseNodeKind.SaveCachedPose)
                 cacheProducers[node.CacheName] = node.Id;
         }
-        if (string.IsNullOrWhiteSpace(OutputNode) || !byId.TryGetValue(OutputNode, out var output) ||
-            output.Kind != AnimationPoseNodeKind.Output)
+        if (!string.IsNullOrWhiteSpace(OutputNode) &&
+            (!byId.TryGetValue(OutputNode, out var output) ||
+             output.Kind != AnimationPoseNodeKind.Output))
             throw new InvalidOperationException("Pose graph output node is missing.");
+        if (string.IsNullOrWhiteSpace(OutputNode) && (entryNodes is null || entryNodes.Count == 0))
+            throw new InvalidOperationException(
+                "Pose graph requires an Output node or state entry nodes.");
         foreach (var node in Nodes)
             foreach (var input in node.Inputs)
                 if (!byId.ContainsKey(input))
@@ -117,14 +141,29 @@ public sealed class AnimationPoseGraph
             if (byId[id].Kind == AnimationPoseNodeKind.UseCachedPose)
             {
                 if (!cacheProducers.TryGetValue(byId[id].CacheName, out var producer))
+                {
+                    // 图级 CachedPoseBranches 也能提供同名缓存（Third Person 的 Locomotion）。
+                    if (knownCachedPoses is not null && knownCachedPoses.Contains(byId[id].CacheName))
+                    {
+                        visiting.Remove(id);
+                        visited.Add(id);
+                        return;
+                    }
                     throw new InvalidOperationException(
                         $"Pose graph uses undefined cached pose '{byId[id].CacheName}'.");
+                }
                 Visit(producer);
             }
             visiting.Remove(id);
             visited.Add(id);
         }
-        Visit(OutputNode);
+        var roots = new List<string>();
+        if (!string.IsNullOrWhiteSpace(OutputNode)) roots.Add(OutputNode);
+        if (entryNodes is not null)
+            foreach (var entry in entryNodes)
+                if (!string.IsNullOrWhiteSpace(entry) && byId.ContainsKey(entry) && !roots.Contains(entry))
+                    roots.Add(entry);
+        foreach (var root in roots) Visit(root);
         if (visited.Count != Nodes.Count)
             throw new InvalidOperationException("Pose graph has unreachable nodes.");
     }
