@@ -706,6 +706,59 @@ TEST(SkeletalSlotMontage, BlendProfileWeightsScaleListedAndDefaultUnlistedToOne)
     EXPECT_EQ(player.SlotMontageMaskCount(), 1u);
 }
 
+TEST(SkeletalPoseGraph, TwoPlayersBlendAndRootSource)
+{
+    auto asset = MakeAsset();
+    SkeletalPlayback player(asset);
+    using Node = SkeletalPlayback::PoseGraphNode;
+    Node a; a.id = "a"; a.kind = Node::Kind::SequencePlayer; a.clip = "a";
+    Node b; b.id = "b"; b.kind = Node::Kind::SequencePlayer; b.clip = "b";
+    Node blend; blend.id = "blend"; blend.kind = Node::Kind::Blend;
+    blend.inputs = {"a", "b"}; blend.alpha = 0.5f;
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"blend"}; out.rootSource = "a";
+    player.SetPoseGraph({a, b, blend, out});
+    player.Tick(0.5f);
+    // root 在 0..4s 从 3 线性到 83（t=0.5 → 13）；hip a=0、b=8，50% 混合 → 17。
+    EXPECT_NEAR(player.Models()[1](0, 3), 17.0f, 1e-2f);
+    EXPECT_TRUE(player.PoseGraphActive());
+}
+
+TEST(SkeletalPoseGraph, SaveUseSameFrameAndAdditive)
+{
+    auto asset = MakeAdditiveAsset();
+    SkeletalPlayback player(asset);
+    using Node = SkeletalPlayback::PoseGraphNode;
+    Node base; base.id = "base"; base.kind = Node::Kind::SequencePlayer; base.clip = "a";
+    Node save; save.id = "save"; save.kind = Node::Kind::SaveCachedPose;
+    save.inputs = {"base"}; save.cacheName = "L";
+    Node use; use.id = "use"; use.kind = Node::Kind::UseCachedPose; use.cacheName = "L";
+    Node additive; additive.id = "add"; additive.kind = Node::Kind::SequencePlayer;
+    additive.clip = "add";
+    Node apply; apply.id = "apply"; apply.kind = Node::Kind::ApplyAdditive;
+    apply.inputs = {"use", "add"}; apply.alpha = 1.0f;
+    Node out; out.id = "out"; out.kind = Node::Kind::Output; out.inputs = {"apply"};
+    out.rootSource = "base";
+    player.SetPoseGraph({base, save, use, additive, apply, out});
+    player.Tick(0.5f);
+    player.Tick(1.0f / 60);
+    // t = 0.5 + 1/60 → root x ≈ 13.333；hip a=0 + additive 5 → 18.333。
+    EXPECT_NEAR(player.Models()[1](0, 3), 18.333f, 2e-2f);
+}
+
+TEST(SkeletalPoseGraph, RejectsCyclesAndMissingOutput)
+{
+    auto asset = MakeAsset();
+    SkeletalPlayback player(asset);
+    using Node = SkeletalPlayback::PoseGraphNode;
+    Node a; a.id = "a"; a.kind = Node::Kind::Blend; a.inputs = {"b"};
+    Node b; b.id = "b"; b.kind = Node::Kind::Blend; b.inputs = {"a"};
+    Node out; out.id = "out"; out.kind = Node::Kind::Output; out.inputs = {"a"};
+    EXPECT_ANY_THROW(player.SetPoseGraph({a, b, out}));
+    Node seq; seq.id = "s"; seq.kind = Node::Kind::SequencePlayer; seq.clip = "a";
+    EXPECT_ANY_THROW(player.SetPoseGraph({seq}));
+}
+
 TEST(SkeletalBlend, BlendsLocalTrsBeforeHierarchyWithQuaternionNormalization)
 {
     SkeletalPlayback player(MakeAsset());

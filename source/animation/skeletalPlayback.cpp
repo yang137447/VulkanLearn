@@ -186,12 +186,35 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     }
     else next = std::min(next, double(rangeEnd));
     const auto epoch = discontinuity + (looping && !inPlace && wrapped ? 1 : 0);
-    const float sampleTime = static_cast<float>(next);
+    float sampleTime = static_cast<float>(next);
     const float elapsed = IsBlending() ? std::min(blendElapsed + deltaSeconds, blendDuration) : 0;
     if (sampleTime == time && epoch == discontinuity && !wrapped && !IsBlending()) return;
-    const float previousTime = time;
-    auto locals = Sample(selected, sampleTime);
+    float previousTime = time;
+    LocalPose locals;
     float blendSampleTime = -1;
+    if (poseGraphActive)
+    {
+        // 图求值直接给出最终姿态；根位移/notify 仍由 rootSource Player 提供。
+        locals = EvaluatePoseGraph(deltaSeconds);
+        if (poseGraphRootValid)
+        {
+            const PoseGraphNode& rootNode = poseGraphNodes.at(poseGraphRoot);
+            size_t rootClip = 0;
+            while (rootClip < asset->AnimationAsset().clips.size() &&
+                asset->AnimationAsset().clips[rootClip].id != rootNode.clip)
+                ++rootClip;
+            selected = rootClip;
+            looping = rootNode.loop;
+            playbackRangeStart = 0;
+            playbackRangeEnd = 0;
+            previousTime = poseGraphRootPreviousTime;
+            time = previousTime;
+            sampleTime = poseGraphStates.at(poseGraphRoot).time;
+        }
+    }
+    else
+    {
+        locals = Sample(selected, sampleTime);
     // BlendSpace1D：第二片段按 A 的归一化相位采样，再在局部 TRS 上加权混合。
     // 混合发生在一次性过渡混合之前，等价于 UE“状态输出 → 过渡混合”的顺序。
     if (blendSpaceActive && blendSpaceClip < asset->AnimationAsset().clips.size())
@@ -227,6 +250,7 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     locals = ApplyLayered(std::move(locals));
     // Masked Slot Montage 叠在基础姿态上，只覆盖 mask 命中的关节。
     locals = ApplySlotMontage(std::move(locals));
+    }
     RebuildFrameCurves(sampleTime, blendSampleTime);
     if (!inertialization.Empty() && elapsed < blendDuration)
     {

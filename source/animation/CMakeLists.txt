@@ -12,6 +12,7 @@ add_library(vl_animation_assets STATIC
     skeletalPlaybackSkinning.cpp
     skeletalPlaybackSync.cpp
     skeletalPlaybackTimeline.cpp
+    skeletalPoseGraph.cpp
     inertialization.cpp
     rootOffset.cpp
     footPlacement.cpp

@@ -745,6 +745,27 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 
 ### Pose Graph：Cached Pose / Additive / Slot
 
+#### 原生 Pose Graph（阶段 B1）
+
+- 原生 `SkeletalPlayback` 新增 `SetPoseGraph(nodes)` / `ClearPoseGraph()` /
+  `SetPoseGraphValue(id, value)`。节点类型：`SequencePlayer`、`BlendSpacePlayer`、
+  `Blend`、`ApplyAdditive`、`LayeredBoneBlend`、`SaveCachedPose`、`UseCachedPose`、
+  `Slot`、`Output`。
+- 每个 Player 节点拥有独立时钟（clip 或 2..3 sample blend space、rate、loop、
+  start position）；`SetPoseGraphValue` 下发 BlendSpace 轴与 Blend/Additive/Layer 的
+  alpha。
+- 求值：`SetPoseGraph` 校验 DAG（单 Output、无环、输入存在）并建立拓扑序；每 Tick
+  依次推进 Player、求值节点，`SaveCachedPose` 写入帧内命名槽、`UseCachedPose`
+  同帧读取；`Output` 的姿态直接成为状态输出，替换旧的单片段采样。
+- 根位移/notify：`Output.rootSource` 必须是 `SequencePlayer`（默认第一个）；
+  只有它贡献根位移、根 yaw 与 notify，其余 Player 不产生这些通道。
+- 与旧路径的关系：图激活时不再应用旧的 additive/layered/slot 修饰（这些由图中
+  节点表达）；`Slot` 节点当前只是插入点，montage overlay 仍由宿主播放层承担。
+  过渡（`TransitionTo`/inertialization）仍作用在图输出姿态之上。
+- 限制：单 Output、单 additive/layer 链；BlendSpace 仍 1D/Speed、2..3 sample；
+  无图内 Montage/Transition 节点；C# 侧 `SetPoseGraph` 桥接与 Third Person 迁移
+  尚未接入（本阶段只提供原生运行时与测试）。
+
 - `SaveCachedPose` / `UseCachedPose`（快照路径）：原生播放器按名字保存当前最终
   局部姿态（含关节数的快照）。`UseCachedPose` 状态下不推进原片段时钟、不产生
   根位移与 notify，只把快照作为 Base；随后仍可叠加 additive。缓存是**实例级**的，

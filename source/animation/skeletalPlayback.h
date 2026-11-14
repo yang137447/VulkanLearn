@@ -263,6 +263,46 @@ public:
     };
     void SetCachedPoseBranches(std::vector<CachedPoseBranch> branches);
     void ClearCachedPoseBranches();
+    // 原生 Pose Graph（阶段 B1）：每个 Player 节点拥有独立时钟；节点拓扑求值后
+    // 直接产出最终局部姿态。rootSource 指定根位移/notify 的唯一来源（默认首个 Player）。
+    struct PoseGraphSample
+    {
+        std::string clip;
+        float threshold = 0;
+    };
+    struct PoseGraphNode
+    {
+        enum class Kind
+        {
+            SequencePlayer,
+            BlendSpacePlayer,
+            Blend,
+            ApplyAdditive,
+            LayeredBoneBlend,
+            SaveCachedPose,
+            UseCachedPose,
+            Slot,
+            Output
+        };
+        std::string id;
+        Kind kind = Kind::SequencePlayer;
+        std::vector<std::string> inputs;
+        std::string clip;
+        std::vector<PoseGraphSample> samples;
+        float rate = 1;
+        bool loop = true;
+        float startPosition = 0;
+        float alpha = 1;
+        std::vector<BlendProfileBone> weights;
+        std::string cacheName;
+        std::string slotName;
+        std::string rootSource;
+    };
+    void SetPoseGraph(std::vector<PoseGraphNode> nodes);
+    void ClearPoseGraph();
+    bool PoseGraphActive() const { return poseGraphActive; }
+    // 每帧驱动参数：BlendSpace 轴、Blend/Additive/Layer 的 alpha。
+    void SetPoseGraphValue(const std::string& id, float value);
     void SetCachedPoseBranchAxis(const std::string& name, float value);
     bool CachedPoseActive() const { return useCachedPoseActive; }
     std::string CachedPoseName() const { return useCachedPoseActive ? useCachedPoseName : std::string(); }
@@ -577,6 +617,26 @@ private:
     std::vector<CachedPoseBranchState> cachedPoseBranches;
     std::unordered_map<std::string, float> cachedPoseBranchAxes;
     std::unordered_map<std::string, LocalPose> frameCachedPoses;
+    struct PoseGraphPlayerState
+    {
+        float time = 0;
+        float weight = 0;
+        bool weightValid = false;
+    };
+    bool poseGraphActive = false;
+    std::vector<PoseGraphNode> poseGraphNodes;
+    std::unordered_map<std::string, size_t> poseGraphIndex;
+    std::vector<size_t> poseGraphOrder;
+    size_t poseGraphOutput = static_cast<size_t>(-1);
+    size_t poseGraphRoot = static_cast<size_t>(-1);
+    std::vector<PoseGraphPlayerState> poseGraphStates;
+    std::unordered_map<std::string, float> poseGraphValues;
+    std::unordered_map<std::string, LocalPose> poseGraphCachedPoses;
+    std::unordered_map<std::string, LocalPose> poseGraphNodePoses;
+    float poseGraphRootPreviousTime = 0;
+    bool poseGraphRootValid = false;
+    void RebuildPoseGraphOrder();
+    LocalPose EvaluatePoseGraph(float deltaSeconds);
     bool useCachedPoseActive = false;
     std::string useCachedPoseName;
     // 缓存姿态以快照为 Base：不推进片段时钟，也不产生根位移/notify。
