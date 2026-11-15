@@ -72,6 +72,17 @@ void HandlePanelClick(MaterialInstanceAssetEditorPanel& panel, Rml::Element& ele
         panel.localStatus = "Opening terrain material: " + path;
         return;
     }
+    if (action == "terrain-detail-material-open")
+    {
+        const std::string path = panel.TerrainDetailMaterialPath();
+        if (path.empty()) return;
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::OpenMaterialInstanceAsset;
+        command.payload = OpenMaterialInstanceAssetPayload{path, std::nullopt};
+        panel.Submit(std::move(command));
+        panel.localStatus = "Opening terrain detail material: " + path;
+        return;
+    }
     if (action == "terrain-asset-open")
     {
         const std::string path = panel.TerrainAssetPath();

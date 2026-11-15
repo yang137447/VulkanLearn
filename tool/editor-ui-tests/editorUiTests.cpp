@@ -9141,6 +9141,83 @@ TEST_F(EditorUiTest, LandscapePanelShowsEmptyStateAndLayerCardsFromSelectedTerra
     EXPECT_EQ(document->GetElementById("terrain-surface-section-count")->GetInnerRML(), "3");
 }
 
+TEST_F(EditorUiTest, LandscapeDetailMaterialExposesTessellationControls)
+{
+    EditorSceneActorSnapshot terrain = LayeredTerrainActor("Landscape", 31);
+    auto terrainPlan = std::make_shared<TerrainBuildPlan>(*terrain.terrainPlan);
+    terrainPlan->desc.materialInstancePath =
+        "Maps/SC_test/Materials/MI_terrain.json";
+    terrainPlan->desc.detailMaterialInstancePath =
+        "Maps/SC_test/Materials/MI_terrain_tess.json";
+    terrain.terrainPlan = std::move(terrainPlan);
+    SelectSceneActorForSculpt(std::move(terrain));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    Click("#workspace-terrain-tab");
+    Refresh();
+    document->GetElementById("terrain-layer-card-0")->DispatchEvent("dblclick", {});
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("terrain-layer-details")->IsClassSet("open"));
+
+    EXPECT_NE(document->GetElementById("terrain-detail-material-path")->GetInnerRML()
+            .find("MI_terrain_tess.json"), std::string::npos);
+    EXPECT_FALSE(document->GetElementById("terrain-detail-material-open")
+            ->HasAttribute("disabled"));
+    const char* tessControls[] = {
+        "terrain-material-tess-max",
+        "terrain-material-tess-radius",
+        "terrain-material-detail-height",
+        "terrain-material-detail-uv",
+        "terrain-material-displacement-scale",
+    };
+    for (const char* id : tessControls)
+        EXPECT_TRUE(document->GetElementById(id)->HasAttribute("disabled")) << id;
+
+    // 细分参数只存在于 LOD0 的 detail MI；打开它以后同一组输入框才可编辑。
+    snapshot.activeDocument.emplace();
+    auto& asset = *snapshot.activeDocument;
+    asset.assetPath = "Maps/SC_test/Materials/MI_terrain_tess.json";
+    asset.baseMaterialPath = "shader/glsl/M_terrain.json";
+    const auto addFloat = [&](const char* name, float value)
+    {
+        EditorParameterSnapshot parameter;
+        parameter.name = name;
+        parameter.type = EditorParameterType::Float;
+        parameter.effectiveValue = {EditorParameterType::Float, {value, 0.0f, 0.0f, 0.0f}};
+        parameter.defaultValue = parameter.effectiveValue;
+        asset.parameters.push_back(parameter);
+    };
+    addFloat("u_terrainTessMax", 24.0f);
+    addFloat("u_terrainTessRadiusM", 140.0f);
+    addFloat("u_detailAmplitudeM", 0.6f);
+    addFloat("u_detailUvScale", 5.0f);
+    addFloat("u_layerDisplacementScale", 2.5f);
+    panel->Build(snapshot);
+    context->Update();
+
+    for (const char* id : tessControls)
+        EXPECT_FALSE(document->GetElementById(id)->HasAttribute("disabled")) << id;
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-tess-max"), 24.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-tess-radius"), 140.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-detail-height"), 0.6f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-detail-uv"), 5.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-displacement-scale"), 2.5f);
+
+    sink.commands.clear();
+    SetValue("terrain-material-tess-max", "20");
+    panel->Build(snapshot);
+    ASSERT_FALSE(sink.commands.empty());
+    const auto& batch = std::get<ExecuteEditorCommandBatchPayload>(
+        sink.commands.back().payload);
+    ASSERT_EQ(batch.commands.size(), 1u);
+    EXPECT_EQ(batch.commands[0].type, EditorCommandType::SetMaterialParameterOverride);
+    const auto& payload = std::get<SetMaterialParameterOverridePayload>(
+        batch.commands[0].payload);
+    EXPECT_EQ(payload.assetPath, asset.assetPath);
+    EXPECT_EQ(payload.parameter, "u_terrainTessMax");
+    EXPECT_FLOAT_EQ(std::get<float>(payload.value), 20.0f);
+}
+
 TEST_F(EditorUiTest, LandscapeBrushLibraryAppliesPresetParameters)
 {
     SelectSceneActorForSculpt(SculptTerrainActor("Landscape", 1));

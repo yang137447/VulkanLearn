@@ -121,6 +121,26 @@ std::string MaterialInstanceAssetEditorPanel::TerrainMaterialPath() const
     return terrainMaterialPathCache;
 }
 
+std::string MaterialInstanceAssetEditorPanel::TerrainDetailMaterialPath() const
+{
+    if (const EditorSceneActorSnapshot* actor = TerrainMaterialActor();
+        actor != nullptr && actor->terrainPlan != nullptr)
+    {
+        terrainDetailMaterialPathCache =
+            actor->terrainPlan->desc.detailMaterialInstancePath;
+        return terrainDetailMaterialPathCache;
+    }
+    // detail MI 也只在自己仍打开时保留，避免关闭后继续把上一个关卡当作当前选择。
+    const bool materialOpen = !terrainDetailMaterialPathCache.empty() &&
+        snapshot.activeDocument.has_value() &&
+        snapshot.activeDocument->assetPath == terrainDetailMaterialPathCache;
+    if (!materialOpen)
+    {
+        terrainDetailMaterialPathCache.clear();
+    }
+    return terrainDetailMaterialPathCache;
+}
+
 std::string MaterialInstanceAssetEditorPanel::TerrainAssetPath() const
 {
     TerrainMaterialPath();
@@ -131,41 +151,85 @@ void MaterialInstanceAssetEditorPanel::RefreshTerrainMaterialPanel()
 {
     if (document == nullptr) return;
     const std::string materialPath = TerrainMaterialPath();
+    const std::string detailMaterialPath = TerrainDetailMaterialPath();
     // 面板是单行工具条：只显示文件名，完整路径由 Open MI 打开后可见。
     const std::string displayPath = materialPath.empty()
         ? std::string("No terrain material")
         : std::filesystem::path(materialPath).filename().string();
+    const std::string detailDisplayPath = detailMaterialPath.empty()
+        ? std::string("No detail MI")
+        : std::filesystem::path(detailMaterialPath).filename().string();
     SetMarkup("terrain-material-path",
         Text(displayPath));
+    SetMarkup("terrain-detail-material-path",
+        Text(detailDisplayPath));
     SetDisabled("terrain-material-open", materialPath.empty());
+    SetDisabled("terrain-detail-material-open", detailMaterialPath.empty());
     SetDisabled("terrain-asset-open", TerrainAssetPath().empty());
 
     const bool materialOpen = !materialPath.empty() &&
         snapshot.activeDocument.has_value() &&
         snapshot.activeDocument->assetPath == materialPath;
+    const bool detailOpen = !detailMaterialPath.empty() &&
+        snapshot.activeDocument.has_value() &&
+        snapshot.activeDocument->assetPath == detailMaterialPath;
     SetDisabled("terrain-material-uv-scale", !materialOpen);
-    if (!materialOpen)
+
+    const auto readFloat = [&](const char* name) -> std::string
     {
-        SetControlValue("terrain-material-uv-scale", "");
+        if (!snapshot.activeDocument) return {};
+        for (const EditorParameterSnapshot& parameter :
+             snapshot.activeDocument->parameters)
+        {
+            if (parameter.name != name) continue;
+            if (parameter.type != EditorParameterType::Float ||
+                parameter.effectiveValue.values.empty()) return {};
+            return Number(parameter.effectiveValue.values[0]);
+        }
+        return {};
+    };
+
+    SetControlValue("terrain-material-uv-scale",
+        materialOpen ? readFloat("u_uvScale") : "");
+
+    struct TessControl
+    {
+        const char* id;
+        const char* parameter;
+    };
+    const TessControl tessControls[] = {
+        {"terrain-material-tess-max", "u_terrainTessMax"},
+        {"terrain-material-tess-radius", "u_terrainTessRadiusM"},
+        {"terrain-material-detail-height", "u_detailAmplitudeM"},
+        {"terrain-material-detail-uv", "u_detailUvScale"},
+        {"terrain-material-displacement-scale", "u_layerDisplacementScale"},
+    };
+    for (const TessControl& control : tessControls)
+    {
+        SetDisabled(control.id, !detailOpen);
+        SetControlValue(control.id, detailOpen ? readFloat(control.parameter) : "");
+    }
+
+    if (detailOpen)
+    {
+        SetMarkup("terrain-material-status", "Detail MI open");
+    }
+    else if (materialOpen)
+    {
+        SetMarkup("terrain-material-status",
+            detailMaterialPath.empty()
+                ? "MI open"
+                : "MI open; detail MI controls tessellation.");
+    }
+    else
+    {
         SetMarkup("terrain-material-status",
             Text(materialPath.empty()
                 ? "No terrain"
-                : "Open MI to edit tiling."));
-        return;
+                : detailMaterialPath.empty()
+                    ? "Open MI to edit tiling."
+                    : "Open Detail MI to edit tessellation."));
     }
-
-    for (const EditorParameterSnapshot& parameter :
-         snapshot.activeDocument->parameters)
-    {
-        if (parameter.name != "u_uvScale") continue;
-        SetControlValue("terrain-material-uv-scale",
-            Number(parameter.effectiveValue.values[0]));
-        SetMarkup("terrain-material-status", "MI open");
-        return;
-    }
-    SetControlValue("terrain-material-uv-scale", "");
-    SetMarkup("terrain-material-status",
-        "u_uvScale missing");
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshTerrainLayerDetails()

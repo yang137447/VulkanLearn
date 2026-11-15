@@ -304,6 +304,8 @@ private:
     const EditorSceneActorSnapshot* TerrainMaterialActor() const;
     // 材质预览 World 没有地形 actor；打开材质期间沿用进入预览前的路径。
     std::string TerrainMaterialPath() const;
+    // LOD0 的 detail MI 独立于基础 MI，细分/置换参数只存在于这里。
+    std::string TerrainDetailMaterialPath() const;
     std::string TerrainAssetPath() const;
     void SynchronizeTerrainBrushSelection();
     const EditorSceneActorSnapshot* BlueprintPreviewActor() const;
@@ -565,6 +567,7 @@ private:
     bool requestedPreviewBlueprint = false;
     bool requestedPreviewParticle = false;
     mutable std::string terrainMaterialPathCache;
+    mutable std::string terrainDetailMaterialPathCache;
     mutable std::string terrainAssetPathCache;
     std::string terrainDocumentRequestPath;
     uint64_t appliedMaterialPreviewGeneration = 0;

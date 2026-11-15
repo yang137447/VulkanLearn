@@ -118,6 +118,51 @@ void HandlePanelChange(MaterialInstanceAssetEditorPanel& panel, Rml::Element& el
         panel.RefreshTerrainMaterialPanel();
         return;
     }
+    {
+        struct TessEdit
+        {
+            const char* action;
+            const char* parameter;
+            float minimum;
+            float maximum;
+        };
+        static constexpr TessEdit tessEdits[] = {
+            {"terrain-material-tess-max", "u_terrainTessMax", 1.0f, 32.0f},
+            {"terrain-material-tess-radius", "u_terrainTessRadiusM", 0.0f, 500.0f},
+            {"terrain-material-detail-height", "u_detailAmplitudeM", 0.0f, 10.0f},
+            {"terrain-material-detail-uv", "u_detailUvScale", 1.0f, 32.0f},
+            {"terrain-material-displacement-scale", "u_layerDisplacementScale", 0.0f, 8.0f},
+        };
+        for (const TessEdit& edit : tessEdits)
+        {
+            if (action != edit.action) continue;
+            const std::string path = panel.TerrainDetailMaterialPath();
+            if (path.empty()) return;
+            float value = 0.0f;
+            if (!ParseNumber(ControlValue(element), value) ||
+                !std::isfinite(value))
+            {
+                panel.localStatus = "Terrain tessellation value must be finite.";
+                return;
+            }
+            if (value < edit.minimum || value > edit.maximum)
+            {
+                panel.localStatus = std::string(edit.parameter) +
+                    " must be within " + TerrainNumber(edit.minimum) +
+                    ".." + TerrainNumber(edit.maximum) + ".";
+                return;
+            }
+            if (!panel.QueueMaterialFloat(path, edit.parameter, value))
+            {
+                panel.localStatus =
+                    "Open the terrain detail MI before editing tessellation.";
+                return;
+            }
+            panel.localStatus = "Terrain tessellation parameter queued.";
+            panel.RefreshTerrainMaterialPanel();
+            return;
+        }
+    }
     if (action == "terrain-layer-uv-scale" || action == "terrain-layer-uv-rotation")
     {
         const EditorSceneActorSnapshot* actor = panel.TerrainMaterialActor();
