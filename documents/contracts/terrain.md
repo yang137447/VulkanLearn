@@ -76,6 +76,11 @@ mesh/material resource key、World mesh object 和 geometry pass；P2 另有一�
 - 场景里的 `terrain` 对象可以再次覆盖 `pageOrigin` / `pageTilesPerSide`（见“场景对象”）；
   覆盖只改该次摆放的虚拟页区域，不修改 TR 资产本身。
 - `heightmapPath`、`materialInstancePath` 都是资源根相对路径；材质在预检阶段至少必须可解析。
+- `detailMaterialInstancePath`（可选）是 **LOD0 chunk 专用**的第二个 MI（资源根相对、
+  必须是 `type:"materialInstance"`）。设置后 LOD0 使用它，LOD1..N 仍用
+  `materialInstancePath`；缺省时所有 LOD 共用基础 MI。与 `materialInstancePath`
+  指向同一文件会在资产预检与 renderer 加载期被拒绝。当前只有运行时与资产文档支持
+  该字段，TR 资产页尚未编辑它。
 - `paintPath`（可选）是资源根相对的 `.vlpaint` paint 快照路径，且要求至少一层
   `layers`。文件不存在是合法状态：此时它只是 Save Paint 的写入目标；文件存在时
   `TerrainAssetLoader` 会按当前层数恢复覆盖层，存在但格式/层数/权重非法则加载失败；
@@ -369,6 +374,45 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   （2 级 = 0.5×；4 级 = 0.25/0.5/0.75×）；`TerrainSelectLodLevel(distanceCm, distances)`
   在达到第 i 个阈值时返回 `i+1`，超过最后一个阈值用最粗一级，负距离按 0 处理。
 
+### 近场细分（tessellation + 平铺高度图）
+
+近场几何细分是**LOD0 专属**的可选路径，宏高度图与 Jolt 高度场碰撞都不变：
+
+- 触发条件：设备启用了 `tessellationShader`（`RendererBackendVulkan::SupportsTessellation()`），
+  且 LOD0 的 MI 声明了 `macros.VL_TERRAIN_TESSELLATION = 1`。`MaterialInstanceValidator`
+  会把该宏重写成设备实际能力（不支持时强制 `0`），因此同一份资产可以在缺失能力的
+  机器上退化为普通三角形管线。
+- 管线：材质编译链为该变体追加 `engine/passTemplate/base.tesc.glsl` /
+  `base.tese.glsl`（quad patch、`vertices=4`）；`GraphicsPipelineBuilder` 使用
+  `ePatchList` + `patchControlPoints=4`。`RenderableObject` 同时持有三角形索引与
+  patch 索引，draw 端按当前 pipeline 的 `UsesTessellation()` 选择；tess pipeline
+  遇到没有 patch 索引的对象会**跳过绘制**，不会回退到三角索引（PATCH_LIST 拓扑下
+  那是错误绘制）。LOD1..N 仍是三角形拓扑。
+- patch 索引：LOD0 为 `chunkQuads²` 个 base quad；LOD>0 为内圈
+  `(quadsPerChunk-2)²` 个 quad 加过渡带三角形（每个三角形编码成
+  `(i0,i1,i2,i2)` 退化 quad）。patch 顺序是 quad 周长 `a,b,d,c`。
+- 细分因子：TCS 用相机到边中点/ patch 中心的距离计算 outer/inner 因子，
+  半径外严格为 1；共享边的两个 patch 用同一对端点，因子逐位一致。TES 的
+  `layout(quads, equal_spacing, cw)` 必须与管线固定的 `FrontFace::eClockwise`
+  一致（写成 `ccw` 会让地形整体被背面剔除）。
+- 位移：TES 在 world XZ / `u_detailTileSizeM` 处采样 `detailHeightMap`（可平铺
+  16-bit 高度图），沿插值世界法线位移 `(h-0.5)*u_detailAmplitudeM`，并按
+  `u_terrainTessRadiusM` 距离淡出到 0；法线用 ±`0.05*tileSize` 的高度梯度重建。
+  位移只影响视觉：物理仍使用宏高度场；阴影/局部阴影 pass 不生成 tesc/tese，
+  仍按未位移的宏网格投影，因此幅度应保持较小以避免阴影与几何不一致。
+- 相关材质参数：`detailHeightMap`（sampler2D）、`u_detailTileSizeM`、
+  `u_detailAmplitudeM`（默认 0，只细分不位移）、`u_terrainTessRadiusM`、
+  `u_terrainTessMax`。`detailHeightMap` 的默认值是占位纹理（clamp、常量 0.5）；
+  需要真实位移时必须由 MI/TR 绑定一张 `wrapMode: repeat` 的可平铺高度图，
+  否则只会得到常量位移 0。
+- 两个 MI 必须共享同一组 VT 纹理与参数：`RendererTerrainLoader` 会把基础 MI 的
+  page table / atlas / 权重图纹理与 `u_pageTableSize`、`u_pageResolution`、
+  `u_layerForceMip` 等 M_terrain 实际声明的参数同步到 detail MI，并把两者都
+  注册进 `layerVTMaterials`（`u_frameTag` 只存在于 `M_terrainFeedback`，不属于
+  这里的同步范围）。`lodLevels>1` 时基础 MI 不得声明
+  `VL_TERRAIN_TESSELLATION=1`（无论是否配置 detail MI），否则 renderer 加载期
+  直接失败；`lodLevels==1` 的地形没有粗 LOD，基础 MI 开启该宏等同于 LOD0 细分。
+
 ### 几何 chunk 驻留与运行时 streaming
 
 加载期仍按窗口预生成一批 (chunk, LOD) 作为首帧基线；之后的相机移动由
@@ -497,7 +541,9 @@ World 中摆放多次，只要对象名不同。
 
 ## 材质
 
-- 整块地形使用一个 `materialInstancePath`；当前不按 chunk 或层拆分材质。
+- 默认整块地形使用一个 `materialInstancePath`；只有配置了
+  `detailMaterialInstancePath` 时，LOD0 与 LOD1..N 才使用两个 MI（仍不按 chunk
+  单独拆分材质）。
 - `M_terrain`（`shader/glsl/M_terrain.json`）是 DefaultLit 材质。旧数组快速路径
   绑定三张 `sampler2DArray`：`layerAlbedo`（sRGB）、`layerNormal`（linear）、
   `layerPbr`（linear，R=roughness、G=metallic、B=AO、A=height）；L3 VT 路径另有

@@ -150,7 +150,10 @@ MaterialDescriptorSchema MaterialDescriptorSchema::Build(
         uboBinding.type = vk::DescriptorType::eUniformBuffer;
         uboBinding.descriptorCount = 1;
         uboBinding.stageFlags =
-            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+            vk::ShaderStageFlagBits::eVertex |
+            vk::ShaderStageFlagBits::eTessellationControl |
+            vk::ShaderStageFlagBits::eTessellationEvaluation |
+            vk::ShaderStageFlagBits::eFragment;
         // GLSL block沒有 instance name；SPIR-V descriptor binding name 因而為空。
         // Block type 名 UBOMIParamters 只用於生成 GLSL，不是 runtime resource name。
         uboBinding.name.clear();
@@ -194,7 +197,10 @@ MaterialDescriptorSchema MaterialDescriptorSchema::Build(
         textureBindingDesc.type = vk::DescriptorType::eCombinedImageSampler;
         textureBindingDesc.descriptorCount = 1;
         textureBindingDesc.stageFlags =
-            vk::ShaderStageFlagBits::eVertex | vk::ShaderStageFlagBits::eFragment;
+            vk::ShaderStageFlagBits::eVertex |
+            vk::ShaderStageFlagBits::eTessellationControl |
+            vk::ShaderStageFlagBits::eTessellationEvaluation |
+            vk::ShaderStageFlagBits::eFragment;
         textureBindingDesc.memberCount = 0;
         textureBindingDesc.size = 0;
         textureBindingDesc.name = texture.name;

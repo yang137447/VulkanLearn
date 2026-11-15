@@ -332,7 +332,8 @@ TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
             material,
             "shader/glsl/M_terrain.json");
 
-    ASSERT_EQ(schema.GetTextures().size(), 17u);
+    // M_terrain 当前声明 22 张纹理（含 detailHeightMap 与 7 张层页表）。
+    ASSERT_EQ(schema.GetTextures().size(), 22u);
     bool sawLayerTable = false;
     bool sawPageTable = false;
     bool sawLayerIds = false;
@@ -371,6 +372,17 @@ TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
                 sawLayerPageTable0 = true;
             if (texture.name == "layerPageTable4")
                 sawLayerPageTable4 = true;
+        }
+        else if (texture.name == "detailHeightMap")
+        {
+            // 地形近场细分的可平铺高度图是单张 2D 纹理，不是层数组。
+            EXPECT_EQ(texture.glslType, "sampler2D");
+        }
+        else if (texture.name == "globalColour" ||
+                 texture.name == "globalMasks")
+        {
+            // 全局色/遮罩是单张 2D 平铺图。
+            EXPECT_EQ(texture.glslType, "sampler2D");
         }
         else
         {

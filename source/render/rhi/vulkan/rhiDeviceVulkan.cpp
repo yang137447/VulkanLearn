@@ -170,6 +170,11 @@ bool RHIDeviceVulkan::IsDualSourceBlendEnabled() const
     return VulkanManager::GetInstance().IsDualSourceBlendEnabled();
 }
 
+bool RHIDeviceVulkan::IsTessellationShaderEnabled() const
+{
+    return VulkanManager::GetInstance().IsTessellationShaderEnabled();
+}
+
 bool RHIDeviceVulkan::IsDrawIndirectCountEnabled() const
 {
     return VulkanManager::GetInstance().IsDrawIndirectCountEnabled();

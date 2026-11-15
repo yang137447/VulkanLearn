@@ -135,6 +135,9 @@ public:
     bool SupportsTimestampQueries();
     // 材质加载阶段只依赖 backend 能力接口，不直接穿透到 VulkanManager。
     bool SupportsDualSourceBlend() const;
+    // 地形近场细分：只有逻辑设备真正启用 tessellationShader 才能创建
+    // PATCH_LIST pipeline；缺失时材质走 CPU 网格回退。
+    bool SupportsTessellation() const;
     // particle GPU culling 的 indirect-count 路径必须以此为准；false 时
     // 使用 CPU 固定参数的 indirect 绘制并保留相同语义。
     bool SupportsDrawIndirectCount() const;

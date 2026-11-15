@@ -18,6 +18,130 @@
 namespace VL
 {
 
+namespace
+{
+
+// detailMaterialInstancePath 是资源根相对路径；这里与 paintPath 共用同一套
+// 越界检查，避免绝对路径或 `..` 跳出资源根后被 material loader 静默解析到
+// 工作目录中的另一份 MI。
+bool ResolveResourceRootRelativeFile(
+    const std::string& relative,
+    const char* fieldName,
+    std::filesystem::path& out,
+    std::string& error)
+{
+    error.clear();
+    out.clear();
+    if (relative.empty())
+    {
+        error = std::string(fieldName) + " is empty";
+        return false;
+    }
+    const std::filesystem::path relativePath(relative);
+    if (relativePath.is_absolute() ||
+        relativePath.has_root_name() ||
+        relativePath.has_root_directory())
+    {
+        error = std::string(fieldName) +
+            " must be resource-root relative: " + relative;
+        return false;
+    }
+
+    std::error_code errorCode;
+    const std::filesystem::path root = std::filesystem::weakly_canonical(
+        CommonFunction::GetResourcePath(),
+        errorCode);
+    if (errorCode)
+    {
+        error = std::string(fieldName) +
+            " resource root cannot be resolved";
+        return false;
+    }
+    const std::filesystem::path target = std::filesystem::weakly_canonical(
+        root / relativePath,
+        errorCode);
+    if (errorCode)
+    {
+        error = std::string(fieldName) +
+            " cannot be resolved: " + relative;
+        return false;
+    }
+    const std::filesystem::path relativeToRoot =
+        target.lexically_relative(root);
+    if (relativeToRoot.empty() || relativeToRoot.is_absolute())
+    {
+        error = std::string(fieldName) +
+            " escapes the resource root: " + relative;
+        return false;
+    }
+    for (const std::filesystem::path& part : relativeToRoot)
+    {
+        if (part == "..")
+        {
+            error = std::string(fieldName) +
+                " escapes the resource root: " + relative;
+            return false;
+        }
+    }
+    const bool exists = std::filesystem::exists(target, errorCode);
+    if (errorCode || !exists ||
+        !std::filesystem::is_regular_file(target, errorCode) ||
+        errorCode)
+    {
+        error = std::string(fieldName) +
+            " does not resolve to a regular file: " + relative;
+        return false;
+    }
+    out = target;
+    return true;
+}
+
+// 只做地形加载期需要的 MI 头部识别：后续 RendererMaterialLoader 仍会执行
+// 完整材质解析。这里提前失败可以避免 LOD0 chunk 生成后才发现 detail MI 是
+// 普通 material / 场景等错误资产。
+bool ValidateDetailMaterialInstanceFile(
+    const std::filesystem::path& physicalPath,
+    const std::string& relative,
+    std::string& error)
+{
+    error.clear();
+    std::ifstream file(physicalPath, std::ios::binary);
+    if (!file)
+    {
+        error = "detailMaterialInstancePath cannot be opened: " + relative;
+        return false;
+    }
+    nlohmann::json json;
+    try
+    {
+        file >> json;
+    }
+    catch (const std::exception& exception)
+    {
+        error = "detailMaterialInstancePath is not valid JSON: " + relative +
+            ": " + exception.what();
+        return false;
+    }
+    if (!json.is_object() ||
+        json.value("type", std::string()) != "materialInstance")
+    {
+        error = "detailMaterialInstancePath must resolve to type "
+            "\"materialInstance\": " + relative;
+        return false;
+    }
+    if (!json.contains("material") ||
+        !json.at("material").is_string() ||
+        json.at("material").get<std::string>().empty())
+    {
+        error = "detailMaterialInstancePath MI requires non-empty material: " +
+            relative;
+        return false;
+    }
+    return true;
+}
+
+} // namespace
+
 TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
 {
     const std::string pathString(terrainAssetPath);
@@ -74,6 +198,8 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
                 asset.at("pageOrigin")[1].get<int>());
         }
         desc.materialInstancePath = asset.at("materialInstancePath").get<std::string>();
+        desc.detailMaterialInstancePath =
+            asset.value("detailMaterialInstancePath", std::string());
         if (asset.contains("layers"))
         {
             for (const auto& layerJson : asset.at("layers"))
@@ -108,7 +234,41 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
         }
 
         // 材质路径在场景预检阶段就要可解析；完整 MI/shader 校验仍留给正式 material loader。
-        static_cast<void>(CommonFunction::Path(desc.materialInstancePath));
+        const std::string baseMaterialPhysical =
+            CommonFunction::Path(desc.materialInstancePath);
+        if (!desc.detailMaterialInstancePath.empty())
+        {
+            std::filesystem::path detailMaterialPhysical;
+            std::string detailMaterialError;
+            if (!ResolveResourceRootRelativeFile(
+                    desc.detailMaterialInstancePath,
+                    "detailMaterialInstancePath",
+                    detailMaterialPhysical,
+                    detailMaterialError))
+            {
+                throw std::runtime_error(detailMaterialError);
+            }
+            if (!ValidateDetailMaterialInstanceFile(
+                    detailMaterialPhysical,
+                    desc.detailMaterialInstancePath,
+                    detailMaterialError))
+            {
+                throw std::runtime_error(detailMaterialError);
+            }
+            // 两条路径都指向同一份 MI 时，LOD0 与 LOD>0 会重新落回同一材质，
+            // 失去“仅近处细分”的收敛意义。这里选择显式拒绝，而不是静默忽略。
+            std::error_code equivalentError;
+            if (std::filesystem::equivalent(
+                    detailMaterialPhysical,
+                    std::filesystem::path(baseMaterialPhysical),
+                    equivalentError) &&
+                !equivalentError)
+            {
+                throw std::runtime_error(
+                    "detailMaterialInstancePath must differ from "
+                    "materialInstancePath: " + desc.detailMaterialInstancePath);
+            }
+        }
 
         const std::filesystem::path heightmapPath =
             CommonFunction::Path(desc.heightmapPath);

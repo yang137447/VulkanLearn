@@ -128,6 +128,10 @@ std::string StageNameForKind(shaderc_shader_kind kind)
         return "vertex";
     case shaderc_fragment_shader:
         return "fragment";
+    case shaderc_tess_control_shader:
+        return "tessControl";
+    case shaderc_tess_evaluation_shader:
+        return "tessEvaluation";
     case shaderc_compute_shader:
         return "compute";
     default:
@@ -145,6 +149,14 @@ const char* RuntimeRoleForStage(const std::string& stageName)
     {
         return RuntimeFragmentRole;
     }
+    if (stageName == "tessControl")
+    {
+        return RuntimeTessControlRole;
+    }
+    if (stageName == "tessEvaluation")
+    {
+        return RuntimeTessEvaluationRole;
+    }
     if (stageName == "compute")
     {
         return RuntimeComputeRole;
@@ -161,6 +173,14 @@ const char* DebugRoleForStage(const std::string& stageName)
     if (stageName == "fragment")
     {
         return DebugFragmentRole;
+    }
+    if (stageName == "tessControl")
+    {
+        return DebugTessControlRole;
+    }
+    if (stageName == "tessEvaluation")
+    {
+        return DebugTessEvaluationRole;
     }
     if (stageName == "compute")
     {

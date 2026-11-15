@@ -12,14 +12,21 @@
 namespace VL
 {
 
-// 一次装配产生的顶点、片元源码及其诊断用虚拟路径。
-// Vertex and fragment sources produced by one composition, with virtual paths used for diagnostics.
+// 一次装配产生的各阶段源码及其诊断用虚拟路径。
+// 细分阶段只在材质显式请求地形细分时填充，其余情况保持空以复用原有顶点/片元路径。
+// Per-stage sources produced by one composition, with virtual paths used for diagnostics.
+// Tessellation stages are populated only when the material requests terrain tessellation;
+// otherwise they stay empty so the existing vertex/fragment path is unchanged.
 struct ComposedMaterialShaderSource
 {
     std::string vertexSource;
     std::string fragmentSource;
     std::string vertexVirtualPath;
     std::string fragmentVirtualPath;
+    std::string tessControlSource;
+    std::string tessEvaluationSource;
+    std::string tessControlVirtualPath;
+    std::string tessEvaluationVirtualPath;
 };
 
 // 根据编译请求，将材质求值模块装配到引擎持有的 Pass 模板中。

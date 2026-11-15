@@ -150,6 +150,11 @@ bool RendererBackendVulkan::SupportsDualSourceBlend() const
     return rhiDevice->IsDualSourceBlendEnabled();
 }
 
+bool RendererBackendVulkan::SupportsTessellation() const
+{
+    return rhiDevice->IsTessellationShaderEnabled();
+}
+
 bool RendererBackendVulkan::SupportsDrawIndirectCount() const
 {
     return rhiDevice->IsDrawIndirectCountEnabled();

@@ -138,6 +138,7 @@ struct EditorThumbnailRenderSession::Impl : PassRuntimeServices
                 input.materialOverride = node.value("materialOverride", std::string{});
                 input.shaderRoot = factory.GetShaderCompiler().GetShaderRoot();
                 input.supportsDualSourceBlend = backend.SupportsDualSourceBlend();
+                input.supportsTessellation = backend.SupportsTessellation();
                 for (const auto& pair : graph.GetRenderpasses())
                 {
                     const auto& pass = pair.second;

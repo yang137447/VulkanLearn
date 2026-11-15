@@ -1,5 +1,6 @@
 #include "materialInstanceValidator.h"
 
+#include <algorithm>
 #include <sstream>
 #include <stdexcept>
 #include <filesystem>
@@ -367,7 +368,8 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     std::string_view materialPath,
     const nlohmann::json& materialJson,
     bool supportsDualSourceBlend,
-    bool prerenderSkin)
+    bool prerenderSkin,
+    bool supportsTessellation)
 {
     MaterialInstanceBuildPlan loadPlan;
     loadPlan.shaderVariantKey.shaderName =
@@ -392,6 +394,38 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     loadPlan.shaderVariantKey.shadingModelMacro =
         MaterialAssetUtils::ShadingModelToShaderDefine(shadingModel);
     loadPlan.shaderVariantKey.macros = ParseMaterialMacros(materialInstanceJson);
+    // 地形细分是设备能力宏：材质只声明意图，最终值由引擎按设备能力写死，
+    // 避免资产伪造能力导致 PATCH_LIST pipeline 与 shader 阶段不一致。
+    if (HasMaterialMacroName(
+            loadPlan.shaderVariantKey.macros,
+            "VL_TERRAIN_TESSELLATION"))
+    {
+        const bool wantsTessellation = HasMaterialMacroValue(
+            loadPlan.shaderVariantKey.macros,
+            "VL_TERRAIN_TESSELLATION",
+            "1");
+        std::vector<std::string>& macros = loadPlan.shaderVariantKey.macros;
+        macros.erase(
+            std::remove_if(
+                macros.begin(),
+                macros.end(),
+                [](const std::string& macro)
+                {
+                    const std::string_view view = macro;
+                    const size_t separator = view.find('=');
+                    const std::string_view name = TrimMaterialMacroToken(
+                        separator == std::string_view::npos
+                            ? view
+                            : view.substr(0, separator));
+                    return name == "VL_TERRAIN_TESSELLATION";
+                }),
+            macros.end());
+        macros.push_back(
+            wantsTessellation && supportsTessellation
+                ? "VL_TERRAIN_TESSELLATION=1"
+                : "VL_TERRAIN_TESSELLATION=0");
+        macros = NormalizeMaterialMacros(std::move(macros));
+    }
     // 预蒙皮是引擎拥有的变体维度：材质不能自行声明，离线/编辑器预览路径
     // 也走同一个 BuildLoadPlan，因此 flag 必须显式传入而不是读全局。
     if (HasMaterialMacroName(loadPlan.shaderVariantKey.macros, "VL_SKINNED_PRERENDERED"))

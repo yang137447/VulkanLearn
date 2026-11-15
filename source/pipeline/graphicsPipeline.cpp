@@ -8,6 +8,7 @@
 #include "vulkanPipelineDiagnostics.h"
 #include "../vulkanDebug.h"
 #include <algorithm>
+#include <stdexcept>
 
 namespace
 {
@@ -71,6 +72,9 @@ GraphicsPipeline::GraphicsPipeline(
     this->shaderDisplayName = shaderArtifact.displayName;
     this->vertexSpirv = shaderArtifact.vertexSpirv;
     this->fragmentSpirv = shaderArtifact.fragmentSpirv;
+    this->hasTessellation = shaderArtifact.hasTessellation;
+    this->tessControlSpirv = shaderArtifact.tessControlSpirv;
+    this->tessEvaluationSpirv = shaderArtifact.tessEvaluationSpirv;
     this->shaderBindings = shaderArtifact.shaderBindings;
 
     try
@@ -137,47 +141,97 @@ void GraphicsPipeline::DestroyPipelineLayout()
 
 void GraphicsPipeline::CreateShader()
 {
-    vk::ShaderModule vertexShaderModule;
-    vk::ShaderModuleCreateInfo vertexShaderModuleCreateInfo;
-    vertexShaderModuleCreateInfo
-        .setCodeSize(vertexSpirv.size() * sizeof(uint32_t))
-        .setPCode(vertexSpirv.data());
-    vk::Result result = device->createShaderModule(&vertexShaderModuleCreateInfo, nullptr, &vertexShaderModule);
-    VL::RequireVulkanPipelineSuccess(
-        result,
-        "Create vertex shader module",
-        shaderDisplayName,
-        "graphics pipeline");
-    VulkanDebug::SetObjectName(*device, vertexShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Vert: " + shaderDisplayName);
-
-    vk::ShaderModule fragmentShaderModule;
-    vk::ShaderModuleCreateInfo fragmentShaderModuleCreateInfo;
-    fragmentShaderModuleCreateInfo
-        .setCodeSize(fragmentSpirv.size() * sizeof(uint32_t))
-        .setPCode(fragmentSpirv.data());
-    result = device->createShaderModule(&fragmentShaderModuleCreateInfo, nullptr, &fragmentShaderModule);
-    if (result != vk::Result::eSuccess)
+    shaderStages.clear();
+    try
     {
-        device->destroyShaderModule(vertexShaderModule, nullptr);
-        VL::RequireVulkanPipelineSuccess(
-            result,
-            "Create fragment shader module",
-            shaderDisplayName,
-            "graphics pipeline");
-    }
-    VulkanDebug::SetObjectName(*device, fragmentShaderModule, vk::ObjectType::eShaderModule, "ShaderModule_Frag: " + shaderDisplayName);
-    shaderStages.resize(2);
-    shaderStages[0]
-        .setStage(vk::ShaderStageFlagBits::eVertex)
-        .setModule(vertexShaderModule)
-        .setPName("main")
-        .setPSpecializationInfo(nullptr);
-    shaderStages[1]
-        .setStage(vk::ShaderStageFlagBits::eFragment)
-        .setModule(fragmentShaderModule)
-        .setPName("main")
-        .setPSpecializationInfo(nullptr);
+        auto createStageModule = [](
+            vk::Device& device,
+            const std::vector<uint32_t>& spirv,
+            const char* action,
+            const std::string& displayName,
+            const char* debugPrefix) {
+            vk::ShaderModuleCreateInfo createInfo;
+            createInfo
+                .setCodeSize(spirv.size() * sizeof(uint32_t))
+                .setPCode(spirv.data());
+            vk::ShaderModule module;
+            const vk::Result result = device.createShaderModule(
+                &createInfo,
+                nullptr,
+                &module);
+            VL::RequireVulkanPipelineSuccess(
+                result,
+                action,
+                displayName,
+                "graphics pipeline");
+            VulkanDebug::SetObjectName(
+                device,
+                module,
+                vk::ObjectType::eShaderModule,
+                debugPrefix + displayName);
+            return module;
+        };
+        auto appendStage = [this](
+            vk::ShaderStageFlagBits stage,
+            vk::ShaderModule module) {
+            vk::PipelineShaderStageCreateInfo stageInfo;
+            stageInfo
+                .setStage(stage)
+                .setModule(module)
+                .setPName("main")
+                .setPSpecializationInfo(nullptr);
+            shaderStages.push_back(stageInfo);
+        };
 
+        appendStage(
+            vk::ShaderStageFlagBits::eVertex,
+            createStageModule(
+                *device,
+                vertexSpirv,
+                "Create vertex shader module",
+                shaderDisplayName,
+                "ShaderModule_Vert: "));
+        appendStage(
+            vk::ShaderStageFlagBits::eFragment,
+            createStageModule(
+                *device,
+                fragmentSpirv,
+                "Create fragment shader module",
+                shaderDisplayName,
+                "ShaderModule_Frag: "));
+        if (hasTessellation)
+        {
+            if (tessControlSpirv.empty() ||
+                tessEvaluationSpirv.empty())
+            {
+                throw std::runtime_error(
+                    "Tessellation shader variant is missing tesc/tese SPIR-V: " +
+                    shaderDisplayName);
+            }
+            appendStage(
+                vk::ShaderStageFlagBits::eTessellationControl,
+                createStageModule(
+                    *device,
+                    tessControlSpirv,
+                    "Create tessellation control shader module",
+                    shaderDisplayName,
+                    "ShaderModule_TessControl: "));
+            appendStage(
+                vk::ShaderStageFlagBits::eTessellationEvaluation,
+                createStageModule(
+                    *device,
+                    tessEvaluationSpirv,
+                    "Create tessellation evaluation shader module",
+                    shaderDisplayName,
+                    "ShaderModule_TessEval: "));
+        }
+    }
+    catch (...)
+    {
+        // 已创建的模块都挂在 shaderStages 上，统一按现有销毁路径释放。
+        DestroyShader();
+        throw;
+    }
 }
 
 void GraphicsPipeline::DestroyShader()

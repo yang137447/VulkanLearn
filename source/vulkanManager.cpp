@@ -273,6 +273,14 @@ void VulkanManager::CreateVkDevice()
         supportedFeatures.fragmentStoresAndAtomics == VK_TRUE;
     independentBlendEnabled =
         supportedFeatures.independentBlend == VK_TRUE;
+    tessellationShaderEnabled =
+        supportedFeatures.tessellationShader == VK_TRUE;
+    if (!tessellationShaderEnabled)
+    {
+        std::cerr << "[Vulkan] tessellationShader is not supported; "
+                     "terrain near-field tessellation stays disabled."
+                  << std::endl;
+    }
     // 粒子 overdraw 诊断在 fragment 中对 storage buffer 做原子累加；
     // 当前没有第二套无原子 shader，因此在设备初始化时显式拒绝缺失能力。
     if (!fragmentStoresAndAtomicsEnabled)
@@ -306,6 +314,8 @@ void VulkanManager::CreateVkDevice()
             fragmentStoresAndAtomicsEnabled ? VK_TRUE : VK_FALSE)
         .setIndependentBlend(
             independentBlendEnabled ? VK_TRUE : VK_FALSE)
+        .setTessellationShader(
+            tessellationShaderEnabled ? VK_TRUE : VK_FALSE)
         .setDualSrcBlend(
             dualSourceBlendEnabled ? VK_TRUE : VK_FALSE);
     vk::PhysicalDeviceVulkan12Features deviceVulkan12Features;

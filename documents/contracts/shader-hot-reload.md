@@ -53,6 +53,10 @@ shadercache stats
 - push constant offset/size/stage
 - vertex input location/component/format/type
 - fragment output location/component/format/type
+- **不覆盖** tessellation control/evaluation 的 interface：`ShaderAbiSignature`
+  当前只收集 vertex input 与 fragment output。tesc/tese 接口不匹配由
+  pipeline 创建事务（编译/链接失败 → 候选回滚）兜底；patch 拓扑与控制点数
+  同样属于固定管线状态，不进 ABI 指纹。
 - specialization constant id/type/name
 - compute local workgroup size
 

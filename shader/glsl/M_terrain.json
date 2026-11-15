@@ -6,7 +6,7 @@
         "renderMode": "Opaque",
         "cullMode": "Back"
     },
-    "macros": {},
+    "macros": {"VL_TERRAIN_TESSELLATION": 0},
     "parameters": {
         "u_uvScale": {
             "type": "float",
@@ -142,6 +142,42 @@
                 "max": 1.0
             },
             "description": "near-field detail albedo and normal blend strength"
+        },
+        "u_detailTileSizeM": {
+            "type": "float",
+            "default": 8.0,
+            "range": {
+                "min": 0.5,
+                "max": 64.0
+            },
+            "description": "world-space size in metres of one detailHeightMap tile; the TES divides world XZ by this value"
+        },
+        "u_detailAmplitudeM": {
+            "type": "float",
+            "default": 0.0,
+            "range": {
+                "min": 0.0,
+                "max": 10.0
+            },
+            "description": "peak-to-peak detail displacement in metres; 0 keeps the default look and only subdivides"
+        },
+        "u_terrainTessRadiusM": {
+            "type": "float",
+            "default": 60.0,
+            "range": {
+                "min": 0.0,
+                "max": 500.0
+            },
+            "description": "camera radius in metres where tessellation and detail displacement fade to the undivided mesh"
+        },
+        "u_terrainTessMax": {
+            "type": "float",
+            "default": 8.0,
+            "range": {
+                "min": 1.0,
+                "max": 16.0
+            },
+            "description": "maximum quad-patch tessellation factor at the camera; outer factors still match on shared edges"
         },
         "u_macroUvScale": {
             "type": "float",
@@ -341,6 +377,10 @@
         "layerHeight": {
             "type": "sampler2DArray",
             "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        },
+        "detailHeightMap": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
         },
         "globalColour": {
             "type": "sampler2D",

@@ -542,6 +542,7 @@ TerrainMeshUpdate TerrainEditSession::BuildUpdate() const
                 : chunkBaseName;
             chunk.vertices = mesh.vertices;
             chunk.indices = mesh.indices;
+            chunk.patchIndices = mesh.patchIndices;
             chunk.boundsMin = mesh.boundsMin;
             chunk.boundsMax = mesh.boundsMax;
             update.chunks.push_back(std::move(chunk));

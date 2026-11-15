@@ -197,6 +197,12 @@ private:
     {
         return drawIndirectCountEnabled;
     }
+    // 地形近场细分使用 tessellation control/evaluation；缺失时材质回退到
+    // 现有 CPU 网格路径，不能静默创建 PATCH_LIST pipeline。
+    inline bool IsTessellationShaderEnabled() const
+    {
+        return tessellationShaderEnabled;
+    }
     inline bool IsFragmentStoresAndAtomicsEnabled() const
     {
         return fragmentStoresAndAtomicsEnabled;
@@ -275,6 +281,7 @@ private:
     bool drawIndirectCountEnabled = false;
     bool fragmentStoresAndAtomicsEnabled = false;
     bool independentBlendEnabled = false;
+    bool tessellationShaderEnabled = false;
     vk::Queue graphicsQueue;
 
     vk::Device device;

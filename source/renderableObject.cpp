@@ -17,7 +17,8 @@ RenderableObject::RenderableObject(
     std::vector<uint32_t> indices,
     VL::RendererBackendVulkan& rendererBackend,
     const std::string& name,
-    bool dynamicVertices)
+    bool dynamicVertices,
+    std::vector<uint32_t> patchIndices)
 {
     this->rendererBackend = &rendererBackend;
     this->vertices = std::move(vertices);
@@ -31,6 +32,7 @@ RenderableObject::RenderableObject(
     CreateVertexBuffer();
     // 创建索引缓冲区
     CreateIndexBuffer();
+    CreatePatchIndexBuffer(patchIndices);
     CreateInstanceBuffer();
 }
 RenderableObject::RenderableObject(
@@ -202,6 +204,7 @@ RenderableObject::~RenderableObject()
         rendererBackend->DestroyBuffer(skinInfluenceBuffer, skinInfluenceMemory);
     // 销毁索引缓冲区
     DestroyIndexBuffer();
+    DestroyPatchIndexBuffer();
     // 销毁顶点缓冲区
     DestroyVertexBuffer();
     DestroyInstanceBuffer();
@@ -272,7 +275,8 @@ std::shared_ptr<RenderableObject> RenderableObject::CloneForPlacement(
 
 void RenderableObject::Draw(
     vk::CommandBuffer &commandBuffer,
-    uint32_t frameSlot)
+    uint32_t frameSlot,
+    bool usePatchIndices)
 {
     // viewport/scissor 由 PassRuntime 按 pass 统一设置，避免每个对象把中心
     // 视口覆盖回整张资源。
@@ -281,15 +285,27 @@ void RenderableObject::Draw(
         dynamicVertices ? dynamicVertexBuffers[slot] : vertexBuffer;
     const vk::DescriptorBufferInfo& boundVertexInfo =
         dynamicVertices ? dynamicVertexBufferInfos[slot] : vertexBufferInfo;
-    const vk::Buffer boundIndexBuffer =
-        fixedCapacity ? dynamicIndexBuffers[slot] : indexBuffer;
+    // patch 索引只在 pipeline 要求且对象存在 patch 数据时使用；非地形对象
+    // 即使 pipeline 标志为 true 也不会回退到三角形索引（见下方跳过）。
+    const bool drawPatches =
+        usePatchIndices && patchIndexBuffer != vk::Buffer{} &&
+        patchIndexCount != 0;
+    // PATCH_LIST pipeline 必须绑定 patch 索引；对象没有 patch 数据时跳过绘制。
+    // 回退到三角索引会在错误的拓扑下解释索引（普通 mesh 误用 tess 材质、
+    // 缩略图预览球等路径）。材质层应尽量避免这种组合。
+    if (usePatchIndices && !drawPatches)
+        return;
+    const vk::Buffer boundIndexBuffer = drawPatches
+        ? patchIndexBuffer
+        : (fixedCapacity ? dynamicIndexBuffers[slot] : indexBuffer);
     const vk::Buffer vertexBuffers[2] = {boundVertexBuffer, instanceBuffer};
     const vk::DeviceSize vertexOffsets[2] = {boundVertexInfo.offset, 0};
     commandBuffer.bindVertexBuffers(0, 2, vertexBuffers, vertexOffsets);
     commandBuffer.bindIndexBuffer(
         boundIndexBuffer, 0, vk::IndexType::eUint32);
-    const size_t count =
-        fixedCapacity ? dynamicIndexCounts[slot] : GetIndices().size();
+    const size_t count = drawPatches
+        ? patchIndexCount
+        : (fixedCapacity ? dynamicIndexCounts[slot] : GetIndices().size());
     if (count == 0) return;
     commandBuffer.drawIndexed(
         static_cast<uint32_t>(count),

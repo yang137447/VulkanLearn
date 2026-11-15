@@ -1,3 +1,9 @@
+// 文件职责：实现材质 Pass 装配，把特性宏、材质上下文、生成参数 include 与
+// 引擎顶点/片元/细分模板拼成完整 GLSL；不解析 GLSL 语义、不编译 SPIR-V。
+// File responsibility: Implements material pass composition by joining feature
+// macros, material context, generated parameter includes, and engine templates;
+// it neither parses GLSL semantics nor compiles SPIR-V.
+
 #include "material/compiler/materialShaderComposer.h"
 
 #include <filesystem>
@@ -10,6 +16,8 @@ namespace VL
 {
 namespace
 {
+
+constexpr const char* kTerrainTessellationMacro = "VL_TERRAIN_TESSELLATION";
 
 std::string BuildFeatureDefines(
     const MaterialFeatureKey& features,
@@ -123,6 +131,38 @@ std::string BuildStageSource(
     return stream.str();
 }
 
+std::string BuildTessellationStageSource(
+    const MaterialShaderCompileRequest& request,
+    const std::filesystem::path& virtualSourceDirectory,
+    const std::filesystem::path& shaderGlslRoot,
+    bool tessControlStage)
+{
+    std::ostringstream stream;
+    stream << "#version 450\n\n";
+    stream << BuildFeatureDefines(request.features, request.pass);
+    // 与顶点/片元一致：共享材质上下文和生成参数先进入编译单元，
+    // 细分模板只负责控制点透传、因子选择与位移。
+    AppendInclude(
+        stream,
+        virtualSourceDirectory,
+        shaderGlslRoot,
+        "engine/materialContext.glsl");
+    AppendInclude(
+        stream,
+        virtualSourceDirectory,
+        shaderGlslRoot,
+        request.source.parameterIncludePath,
+        request.source.parameterIncludeBytes.has_value());
+    AppendInclude(
+        stream,
+        virtualSourceDirectory,
+        shaderGlslRoot,
+        tessControlStage
+            ? "engine/passTemplate/base.tesc.glsl"
+            : "engine/passTemplate/base.tese.glsl");
+    return stream.str();
+}
+
 } // namespace
 
 ComposedMaterialShaderSource MaterialShaderComposer::Compose(
@@ -155,6 +195,33 @@ ComposedMaterialShaderSource MaterialShaderComposer::Compose(
         virtualSourceDirectory,
         shaderGlslRoot,
         false);
+
+    // 地形细分只服务 Base pass：shadowDepth 顶点模板不写 MaterialVaryings，
+    // 而 base.tese 的接口必须与 base.vert 完全一致。若在这里为阴影 pass
+    // 也生成细分阶段，管线创建会因接口不匹配失败。
+    const bool terrainTessellation =
+        request.pass == MaterialPass::Base &&
+        HasMaterialMacroValue(
+            request.shaderVariantKey.macros,
+            kTerrainTessellationMacro,
+            "1");
+    if (terrainTessellation)
+    {
+        result.tessControlVirtualPath =
+            (virtualSourceDirectory / (requestHash + ".tesc")).string();
+        result.tessEvaluationVirtualPath =
+            (virtualSourceDirectory / (requestHash + ".tese")).string();
+        result.tessControlSource = BuildTessellationStageSource(
+            request,
+            virtualSourceDirectory,
+            shaderGlslRoot,
+            true);
+        result.tessEvaluationSource = BuildTessellationStageSource(
+            request,
+            virtualSourceDirectory,
+            shaderGlslRoot,
+            false);
+    }
     return result;
 }
 

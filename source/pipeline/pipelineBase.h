@@ -18,4 +18,7 @@ public:
     // explicit descriptor contract overrides such as the full material Set 1.
     virtual const std::vector<ShaderBinding>& GetShaderBindings() const = 0;
     virtual const std::vector<ShaderBinding>& GetDescriptorLayoutBindings() const = 0;
+    // 地形细分管线使用 PATCH_LIST；draw 端需要用虚函数读取该标志，
+    // 避免每个 draw 都做一次 RTTI dynamic_cast。
+    virtual bool UsesTessellation() const { return false; }
 };

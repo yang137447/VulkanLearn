@@ -36,6 +36,9 @@ struct TerrainChunkMeshUpdate
     std::string objectName;
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
+    // 四边形 patch 索引（LOD0 = base quads；粗 LOD = 内圈 quads + 退化过渡三角形）。
+    // 与 TerrainMeshBuilder::BuildChunks 的输出保持同源。
+    std::vector<uint32_t> patchIndices;
     Eigen::Vector3f boundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f boundsMax = Eigen::Vector3f::Zero();
 };

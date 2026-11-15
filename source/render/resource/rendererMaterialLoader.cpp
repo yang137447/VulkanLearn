@@ -391,7 +391,8 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         materialInstanceResolveResult.materialPath,
         materialInstanceResolveResult.materialJson,
         rendererBackend.SupportsDualSourceBlend(),
-        loadContext.prerenderSkin);
+        loadContext.prerenderSkin,
+        rendererBackend.SupportsTessellation());
     if (!isOverriddenMaterialInstance && !loadContext.useFrozenMaterials &&
         cachedMaterialInstance != nullptr)
     {

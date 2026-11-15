@@ -14,9 +14,13 @@ namespace ShaderCompilerDetail
 
 inline constexpr const char* RuntimeVertexRole = "runtimeVertex";
 inline constexpr const char* RuntimeFragmentRole = "runtimeFragment";
+inline constexpr const char* RuntimeTessControlRole = "runtimeTessControl";
+inline constexpr const char* RuntimeTessEvaluationRole = "runtimeTessEvaluation";
 inline constexpr const char* RuntimeComputeRole = "runtimeCompute";
 inline constexpr const char* DebugVertexRole = "debugVertex";
 inline constexpr const char* DebugFragmentRole = "debugFragment";
+inline constexpr const char* DebugTessControlRole = "debugTessControl";
+inline constexpr const char* DebugTessEvaluationRole = "debugTessEvaluation";
 inline constexpr const char* DebugComputeRole = "debugCompute";
 
 std::string ReadTextFile(const std::filesystem::path& path);

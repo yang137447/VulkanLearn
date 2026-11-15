@@ -3,8 +3,12 @@
 #include <algorithm>
 #include <exception>
 #include <iostream>
+#include <stdexcept>
 #include <utility>
 
+#include "material.h"
+#include "materialInstance.h"
+#include "material/materialAssetUtils.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/rendererResourceCache.h"
@@ -368,12 +372,40 @@ bool TerrainChunkStreamer::UploadChunk(
                 chunk.vertices,
                 chunk.indices,
                 backend,
-                resourceKey));
+                resourceKey,
+                false,
+                chunk.patchIndices));
     }
 
     WorldMeshObject object = *source;
     object.debugName = objectName;
     object.sceneObjectIdentity = placement.sceneObjectIdentity;
+    // 流式上传按目标 LOD 重新解析材质身份。LOD0 用 detail MI，LOD>0 用基础
+    // MI；不能沿用 LOD0 模板的材质，否则粗 LOD 也会进入 PATCH_LIST 管线。
+    const std::string materialInstancePath =
+        TerrainMaterialInstancePathForLod(
+            placement.plan.desc,
+            result.id.lodLevel);
+    const std::string materialInstanceKey =
+        MaterialAssetUtils::NormalizeAssetPath(materialInstancePath);
+    const std::shared_ptr<MaterialInstance> materialInstance =
+        cache.GetMaterialInstance(materialInstanceKey);
+    if (!materialInstance)
+    {
+        throw std::runtime_error(
+            "Terrain streamed chunk material instance is not loaded: " +
+            materialInstanceKey);
+    }
+    const std::shared_ptr<Material> baseMaterial =
+        materialInstance->GetBaseMaterial().lock();
+    if (!baseMaterial)
+    {
+        throw std::runtime_error(
+            "Terrain streamed chunk material instance has no base material: " +
+            materialInstanceKey);
+    }
+    object.materialInstanceKey = materialInstance->GetName();
+    object.materialKey = baseMaterial->GetMaterialKey();
     object.meshKey = resourceKey;
     object.localBoundsMin = chunk.boundsMin;
     object.localBoundsMax = chunk.boundsMax;

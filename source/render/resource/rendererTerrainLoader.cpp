@@ -14,6 +14,7 @@
 #include "material.h"
 #include "materialInstance.h"
 #include "pipeline/pipelineFactory.h"
+#include "shaderVariant.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererResourceCache.h"
@@ -98,18 +99,79 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
             "Terrain material instance was not created: " + plan.desc.materialInstancePath);
     const std::string materialKey =
         materialInstance->GetBaseMaterial().lock()->GetMaterialKey();
+    // 多 LOD 地形只有 LOD0 允许细分：基础 MI 自己开启该宏时，LOD1..N 会
+    // 复用同一条 PATCH_LIST pipeline，而粗 LOD 的语义是三角形拓扑。
+    // 单 LOD（lodLevels==1）没有这个问题，全部 chunk 都是 LOD0。
+    if (plan.desc.lodLevels > 1 &&
+        HasMaterialMacroValue(
+            materialInstance->GetBaseMaterial().lock()->GetShaderVariantKey().macros,
+            "VL_TERRAIN_TESSELLATION",
+            "1"))
+    {
+        throw std::runtime_error(
+            "Terrain base material instance must not enable "
+            "VL_TERRAIN_TESSELLATION for multi-LOD terrain: " +
+            plan.desc.materialInstancePath);
+    }
+    // 可选细分 MI：失败必须硬错误，不能回退到基础 MI，否则近场 LOD0 会
+    // 静默丢失 tessellation 材质。
+    std::shared_ptr<MaterialInstance> detailMaterialInstance;
+    std::string detailMaterialKey;
+    if (!plan.desc.detailMaterialInstancePath.empty())
+    {
+        detailMaterialInstance =
+            materialLoader.LoadSceneMaterialInstance(
+                plan.desc.detailMaterialInstancePath);
+        if (!detailMaterialInstance)
+        {
+            throw std::runtime_error(
+                "Terrain detail material instance was not created: " +
+                plan.desc.detailMaterialInstancePath);
+        }
+        if (detailMaterialInstance == materialInstance)
+        {
+            throw std::runtime_error(
+                "Terrain detail material instance must differ from the base "
+                "instance: " + plan.desc.detailMaterialInstancePath);
+        }
+        const std::shared_ptr<Material> detailBaseMaterial =
+            detailMaterialInstance->GetBaseMaterial().lock();
+        if (!detailBaseMaterial)
+        {
+            throw std::runtime_error(
+                "Terrain detail material instance has no base material: " +
+                plan.desc.detailMaterialInstancePath);
+        }
+        detailMaterialKey = detailBaseMaterial->GetMaterialKey();
+    }
 
     // Phase A：M_terrain 通过生成的 8x2 LUT 读取 TR.layers。
     // LUT 是 world-local 生成资源，由 MI 持有；后续 VT/页面化会替换它的上传方式。
-    bool usesLayerTable = false;
-    for (const MaterialTextureSchemaEntry& texture :
-         materialInstance->GetBaseMaterial().lock()->GetMaterialDescriptorSchema().GetTextures())
-    {
-        if (texture.name == "layerTable")
+    const auto materialUsesTexture = [](
+        const std::shared_ptr<MaterialInstance>& material,
+        const char* textureName) {
+        const std::shared_ptr<Material> baseMaterial =
+            material ? material->GetBaseMaterial().lock() : nullptr;
+        if (!baseMaterial)
+            return false;
+        for (const MaterialTextureSchemaEntry& texture :
+             baseMaterial->GetMaterialDescriptorSchema().GetTextures())
         {
-            usesLayerTable = true;
-            break;
+            if (texture.name == textureName)
+                return true;
         }
+        return false;
+    };
+    const bool usesLayerTable =
+        materialUsesTexture(materialInstance, "layerTable");
+    if (detailMaterialInstance &&
+        materialUsesTexture(detailMaterialInstance, "layerTable") !=
+            usesLayerTable)
+    {
+        throw std::runtime_error(
+            "Terrain detail material instance must use the same layerTable "
+            "material path as the base instance: " +
+            plan.desc.detailMaterialInstancePath);
     }
     if (usesLayerTable)
     {
@@ -124,13 +186,15 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
         const bool vtRequested =
             materialInstance->HasParameter("u_terrainLayerMode") &&
             materialInstance->GetParameter<float>("u_terrainLayerMode") > 0.5f;
+        // 权重图是作者提供的单块地形覆盖层；detail MI 必须复用同一个
+        // Texture 对象，否则 LOD0 与粗 LOD 会采样到不同掩码。
+        const std::shared_ptr<Texture> weightMaps =
+            materialInstance->GetTexture("layerWeightMaps");
         // mode 1 的逐层权重数组属于单块地形。按纹理身份记录使用它的摆放，
         // 等 World 全部地形加载完再判定是否被共享；共享时不能静默采同一份掩码。
         if (materialInstance->HasParameter("u_terrainWeightMapMode") &&
             materialInstance->GetParameter<float>("u_terrainWeightMapMode") > 0.5f)
         {
-            const std::shared_ptr<Texture> weightMaps =
-                materialInstance->GetTexture("layerWeightMaps");
             if (!weightMaps)
             {
                 throw std::runtime_error(
@@ -211,18 +275,20 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
             }
             streamingState.layerVTRequested = true;
             // L4e：登记 mode 1 实例，console 强制 mip 时逐帧写入。
-            bool alreadyRegistered = false;
-            for (const std::weak_ptr<MaterialInstance>& existing :
-                 streamingState.layerVTMaterials)
-            {
-                if (existing.lock() == materialInstance)
+            const auto registerLayerVtMaterial = [&](
+                const std::shared_ptr<MaterialInstance>& material) {
+                if (!material)
+                    return;
+                for (const std::weak_ptr<MaterialInstance>& existing :
+                     streamingState.layerVTMaterials)
                 {
-                    alreadyRegistered = true;
-                    break;
+                    if (existing.lock() == material)
+                        return;
                 }
-            }
-            if (!alreadyRegistered)
-                streamingState.layerVTMaterials.push_back(materialInstance);
+                streamingState.layerVTMaterials.push_back(material);
+            };
+            registerLayerVtMaterial(materialInstance);
+            registerLayerVtMaterial(detailMaterialInstance);
         }
         // L2 的 atlas 依赖实际 MI 绑定到的层数组，因此只能在首个地形 MI
         // 载入后创建；创建后本函数立刻绑定，不能留到对象遍历结束再回填。
@@ -232,44 +298,11 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
                 rendererBackend,
                 streamingState);
         }
-        // page table/atlas 尺寸由 TerrainPageManager 固定；MI 不能覆盖成不匹配的值。
-        if (materialInstance->HasParameter("u_pageTableSize"))
-            materialInstance->SetParameter(
-                "u_pageTableSize",
-                static_cast<float>(TerrainPageManager::PageTableSize));
-        if (materialInstance->HasParameter("u_pageResolution"))
-            materialInstance->SetParameter(
-                "u_pageResolution",
-                static_cast<float>(TerrainPageManager::PageResolution));
-        materialInstance->SetTextureKeepingIdentity(
-            "layerTable", streamingState.layerResources.layerTable);
         if (!streamingState.pageResources.pageTable ||
             !streamingState.pageResources.layerIds ||
             !streamingState.pageResources.layerWeights)
         {
             throw std::runtime_error("Terrain page resources are not initialized");
-        }
-        materialInstance->SetTextureKeepingIdentity(
-            "pageTable", streamingState.pageResources.pageTable);
-        materialInstance->SetTextureKeepingIdentity(
-            "layerIds", streamingState.pageResources.layerIds);
-        materialInstance->SetTextureKeepingIdentity(
-            "layerWeights", streamingState.pageResources.layerWeights);
-        // L3：每 mip 一张页表 + 三张 atlas；mode 0 不使用，但 descriptor
-        // 仍必须是合法纹理，因此统一绑定 L2 创建的共享资源。
-        for (uint32_t mip = 0;
-             mip <= TerrainLayerPageManager::MaxMipLevel;
-             ++mip)
-        {
-            if (!streamingState.layerResources.pageTables[mip])
-            {
-                throw std::runtime_error(
-                    "Terrain layer page table is not initialized for mip " +
-                    std::to_string(mip));
-            }
-            materialInstance->SetTexture(
-                "layerPageTable" + std::to_string(mip),
-                streamingState.layerResources.pageTables[mip]);
         }
         if (!streamingState.layerResources.albedoAtlas ||
             !streamingState.layerResources.normalAtlas ||
@@ -278,49 +311,146 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
             throw std::runtime_error(
                 "Terrain layer atlas resources are not initialized");
         }
-        materialInstance->SetTexture(
-            "layerAlbedoAtlas",
-            streamingState.layerResources.albedoAtlas);
-        materialInstance->SetTexture(
-            "layerNormalAtlas",
-            streamingState.layerResources.normalAtlas);
-        materialInstance->SetTexture(
-            "layerPbrAtlas",
-            streamingState.layerResources.pbrAtlas);
-        if (materialInstance->HasParameter("u_layerPageResolution"))
+        // 基础 MI 与 detail MI 必须绑定同一组 VT 纹理；运行期页表、atlas、
+        // 层数组和权重图都只存在一份，不能各持一份副本。
+        const auto applySharedTerrainTextures = [&](MaterialInstance& target) {
+            target.SetTextureKeepingIdentity(
+                "layerTable", streamingState.layerResources.layerTable);
+            target.SetTextureKeepingIdentity(
+                "pageTable", streamingState.pageResources.pageTable);
+            target.SetTextureKeepingIdentity(
+                "layerIds", streamingState.pageResources.layerIds);
+            target.SetTextureKeepingIdentity(
+                "layerWeights", streamingState.pageResources.layerWeights);
+            target.SetTextureKeepingIdentity("layerAlbedo", layerAlbedo);
+            target.SetTextureKeepingIdentity("layerNormal", layerNormal);
+            target.SetTextureKeepingIdentity("layerPbr", layerPbr);
+            if (weightMaps)
+            {
+                target.SetTextureKeepingIdentity(
+                    "layerWeightMaps", weightMaps);
+            }
+            // L3：每 mip 一张页表 + 三张 atlas；mode 0 不使用，但 descriptor
+            // 仍必须是合法纹理，因此统一绑定 L2 创建的共享资源。
+            for (uint32_t mip = 0;
+                 mip <= TerrainLayerPageManager::MaxMipLevel;
+                 ++mip)
+            {
+                if (!streamingState.layerResources.pageTables[mip])
+                {
+                    throw std::runtime_error(
+                        "Terrain layer page table is not initialized for mip " +
+                        std::to_string(mip));
+                }
+                target.SetTexture(
+                    "layerPageTable" + std::to_string(mip),
+                    streamingState.layerResources.pageTables[mip]);
+            }
+            target.SetTexture(
+                "layerAlbedoAtlas",
+                streamingState.layerResources.albedoAtlas);
+            target.SetTexture(
+                "layerNormalAtlas",
+                streamingState.layerResources.normalAtlas);
+            target.SetTexture(
+                "layerPbrAtlas",
+                streamingState.layerResources.pbrAtlas);
+        };
+        applySharedTerrainTextures(*materialInstance);
+        if (detailMaterialInstance)
+            applySharedTerrainTextures(*detailMaterialInstance);
+
+        // 固定页表/atlas 尺寸；两个 MI 必须使用同一份值。
+        const auto applySharedTerrainParameters = [&](MaterialInstance& target) {
+            if (target.HasParameter("u_pageTableSize"))
+                target.SetParameter(
+                    "u_pageTableSize",
+                    static_cast<float>(TerrainPageManager::PageTableSize));
+            if (target.HasParameter("u_pageResolution"))
+                target.SetParameter(
+                    "u_pageResolution",
+                    static_cast<float>(TerrainPageManager::PageResolution));
+            if (target.HasParameter("u_layerPageResolution"))
+            {
+                target.SetParameter(
+                    "u_layerPageResolution",
+                    static_cast<float>(
+                        TerrainLayerPageManager::PageResolution));
+            }
+            if (target.HasParameter("u_layerAtlasResolution"))
+            {
+                target.SetParameter(
+                    "u_layerAtlasResolution",
+                    static_cast<float>(
+                        TerrainPageManager::AtlasResolution));
+            }
+            if (target.HasParameter("u_layerPagesPerAtlasSlice"))
+            {
+                target.SetParameter(
+                    "u_layerPagesPerAtlasSlice",
+                    static_cast<float>(
+                        TerrainLayerPageManager::PagesPerAtlasSlice));
+            }
+            if (target.HasParameter("u_layerTilesPerAtlasSide"))
+            {
+                target.SetParameter(
+                    "u_layerTilesPerAtlasSide",
+                    static_cast<float>(
+                        TerrainLayerPageManager::TilesPerAtlasSide));
+            }
+            if (target.HasParameter("u_layerMaxMip"))
+            {
+                target.SetParameter(
+                    "u_layerMaxMip",
+                    static_cast<float>(
+                        TerrainLayerPageManager::MaxMipLevel));
+            }
+        };
+        applySharedTerrainParameters(*materialInstance);
+        if (detailMaterialInstance)
         {
-            materialInstance->SetParameter(
-                "u_layerPageResolution",
-                static_cast<float>(
-                    TerrainLayerPageManager::PageResolution));
-        }
-        if (materialInstance->HasParameter("u_layerAtlasResolution"))
-        {
-            materialInstance->SetParameter(
-                "u_layerAtlasResolution",
-                static_cast<float>(
-                    TerrainPageManager::AtlasResolution));
-        }
-        if (materialInstance->HasParameter("u_layerPagesPerAtlasSlice"))
-        {
-            materialInstance->SetParameter(
-                "u_layerPagesPerAtlasSlice",
-                static_cast<float>(
-                    TerrainLayerPageManager::PagesPerAtlasSlice));
-        }
-        if (materialInstance->HasParameter("u_layerTilesPerAtlasSide"))
-        {
-            materialInstance->SetParameter(
-                "u_layerTilesPerAtlasSide",
-                static_cast<float>(
-                    TerrainLayerPageManager::TilesPerAtlasSide));
-        }
-        if (materialInstance->HasParameter("u_layerMaxMip"))
-        {
-            materialInstance->SetParameter(
-                "u_layerMaxMip",
-                static_cast<float>(
-                    TerrainLayerPageManager::MaxMipLevel));
+            // u_uvScale、layer mode、force mip、global 页映射等决定 VT 采样
+            // 语义，必须从基础 MI 复制；detail MI 只保留自己的 tessellation
+            // 视觉参数（detail amplitude / radius 等）。
+            const auto copyFloatParameter = [&](const char* parameterName) {
+                if (!materialInstance->HasParameter(parameterName))
+                    return;
+                if (!detailMaterialInstance->HasParameter(parameterName))
+                {
+                    throw std::runtime_error(
+                        "Terrain detail MI is missing VT parameter '" +
+                        std::string(parameterName) + "': " +
+                        plan.desc.detailMaterialInstancePath);
+                }
+                detailMaterialInstance->SetParameter(
+                    parameterName,
+                    materialInstance->GetParameter<float>(parameterName));
+            };
+            for (const char* parameterName : {
+                     "u_uvScale",
+                     "u_terrainLayerMode",
+                     "u_terrainWeightMapMode",
+                     "u_layerForceMip",
+                     "u_globalSizeCm",
+                     "u_frameTag"})
+            {
+                copyFloatParameter(parameterName);
+            }
+            if (materialInstance->HasParameter("u_globalOriginCm"))
+            {
+                if (!detailMaterialInstance->HasParameter("u_globalOriginCm"))
+                {
+                    throw std::runtime_error(
+                        "Terrain detail MI is missing VT parameter "
+                        "'u_globalOriginCm': " +
+                        plan.desc.detailMaterialInstancePath);
+                }
+                detailMaterialInstance->SetParameter(
+                    "u_globalOriginCm",
+                    materialInstance->GetParameter<Eigen::Vector2f>(
+                        "u_globalOriginCm"));
+            }
+            applySharedTerrainParameters(*detailMaterialInstance);
         }
     }
 
@@ -455,7 +585,9 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
                         chunk.vertices,
                         chunk.indices,
                         rendererBackend,
-                        chunkKey));
+                        chunkKey,
+                        false,
+                        chunk.patchIndices));
             }
 
             MeshObjectBuildPlan objectPlan;
@@ -476,8 +608,16 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
             objectPlan.localBoundsMin = chunk.boundsMin;
             objectPlan.localBoundsMax = chunk.boundsMax;
             objectPlan.meshKey = chunkKey;
-            objectPlan.materialKey = materialKey;
-            objectPlan.materialInstanceKey = materialInstance->GetName();
+            // 只有 LOD0 使用 detail MI；LOD>0 始终使用基础 MI，避免粗 LOD
+            // 也进入 tessellation PATCH_LIST 管线。
+            const bool useDetailMaterial =
+                lodLevel == 0 && detailMaterialInstance != nullptr;
+            objectPlan.materialKey = useDetailMaterial
+                ? detailMaterialKey
+                : materialKey;
+            objectPlan.materialInstanceKey = useDetailMaterial
+                ? detailMaterialInstance->GetName()
+                : materialInstance->GetName();
             // feedback 只回读共享 VT 页表：没有 layers 的普通地形既没有虚拟页，
             // 也不该把自己的页坐标写进其他分层地形的 feedback。
             objectPlan.terrainFeedbackEligible =

@@ -234,6 +234,10 @@ struct TerrainAssetDesc
     Eigen::Vector2i pageOrigin = Eigen::Vector2i(0, 0);
     uint32_t pageTilesPerSide = 8;
     std::string materialInstancePath;
+    // 可选：仅 LOD0 使用的细分材质实例（资源根相对路径）。为空时所有 LOD
+    // 继续使用 materialInstancePath，保持旧资产行为。LOD>0 永远使用基础 MI，
+    // 避免粗 LOD 进入 tessellation PATCH_LIST 管线。
+    std::string detailMaterialInstancePath;
     std::vector<TerrainLayerDesc> layers;
     // CPU 几何 LOD：1 表示只有 LOD0（旧资产默认），最多 4 级。
     uint32_t lodLevels = 1;
@@ -246,6 +250,17 @@ struct TerrainAssetDesc
     // 从 lodDistances 推导（×1.1 覆盖滞回带上沿）。
     std::vector<float> chunkResidencyDistancesCm;
 };
+
+// 按 LOD 选择材质实例路径：只有 LOD0 且作者显式设置 detail 时使用细分 MI。
+// 流式替换与加载器必须共用这一规则，防止 LOD1/2 被 LOD0 模板带成细分材质。
+inline const std::string& TerrainMaterialInstancePathForLod(
+    const TerrainAssetDesc& desc,
+    uint32_t lodLevel)
+{
+    if (lodLevel == 0 && !desc.detailMaterialInstancePath.empty())
+        return desc.detailMaterialInstancePath;
+    return desc.materialInstancePath;
+}
 
 // 距离→阈值推导。renderer 用它在加载期把阈值写进每个 chunk 的 LOD 组，
 // WorldSnapshotBuilder 每帧按相机到 chunk AABB 的距离选择级；返回值不参与

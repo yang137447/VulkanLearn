@@ -85,7 +85,9 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
             entry.key() != "lodLevels" && entry.key() != "lodDistances" &&
             entry.key() != "chunkResidencyDistances" &&
             entry.key() != "pageOrigin" && entry.key() != "pageTilesPerSide" &&
-            entry.key() != "materialInstancePath" && entry.key() != "layers")
+            entry.key() != "materialInstancePath" &&
+            entry.key() != "detailMaterialInstancePath" &&
+            entry.key() != "layers")
         {
             throw std::invalid_argument(
                 "Unknown terrain field: " + entry.key() + " in " + assetPath);
@@ -106,6 +108,16 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
             asset.at(field).get<std::string>().empty())
             throw std::invalid_argument(
                 std::string("Terrain requires non-empty string: ") + field + " in " + assetPath);
+    }
+    // detailMaterialInstancePath 可缺省；一旦出现必须是非空字符串。
+    // 资源根解析与 MI type 校验由 TerrainAssetLoader 在文件层完成。
+    if (asset.contains("detailMaterialInstancePath") &&
+        (!asset.at("detailMaterialInstancePath").is_string() ||
+         asset.at("detailMaterialInstancePath").get<std::string>().empty()))
+    {
+        throw std::invalid_argument(
+            "Terrain detailMaterialInstancePath must be a non-empty string: " +
+            assetPath);
     }
 
     if (!asset.contains("size") || !asset.at("size").is_array() || asset.at("size").size() != 2)
