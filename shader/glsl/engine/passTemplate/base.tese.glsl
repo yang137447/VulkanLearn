@@ -80,9 +80,14 @@ void main()
         length(worldPosition - uboVP.cameraPosition);
     // 半径边界处位移严格归零；边界 patch 的 factor 也为 1，因此与未细分
     // 邻居共享同一组端点高度，不会出现高度缝。
-    const float displacementFade = radiusCm <= 1.0e-3
+    const float farFade = radiusCm <= 1.0e-3
         ? 0.0
         : 1.0 - smoothstep(0.75 * radiusCm, radiusCm, cameraDistanceCm);
+    // 近处保护：相机 2 m 内把位移淡出到 0。否则低空/贴地观察时，位移后的
+    // 地表可能穿过相机近裁剪面或把相机包进背面剔除区域，看起来像“近处被裁剪”。
+    const float nearGuardCm = 200.0;
+    const float nearFade = smoothstep(0.0, nearGuardCm, cameraDistanceCm);
+    const float displacementFade = farFade * nearFade;
 
     const float amplitudeCm = u_detailAmplitudeM * 100.0;
     // 纯细分模式（amplitude=0 或已在淡出半径外）不采样高度图，避免为
