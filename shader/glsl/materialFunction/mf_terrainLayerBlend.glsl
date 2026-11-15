@@ -1,16 +1,23 @@
 #ifndef VL_MATERIAL_FUNCTION_TERRAIN_LAYER_BLEND_GLSL
 #define VL_MATERIAL_FUNCTION_TERRAIN_LAYER_BLEND_GLSL
 
+#ifndef VL_TERRAIN_TES_STAGE
+#define VL_TERRAIN_TES_STAGE 0
+#endif
+
 #include "../engine/materialContext.glsl"
 #include "../engine/materialInputs.glsl"
 #include "../common/commonUbo.glsl"
 #include "mf_normal.glsl"
+#if !VL_TERRAIN_TES_STAGE
 #include "mf_terrainLayerVT.glsl"
+#endif
 
 // Phase B：每 texel 的 top-4 由 CPU 烘焙的 ID/权重图给出，shader 不再遍历全局层表。
 // layerTable 只保留每层 UV 参数；后续 VT/SSBO 版本沿用同一 ID/权重语义。
 const int TERRAIN_MAX_LAYERS = 256;
 
+#if !VL_TERRAIN_TES_STAGE
 vec4 TerrainLayerExtra(int layer)
 {
     // catalog 现在是 256x4：row0 高度/坡度、row1 noise/blendEdge/uvScale/
@@ -20,11 +27,38 @@ vec4 TerrainLayerExtra(int layer)
         layerTable,
         vec2((float(layer) + 0.5) / float(TERRAIN_MAX_LAYERS), 0.375));
 }
+#endif
 
-MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
+vec4 TerrainLayerCatalogRowLod0(int layer, int row)
 {
-    MaterialInputs inputs = CreateDefaultMaterialInputs();
-    const vec3 worldNormal = normalize(context.worldNormal);
+    // 非 fragment 阶段没有可靠的隐式导数；catalog 是 LUT，显式 LOD0
+    // 与 TerrainLayerCatalogRow 的采样结果一致。
+    return textureLod(
+        layerTable,
+        vec2(
+            (float(layer) + 0.5) / float(TERRAIN_MAX_LAYERS),
+            (float(row) + 0.5) / 4.0),
+        0.0);
+}
+
+vec4 TerrainLayerExtraForStage(int layer, bool allowImplicitLod)
+{
+#if VL_TERRAIN_TES_STAGE
+    return TerrainLayerCatalogRowLod0(layer, 1);
+#else
+    return allowImplicitLod
+        ? TerrainLayerExtra(layer)
+        : TerrainLayerCatalogRowLod0(layer, 1);
+#endif
+}
+
+void TerrainResolveTopLayers(
+    in MaterialFunctionContext context,
+    in bool allowImplicitLod,
+    in bool applyHeightBlend,
+    out int ids[4],
+    out float weights[4])
+{
     const int pageTableSize = int(u_pageTableSize);
     // 页索引保持原表达式；全局 UV 恰为 1.0 时 floor 会得到 size，clamp 回最后一页。
     const vec2 rawPageUv = context.texCoord1 * u_pageTableSize;
@@ -33,9 +67,6 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
         ivec2(0),
         ivec2(pageTableSize - 1));
     vec4 page = texelFetch(pageTable, tile, 0);
-    // 缺页掩码在 remap 前保存；有效页走与原 shader 完全相同的采样路径，
-    // 缺页只在最终输出处替换成中性表面，避免分支改变纹理采样/隐式 LOD。
-    const float invalidPage = page.a < 0.5 ? 1.0 : 0.0;
     // 专用 fallback 物理页（页表最后一页）：只用于保持采样路径完整，
     // 绝不回退到另一个地形的 page 0；最终输出由 invalidPage 替换为中性表面。
     if (page.a < 0.5)
@@ -79,8 +110,15 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
         int i3 = 0;
         for (int layer = 0; layer < weightSize.z; ++layer)
         {
+#if VL_TERRAIN_TES_STAGE
+            const float weight = textureLod(
+                layerWeightMaps,
+                vec3(weightUv, float(layer)),
+                0.0).r;
+#else
             const float weight = texture(
                 layerWeightMaps, vec3(weightUv, float(layer))).r;
+#endif
             if (weight > w0)
             {
                 w3 = w2; i3 = i2;
@@ -110,8 +148,14 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
     }
     else
     {
+#if VL_TERRAIN_TES_STAGE
+        topIds = ivec4(round(
+            textureLod(layerIds, atlasUv, 0.0).rgba * 255.0));
+        topWeights = textureLod(layerWeights, atlasUv, 0.0);
+#else
         topIds = ivec4(round(texture(layerIds, atlasUv).rgba * 255.0));
         topWeights = texture(layerWeights, atlasUv);
+#endif
     }
     float weightSum = topWeights.x + topWeights.y + topWeights.z + topWeights.w;
     if (weightSum < 1.0e-4)
@@ -120,14 +164,21 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
         weightSum = 1.0;
     }
     topWeights /= weightSum;
-    int ids[4] = int[4](topIds.x, topIds.y, topIds.z, topIds.w);
-    float weights[4] = float[4](topWeights.x, topWeights.y, topWeights.z, topWeights.w);
+    ids[0] = topIds.x;
+    ids[1] = topIds.y;
+    ids[2] = topIds.z;
+    ids[3] = topIds.w;
+    weights[0] = topWeights.x;
+    weights[1] = topWeights.y;
+    weights[2] = topWeights.z;
+    weights[3] = topWeights.w;
 
     // Height blend: the ID/weight atlas gives a linear cross-fade, which looks
     // muddy where two layers meet. Re-weighting by each layer's 16-bit height
     // (0..1, mean 0.5) keeps the ordering and narrows the transition, the
     // classic "height + inverted weight" scheme. strength 0 is a no-op.
-    if (u_heightBlendStrength > 0.0)
+#if !VL_TERRAIN_TES_STAGE
+    if (applyHeightBlend && u_heightBlendStrength > 0.0)
     {
         // 近处一个 texel 覆盖很多像素，逐 texel 的高度差会让层归属来回
         // 翻转（近看是一块块锯齿）；中远景一个 texel 已经小于像素，
@@ -192,8 +243,55 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
             weights[2] = 0.0;
             weights[3] = 0.0;
         }
-        topWeights = vec4(weights[0], weights[1], weights[2], weights[3]);
     }
+#endif
+}
+
+float TerrainBlendedLayerDisplacementMeters(
+    in MaterialFunctionContext context,
+    in int ids[4],
+    in float weights[4])
+{
+    if (weights[0] <= 1.0e-5)
+        return 0.0;
+    // 与 near-field detail albedo/normal 完全相同的采样：主导层、同一 UV
+    // （texCoord * u_uvScale * layerUvScale * u_detailUvScale，不做 rotation）。
+    // 因此几何起伏和近处颜色/法线细节逐点对齐，且只需一次高度采样。
+    const int layer = ids[0];
+    const vec4 extra = TerrainLayerExtraForStage(layer, false);
+    const vec2 uv =
+        context.texCoord * u_uvScale * extra.z * u_detailUvScale;
+    // LOD2 降低 TES 层高度采样带宽；位移幅度只到厘米级，不需要
+    // height-blend 使用的更细 mip。
+    const float height =
+        textureLod(layerHeight, vec3(uv, float(layer)), 2.0).r;
+    // catalog row3.w 是每层 displacementM（米），不是 height-blend
+    // 的 ±0.25 分数项；这里保留真实几何幅度。
+    const float layerDisplacementM =
+        TerrainLayerCatalogRowLod0(layer, 3).w;
+    return (height - 0.5) * layerDisplacementM;
+}
+
+#if !VL_TERRAIN_TES_STAGE
+MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
+{
+    MaterialInputs inputs = CreateDefaultMaterialInputs();
+    const vec3 worldNormal = normalize(context.worldNormal);
+    const int pageTableSize = int(u_pageTableSize);
+    const vec2 rawPageUv = context.texCoord1 * u_pageTableSize;
+    const ivec2 tile = clamp(
+        ivec2(floor(rawPageUv)),
+        ivec2(0),
+        ivec2(pageTableSize - 1));
+    const vec4 page = texelFetch(pageTable, tile, 0);
+    const float invalidPage = page.a < 0.5 ? 1.0 : 0.0;
+
+    int ids[4];
+    float weights[4];
+    TerrainResolveTopLayers(context, true, true, ids, weights);
+    const ivec4 topIds = ivec4(ids[0], ids[1], ids[2], ids[3]);
+    const vec4 topWeights =
+        vec4(weights[0], weights[1], weights[2], weights[3]);
 
     vec4 albedo = vec4(0.0);
     vec4 pbr = vec4(0.0);
@@ -385,5 +483,6 @@ MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
     inputs.tangent = OrthonormalizeMaterialTangent(inputs.normal, context.worldTangent);
     return inputs;
 }
+#endif
 
 #endif

@@ -181,7 +181,10 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
         const std::shared_ptr<Texture> layerAlbedo = materialInstance->GetTexture("layerAlbedo");
         const std::shared_ptr<Texture> layerNormal = materialInstance->GetTexture("layerNormal");
         const std::shared_ptr<Texture> layerPbr = materialInstance->GetTexture("layerPbr");
-        if (!layerAlbedo || !layerNormal || !layerPbr)
+        // layerHeight 是近场细分主位移的来源；detail MI 若漏绑会静默退化为
+        // 0.5 占位数组（零位移），因此与三张颜色/法线数组一起校验并共享。
+        const std::shared_ptr<Texture> layerHeight = materialInstance->GetTexture("layerHeight");
+        if (!layerAlbedo || !layerNormal || !layerPbr || !layerHeight)
             throw std::runtime_error("Terrain layer arrays are not bound");
         const bool vtRequested =
             materialInstance->HasParameter("u_terrainLayerMode") &&
@@ -325,6 +328,7 @@ RendererTerrainLoadResult RendererTerrainLoader::LoadTerrainObject(
             target.SetTextureKeepingIdentity("layerAlbedo", layerAlbedo);
             target.SetTextureKeepingIdentity("layerNormal", layerNormal);
             target.SetTextureKeepingIdentity("layerPbr", layerPbr);
+            target.SetTextureKeepingIdentity("layerHeight", layerHeight);
             if (weightMaps)
             {
                 target.SetTextureKeepingIdentity(

@@ -71,6 +71,15 @@
             },
             "description": "VT layer atlas slice side in texels; L2 creates 4096x4096 slices"
         },
+        "u_layerDisplacementScale": {
+            "type": "float",
+            "default": 1.0,
+            "range": {
+                "min": 0.0,
+                "max": 8.0
+            },
+            "description": "每层 displacementM 的全局倍率"
+        },
         "u_layerPagesPerAtlasSlice": {
             "type": "float",
             "default": 1024.0,
@@ -143,15 +152,6 @@
             },
             "description": "near-field detail albedo and normal blend strength"
         },
-        "u_detailTileSizeM": {
-            "type": "float",
-            "default": 8.0,
-            "range": {
-                "min": 0.5,
-                "max": 64.0
-            },
-            "description": "world-space size in metres of one detailHeightMap tile; the TES divides world XZ by this value"
-        },
         "u_detailAmplitudeM": {
             "type": "float",
             "default": 0.0,
@@ -159,7 +159,16 @@
                 "min": 0.0,
                 "max": 10.0
             },
-            "description": "peak-to-peak detail displacement in metres; 0 keeps the default look and only subdivides"
+            "description": "可选叠加细节的峰峰值（米），默认 0 = 关闭；主位移来自 layerHeight"
+        },
+        "u_detailNormalStrength": {
+            "type": "float",
+            "default": 1.0,
+            "range": {
+                "min": 0.0,
+                "max": 8.0
+            },
+            "description": "tiling 高度图扰动法线的强度；0 = 只位移不改法线"
         },
         "u_terrainTessRadiusM": {
             "type": "float",

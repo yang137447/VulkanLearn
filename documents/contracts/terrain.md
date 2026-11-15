@@ -395,16 +395,26 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   半径外严格为 1；共享边的两个 patch 用同一对端点，因子逐位一致。TES 的
   `layout(quads, equal_spacing, cw)` 必须与管线固定的 `FrontFace::eClockwise`
   一致（写成 `ccw` 会让地形整体被背面剔除）。
-- 位移：TES 在 world XZ / `u_detailTileSizeM` 处采样 `detailHeightMap`（可平铺
-  16-bit 高度图），沿插值世界法线位移 `(h-0.5)*u_detailAmplitudeM`，并按
-  `u_terrainTessRadiusM` 距离淡出到 0；法线用 ±`0.05*tileSize` 的高度梯度重建。
+- 主位移：TES 用与 near-field detail **color/normal 完全相同的采样**——主导层
+  `ids[0]`、UV `texCoord * u_uvScale * layerUvScale * u_detailUvScale`（不旋转）
+  ——采样该层的 `layerHeight`（显式 LOD2），位移 `(h-0.5) * displacementM *
+  u_layerDisplacementScale`。`displacementM` 来自 layer catalog row3.w；因此
+  起伏与近处颜色/法线细节逐点对齐，且每顶点只需一次层高度采样。逐层 VT 加权
+  位移在细分密度下 GPU 成本过高，不作为运行时路径。
+  TES 的层 ID/权重采样用显式 LOD0（非 fragment 阶段没有可靠隐式导数）；与
+  fragment 的隐式 mip 在近场逐位一致，远处位移已淡出，不参与视觉对比。
+- 可选叠加：`detailHeightMap`（sampler2D，可平铺 16-bit）按
+  `texCoord * u_uvScale * u_detailUvScale` 采样，幅度 `u_detailAmplitudeM`
+  （默认 0 = 关闭），法线用 ±0.05 tile 的 UV 梯度按 `u_detailNormalStrength`
+  在切线空间扰动。默认占位纹理是 clamp 常量 0.5，开启幅度前必须绑定
+  `wrapMode: repeat` 的真实高度图。
+- 两种位移都乘 `u_terrainTessRadiusM` 的远距淡出与相机 2 m 内的近距淡出；
   位移只影响视觉：物理仍使用宏高度场；阴影/局部阴影 pass 不生成 tesc/tese，
   仍按未位移的宏网格投影，因此幅度应保持较小以避免阴影与几何不一致。
-- 相关材质参数：`detailHeightMap`（sampler2D）、`u_detailTileSizeM`、
-  `u_detailAmplitudeM`（默认 0，只细分不位移）、`u_terrainTessRadiusM`、
-  `u_terrainTessMax`。`detailHeightMap` 的默认值是占位纹理（clamp、常量 0.5）；
-  需要真实位移时必须由 MI/TR 绑定一张 `wrapMode: repeat` 的可平铺高度图，
-  否则只会得到常量位移 0。
+- 相关材质参数：`u_layerDisplacementScale`（主导层位移倍率，默认 1）、
+  `detailHeightMap`、`u_detailAmplitudeM`、`u_detailNormalStrength`、
+  `u_detailUvScale`（与 near-field detail 共用的 UV 倍率）、
+  `u_terrainTessRadiusM`、`u_terrainTessMax`。
 - 两个 MI 必须共享同一组 VT 纹理与参数：`RendererTerrainLoader` 会把基础 MI 的
   page table / atlas / 权重图纹理与 `u_pageTableSize`、`u_pageResolution`、
   `u_layerForceMip` 等 M_terrain 实际声明的参数同步到 detail MI，并把两者都
@@ -680,7 +690,7 @@ World 中摆放多次，只要对象名不同。
 - `layerTable` 是 256×4 `RGBA32F` LUT：row0 height/slope、row1 noise/blendEdge/
   `uvScale`/`uvRotation`、row2 `pagesPerSide`/`pageTableBase`/`sourceSet`/`flags`、
   row3 `avgColor`/`displacementM`。mode 0 只消费 row1（v 坐标 `0.375`）的每层 UV 参数
-  与 row3.w（height blend 的米制换算）；
+  与 row3.w（height blend 的米制换算，同时也是近场细分主位移的每层幅度）；
   L3 VT 路径还消费 row2 的 `pagesPerSide` 与 row3 的 `avgColor`（缺页 fallback），
   层权重来自 ID/权重图。
 - page table/ID/权重 atlas 和 layer table 都由 World 级共享资源提供；同一 World 内带 layer

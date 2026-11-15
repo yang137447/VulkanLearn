@@ -1,14 +1,16 @@
 #ifndef VL_PASS_TEMPLATE_BASE_TESE_GLSL
 #define VL_PASS_TEMPLATE_BASE_TESE_GLSL
 
-// 文件职责：地形材质的 Tessellation Evaluation 模板。按世界 XZ 采样可平铺高度图，
-// 在相机半径内沿插值世界法线位移并重建细节法线；输出接口严格对应 base.vert。
-// File responsibility: Terrain material tessellation-evaluation template. It samples the
-// tileable height map in world XZ, displaces along the interpolated world normal inside the
-// camera radius, and rebuilds detail normals; its outputs mirror base.vert exactly.
+// 文件职责：地形材质的 Tessellation Evaluation 模板。主位移来自 top-4 材质层
+// layerHeight，detailHeightMap 只做可选的 terrain-UV 叠加；输出接口严格对应 base.vert。
+// File responsibility: Terrain material tessellation-evaluation template. Primary
+// displacement comes from the top-4 material-layer height maps; detailHeightMap is only
+// an optional terrain-UV overlay; its outputs mirror base.vert exactly.
 
 #include "../../common/commonUbo.glsl"
 #include "../materialContext.glsl"
+#define VL_TERRAIN_TES_STAGE 1
+#include "../../materialFunction/mf_terrainLayerBlend.glsl"
 
 // 引擎图形管线固定 FrontFace::eClockwise；细分器必须按同一绕序生成三角形，
 // 否则整个地形会被背面剔除（实测 ccw 只剩退化 patch 的边缘）。
@@ -19,13 +21,10 @@ layout(location = 0) in MaterialVaryings v2fIn[];
 // 这样 base.frag 不需要知道是否经过细分。
 layout(location = 0) out MaterialVaryings v2f;
 
-float TerrainDetailHeight(vec2 worldXz, float tileSizeCm)
+float TerrainDetailHeight(vec2 detailUv)
 {
     // 细分阶段没有片元导数，显式 LOD 0 同时避免驱动对隐式 LOD 的分歧。
-    return textureLod(
-        detailHeightMap,
-        worldXz / tileSizeCm,
-        0.0).r;
+    return textureLod(detailHeightMap, detailUv, 0.0).r;
 }
 
 void main()
@@ -89,41 +88,71 @@ void main()
     const float nearFade = smoothstep(0.0, nearGuardCm, cameraDistanceCm);
     const float displacementFade = farFade * nearFade;
 
-    const float amplitudeCm = u_detailAmplitudeM * 100.0;
-    // 纯细分模式（amplitude=0 或已在淡出半径外）不采样高度图，避免为
-    // “只把 2 m 网格拆细”承担 5 次纹理采样和法线重建。
-    if (abs(amplitudeCm) > 0.01 && displacementFade > 0.0)
+    // 与片元阶段共用同一份 top-4 解析；TES 没有可靠的隐式导数，因此
+    // 所有层采样都走显式 LOD，并跳过 fragment 专用的 height-blend。
+    MaterialFunctionContext ctx;
+    ctx.clipPosition =
+        v2fIn[0].clipPosition * w0 +
+        v2fIn[1].clipPosition * w1 +
+        v2fIn[2].clipPosition * w2 +
+        v2fIn[3].clipPosition * w3;
+    ctx.previousClipPosition = previousClipPosition;
+    ctx.worldPosition = worldPosition;
+    ctx.worldNormal = worldNormal;
+    ctx.vertexColor = vertexColor;
+    ctx.texCoord = texCoord;
+    ctx.texCoord1 = texCoord1;
+    ctx.worldTangent = worldTangent;
+
+    if (displacementFade > 0.0 && abs(u_layerDisplacementScale) > 1.0e-4)
     {
-        const float tileSizeCm = max(u_detailTileSizeM, 0.001) * 100.0;
-        const vec2 detailWorldXz = worldPosition.xz;
+        int ids[4];
+        float weights[4];
+        TerrainResolveTopLayers(ctx, false, false, ids, weights);
+        const float layerDisplacementCm =
+            TerrainBlendedLayerDisplacementMeters(ctx, ids, weights) *
+            u_layerDisplacementScale * 100.0;
+        worldPosition += worldNormal * layerDisplacementCm * displacementFade;
+    }
+
+    const float amplitudeCm = u_detailAmplitudeM * 100.0;
+    // detailHeightMap 只是可选叠加：UV 与颜色基础 tiling 对齐，默认
+    // amplitude 0 时完全不采样。
+    if (abs(u_detailAmplitudeM) > 0.001 && displacementFade > 0.0)
+    {
+        const float uvScale = max(u_uvScale * u_detailUvScale, 0.001);
+        const vec2 detailUv = texCoord * uvScale;
         const float centerHeight =
-            TerrainDetailHeight(detailWorldXz, tileSizeCm);
+            TerrainDetailHeight(detailUv);
         // 参数按米书写，World 单位是 cm；沿插值世界法线位移，保证斜坡上方向正确。
         worldPosition += worldNormal *
             ((centerHeight - 0.5) * amplitudeCm * displacementFade);
 
-        // 用 ±epsilon 的高度差重建世界空间梯度法线。epsilon 取 0.05 个 tile，
-        // 与 tile 尺寸一起缩放，换 tileSize 时细节频率保持一致。
-        const float epsilonCm = tileSizeCm * 0.05;
+        // 用 ±0.05 tile 的高度差在切线空间扰动法线；不依赖世界尺度，
+        // UV 已与颜色 tiling 对齐，因此细节方向与颜色纹理一致。
+        const float epsilonUv = 0.05;
         const float heightLeft = TerrainDetailHeight(
-            detailWorldXz - vec2(epsilonCm, 0.0), tileSizeCm);
+            detailUv - vec2(epsilonUv, 0.0));
         const float heightRight = TerrainDetailHeight(
-            detailWorldXz + vec2(epsilonCm, 0.0), tileSizeCm);
+            detailUv + vec2(epsilonUv, 0.0));
         const float heightDown = TerrainDetailHeight(
-            detailWorldXz - vec2(0.0, epsilonCm), tileSizeCm);
+            detailUv - vec2(0.0, epsilonUv));
         const float heightUp = TerrainDetailHeight(
-            detailWorldXz + vec2(0.0, epsilonCm), tileSizeCm);
-        const float gradientX =
-            (heightRight - heightLeft) * amplitudeCm / (2.0 * epsilonCm);
-        const float gradientZ =
-            (heightUp - heightDown) * amplitudeCm / (2.0 * epsilonCm);
+            detailUv + vec2(0.0, epsilonUv));
+        const float gradientU =
+            (heightRight - heightLeft) * u_detailNormalStrength;
+        const float gradientV =
+            (heightUp - heightDown) * u_detailNormalStrength;
         const float normalWeight = displacementFade *
             clamp(abs(u_detailAmplitudeM) * 4.0, 0.0, 1.0);
         if (normalWeight > 0.0)
         {
             const vec3 baseNormal = normalize(worldNormal);
-            const vec3 detailNormal =
-                normalize(baseNormal + vec3(-gradientX, 0.0, -gradientZ));
+            const vec3 tangent = normalize(worldTangent.xyz);
+            const vec3 bitangent = normalize(cross(baseNormal, tangent)) *
+                (worldTangent.w < 0.0 ? -1.0 : 1.0);
+            const vec3 detailNormal = normalize(
+                baseNormal - (tangent * gradientU + bitangent * gradientV));
             worldNormal = normalize(mix(baseNormal, detailNormal, normalWeight));
         }
     }
