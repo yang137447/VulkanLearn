@@ -138,6 +138,12 @@ public:
     // 地形近场细分：只有逻辑设备真正启用 tessellationShader 才能创建
     // PATCH_LIST pipeline；缺失时材质走 CPU 网格回退。
     bool SupportsTessellation() const;
+    // Wireframe 视图只替换 tessellation 材质的 surface pipeline；缺失时
+    // draw 端回退到普通 renderPipeline。
+    bool SupportsWireframe() const;
+    // Material 创建时没有 backend 实例；这里查询同一逻辑设备能力，
+    // 避免资源层绕过 backend 直接依赖 VulkanManager。
+    static bool SupportsWireframeCapability();
     // particle GPU culling 的 indirect-count 路径必须以此为准；false 时
     // 使用 CPU 固定参数的 indirect 绘制并保留相同语义。
     bool SupportsDrawIndirectCount() const;
@@ -425,6 +431,8 @@ private:
     std::unique_ptr<RHIDeviceVulkan> rhiDevice;
     std::unique_ptr<RendererThumbnailImages> thumbnailImages;
     bool initialized = false;
+    // Initialize 从 RHI 读取一次，供没有 backend 实例的 Material 创建路径查询。
+    static bool wireframeCapabilityEnabled;
     std::vector<uint64_t> frameFenceEpochs;
     bool hasSubmittedFrame = false;
     uint32_t lastSubmittedFrameIndex = 0;

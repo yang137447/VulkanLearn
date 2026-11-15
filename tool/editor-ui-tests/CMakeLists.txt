@@ -138,6 +138,9 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainMeshBuilder.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerPaint.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintFile.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintManifest.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintSha256.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerRegistry.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmapWriter.cpp"
     "${PROJECT_SOURCE_DIR}/source/sceneNode.cpp")
 target_include_directories(editor_ui_tests PRIVATE "${PROJECT_SOURCE_DIR}/source")

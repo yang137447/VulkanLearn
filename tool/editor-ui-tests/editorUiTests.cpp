@@ -36,6 +36,7 @@
 #include "engine/particlePreviewRequest.h"
 #include "engine/modelPreviewRotation.h"
 #include "input/mouseMotionBatch.h"
+#include "baseStructs.h"
 #include "debug/drawDebug.h"
 #include "sceneNode.h"
 #include "world/meshSceneObjectIdentity.h"
@@ -8016,7 +8017,7 @@ TEST_F(EditorUiTest, ViewportToolbarKeepsOneActiveToolSpaceAndViewMode)
     }
     EXPECT_EQ(panel->ViewportTransformSpace(), "local");
 
-    // 只有 view mode 有真实后端：Lit=0，Unlit=1，未实现的 Wireframe 保持禁用。
+    // 只有 view mode 有真实后端：Lit=0，Unlit=1，Wireframe=100。
     Click("#viewport-view-lit");
     ASSERT_EQ(runtimeSink.actions.size(), 1u);
     EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetDebugViewMode);
@@ -8038,10 +8039,18 @@ TEST_F(EditorUiTest, ViewportToolbarKeepsOneActiveToolSpaceAndViewMode)
 
     auto* wireframe = document->GetElementById("viewport-view-wireframe");
     ASSERT_NE(wireframe, nullptr);
-    EXPECT_TRUE(wireframe->HasAttribute("disabled"));
+    EXPECT_FALSE(wireframe->HasAttribute("disabled"));
     EXPECT_FALSE(wireframe->GetAttribute<Rml::String>("title", "").empty());
     wireframe->DispatchEvent("click", {});
-    EXPECT_EQ(runtimeSink.actions.size(), 2u);
+    ASSERT_EQ(runtimeSink.actions.size(), 3u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetDebugViewMode);
+    EXPECT_EQ(runtimeSink.actions.back().intValue, kRenderViewModeWireframe);
+    view.debugViewMode = kRenderViewModeWireframe;
+    panel->UpdateRuntimeView(view);
+    context->Update();
+    EXPECT_TRUE(wireframe->IsClassSet("active"));
+    EXPECT_FALSE(document->GetElementById("viewport-view-lit")->IsClassSet("active"));
+    EXPECT_FALSE(document->GetElementById("viewport-view-unlit")->IsClassSet("active"));
     EXPECT_TRUE(sink.commands.empty());
 }
 
@@ -9099,10 +9108,10 @@ TEST_F(EditorUiTest, LandscapePanelShowsEmptyStateAndLayerCardsFromSelectedTerra
     EXPECT_EQ(document->GetElementById("terrain-layer-visible-count")->GetInnerRML(), "2 / 2 layers");
     EXPECT_NE(cards->GetInnerRML().find("Grass"), std::string::npos);
     EXPECT_NE(cards->GetInnerRML().find("Rock"), std::string::npos);
-    EXPECT_NE(cards->GetInnerRML().find("set 1"), std::string::npos);
-    EXPECT_NE(cards->GetInnerRML().find("uvScale 2"), std::string::npos);
-    EXPECT_NE(cards->GetInnerRML().find("set 2"), std::string::npos);
-    EXPECT_NE(cards->GetInnerRML().find("uvScale 1.5"), std::string::npos);
+    // 卡片只保留材质名字和层号；uvScale/uvRotation 留给双击滑出的细节面板。
+    EXPECT_NE(cards->GetInnerRML().find("Layer 0"), std::string::npos);
+    EXPECT_NE(cards->GetInnerRML().find("Layer 1"), std::string::npos);
+    EXPECT_EQ(cards->GetInnerRML().find("uvScale"), std::string::npos);
 
     const std::string status = document->GetElementById("terrain-layer-status")->GetInnerRML();
     EXPECT_NE(status.find("Selected: Grass"), std::string::npos);

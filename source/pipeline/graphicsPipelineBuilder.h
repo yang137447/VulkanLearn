@@ -40,6 +40,7 @@ struct GraphicsPipelineStateDesc
     vk::CompareOp stencilCompareOp = vk::CompareOp::eAlways;
     vk::CullModeFlags cullMode = vk::CullModeFlagBits::eBack;
     GraphicsPipelineBlendMode blendMode = GraphicsPipelineBlendMode::Opaque;
+    bool wireframe = false;
 };
 
 struct GraphicsPipelineBuildDesc

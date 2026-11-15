@@ -181,7 +181,7 @@
                           <div class="menu-popup" id="viewport-view-mode">
                             <button class="viewport-tool" id="viewport-view-lit" data-action="viewport-view-mode" data-mode="0" title="Lit: full shading (debug view 0)">Lit</button>
                             <button class="viewport-tool" id="viewport-view-unlit" data-action="viewport-view-mode" data-mode="1" title="Unlit: base color debug view (debug view 1)">Unlit</button>
-                            <button class="viewport-tool disabled" id="viewport-view-wireframe" disabled="disabled" title="Wireframe is not implemented: this renderer has no wireframe raster mode and no wireframe debug view.">Wireframe</button>
+                            <button class="viewport-tool" id="viewport-view-wireframe" data-action="viewport-view-mode" data-mode="100" title="Wireframe: tessellation materials use line rasterization; other materials stay shaded">Wireframe</button>
                             <div class="menu-separator"></div>
                             <div class="menu-entry">
                               <button class="menu-item"><span class="menu-check"></span><span class="menu-label">Buffer Visualization</span><span class="menu-arrow">&gt;</span></button>

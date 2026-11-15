@@ -8,6 +8,27 @@
 
 #include "render/rhi/rhiResourceHandles.h"
 
+// 编辑器视图模式复用 debugViewMode 的整数通道。Wireframe 是独立编号，
+// 不与 Buffer Visualization 的 Emissive=2 共用；它只切管线，不向渲染
+// UBO 或 Material 的调试字段写入该值。
+inline constexpr int kRenderViewModeLit = 0;
+inline constexpr int kRenderViewModeUnlit = 1;
+inline constexpr int kRenderViewModeWireframe = 100;
+
+inline bool IsWireframeRenderViewMode(int viewMode)
+{
+    return viewMode == kRenderViewModeWireframe;
+}
+
+inline int RenderViewModeToDebugViewMode(int viewMode)
+{
+    // 全局 UBO 的 debugViewMode=2 是 Emissive 调试，M_terrain.u_debugMode=2
+    // 是层索引调试；Wireframe 两者都不能写，统一映射回 Lit。
+    return IsWireframeRenderViewMode(viewMode)
+        ? kRenderViewModeLit
+        : viewMode;
+}
+
 struct Buffer
 {
   uint32_t bufferSize = 0;

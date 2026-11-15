@@ -1,5 +1,6 @@
 #include "render/backend/rendererDrawExecutor.h"
 
+#include "baseStructs.h"
 #include "commonFunction.h"
 #include "material.h"
 #include "pipeline/graphicsPipeline.h"
@@ -155,6 +156,22 @@ std::string BuildResolvedDrawErrorPrefix(const char* passName, const ResolvedDra
 bool PipelineUsesTessellation(const PipelineBase& pipeline)
 {
     return pipeline.UsesTessellation();
+}
+
+const PipelineBase& SelectSurfaceRenderPipeline(
+    const Material& material,
+    int debugViewMode)
+{
+    if (IsWireframeRenderViewMode(debugViewMode))
+    {
+        const std::shared_ptr<PipelineBase>& wireframePipeline =
+            material.GetWireframeRenderPipeline();
+        if (wireframePipeline)
+        {
+            return *wireframePipeline;
+        }
+    }
+    return *material.GetRenderPipeline();
 }
 
 ResolvedDrawResources RequireResolvedDrawResources(
@@ -621,7 +638,9 @@ void RendererDrawExecutor::DrawSortedTransparentScene(
         const ResolvedMaterialInstanceGroup& materialInstanceGroup =
             *sortedDraw.materialInstanceGroup;
         const PipelineBase& renderPipeline =
-            *materialGroup.material->GetRenderPipeline();
+            SelectSurfaceRenderPipeline(
+                *materialGroup.material,
+                context.renderScene.debugViewMode);
 
         VulkanDebug::ScopedRegion pipelineRegion(
             commandBuffer,
@@ -709,7 +728,10 @@ void RendererDrawExecutor::DrawSurfaceScene(
         }
 
         const std::string& materialKey = materialGroup.material->GetMaterialKey();
-        const PipelineBase& renderPipeline = *materialGroup.material->GetRenderPipeline();
+        const PipelineBase& renderPipeline =
+            SelectSurfaceRenderPipeline(
+                *materialGroup.material,
+                context.renderScene.debugViewMode);
         const bool renderPipelineUsesTessellation =
             PipelineUsesTessellation(renderPipeline);
 

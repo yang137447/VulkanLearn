@@ -212,7 +212,8 @@ void RenderFrameRecorder::UpdateGlobalUBOWithProjectionTransform(
     }
     ubo.cameraPosition = camera.position;
     // environmentSH 由 GPU 在环境代际 commit 时广播，常规 CPU 上传会跳过该区间。
-    ubo.debugViewMode = renderScene.debugViewMode;
+    ubo.debugViewMode =
+        RenderViewModeToDebugViewMode(renderScene.debugViewMode);
     ubo.environmentIntensity = renderScene.environment.intensity;
     ubo.environmentType = renderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
     ubo.skyParameters = renderScene.environment.skyParameters;
@@ -327,7 +328,8 @@ void RenderFrameRecorder::UpdateShadowGlobalUBO(
     ubo.shadowBias = cascadeData.bias;
     ubo.csmParameters = cascadeData.csmParameters;
     // environmentSH 由 GPU 在环境代际 commit 时广播，常规 CPU 上传会跳过该区间。
-    ubo.debugViewMode = renderScene.debugViewMode;
+    ubo.debugViewMode =
+        RenderViewModeToDebugViewMode(renderScene.debugViewMode);
     ubo.environmentIntensity = renderScene.environment.intensity;
     ubo.environmentType = renderScene.environment.type == VL::EnvironmentType::ProceduralSky ? 1 : 0;
     ubo.skyParameters = renderScene.environment.skyParameters;

@@ -1078,7 +1078,8 @@ void HandlePanelClick(MaterialInstanceAssetEditorPanel& panel, Rml::Element& ele
         else if (action == "exit-editor") request.type = UiActionType::Quit;
         else if (action == "viewport-view-mode")
         {
-            // 视口工具条里只有 view mode 有真实后端：Lit=0 完整画面，Unlit=1 基础色。
+            // 视口工具条里只有 view mode 有真实后端：Lit=0 完整画面，
+            // Unlit=1 基础色，Wireframe=100 只切 tess 材质的 surface pipeline。
             request.type = UiActionType::SetDebugViewMode;
             request.intValue = element.GetAttribute<int>("data-mode", 0);
         }

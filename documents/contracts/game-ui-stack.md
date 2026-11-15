@@ -38,6 +38,15 @@ The former Runtime Debug page, Settings button, F10/gamepad Start entry points
 and runtime-page binding callbacks are removed. Scene selection, actor settings,
 viewport modes and offline controls belong to the editor workspace; runtime
 commands remain available independently of the deleted page.
+Viewport view modes are `0 = Lit`, `1 = Unlit`, `100 = Wireframe`. Wireframe is
+not a material debug-view ID: GT keeps the render UBO debug field at Lit (`0`),
+does not write the view mode into material `u_debugMode`, and only swaps
+tessellation material surface pipelines to `eLine`. Non-tessellation materials
+and shadow/local-shadow passes keep their normal pipelines. Devices
+without `fillModeNonSolid` keep normal rendering and log the fallback once.
+The value `100` is deliberately outside both the buffer-visualization debug IDs
+and `M_terrain.u_debugMode` ranges, so Emissive (`2`) and terrain layer-debug
+requests cannot alias Wireframe.
 Destructive validation workflows remain console/launch operations, not buttons.
 
 `ui/editor-workspace.rml` and `.rcss` define the default workspace:

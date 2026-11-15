@@ -86,6 +86,9 @@ V1 策略：
 ```
 
 - Surface 与 ShadowDepth 按 reload batch all-or-nothing 提交。
+- tessellation 材质的 Wireframe 是同一 Surface artifact 的 `eLine` 变体：第 7 步
+  一并创建，第 8 步随 Surface 引用一起替换；新旧 Wireframe pipeline 都进入同一
+  retire 事务。新 artifact 不再声明 tessellation 时该变体置空，绘制端回退普通管线。
 - 编译、反射、schema、ABI、Pipeline 创建任一失败：丢弃候选，旧 Pipeline 与旧
   正式 artifact 保持。
 - Pipeline 替换发生在 `WaitForRenderThreadIdle()` 安全点，禁止每次 `device.waitIdle()`。

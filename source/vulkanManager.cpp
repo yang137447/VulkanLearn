@@ -275,10 +275,18 @@ void VulkanManager::CreateVkDevice()
         supportedFeatures.independentBlend == VK_TRUE;
     tessellationShaderEnabled =
         supportedFeatures.tessellationShader == VK_TRUE;
+    fillModeNonSolidEnabled =
+        supportedFeatures.fillModeNonSolid == VK_TRUE;
     if (!tessellationShaderEnabled)
     {
         std::cerr << "[Vulkan] tessellationShader is not supported; "
                      "terrain near-field tessellation stays disabled."
+                  << std::endl;
+    }
+    if (!fillModeNonSolidEnabled)
+    {
+        std::cerr << "[Vulkan] fillModeNonSolid is not supported; "
+                     "wireframe view falls back to normal rendering."
                   << std::endl;
     }
     // 粒子 overdraw 诊断在 fragment 中对 storage buffer 做原子累加；
@@ -316,6 +324,8 @@ void VulkanManager::CreateVkDevice()
             independentBlendEnabled ? VK_TRUE : VK_FALSE)
         .setTessellationShader(
             tessellationShaderEnabled ? VK_TRUE : VK_FALSE)
+        .setFillModeNonSolid(
+            fillModeNonSolidEnabled ? VK_TRUE : VK_FALSE)
         .setDualSrcBlend(
             dualSourceBlendEnabled ? VK_TRUE : VK_FALSE);
     vk::PhysicalDeviceVulkan12Features deviceVulkan12Features;

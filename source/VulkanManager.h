@@ -213,6 +213,11 @@ private:
     {
         return independentBlendEnabled;
     }
+    // Wireframe 视图只对 tessellation 材质创建 eLine 管线；缺失时保持正常渲染。
+    inline bool IsFillModeNonSolidEnabled() const
+    {
+        return fillModeNonSolidEnabled;
+    }
 
     void CreateVkInstance();
     void DestroyVkInstance();
@@ -282,6 +287,7 @@ private:
     bool fragmentStoresAndAtomicsEnabled = false;
     bool independentBlendEnabled = false;
     bool tessellationShaderEnabled = false;
+    bool fillModeNonSolidEnabled = false;
     vk::Queue graphicsQueue;
 
     vk::Device device;

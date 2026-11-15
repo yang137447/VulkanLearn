@@ -388,6 +388,12 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   patch 索引，draw 端按当前 pipeline 的 `UsesTessellation()` 选择；tess pipeline
   遇到没有 patch 索引的对象会**跳过绘制**，不会回退到三角索引（PATCH_LIST 拓扑下
   那是错误绘制）。LOD1..N 仍是三角形拓扑。
+- Wireframe 视图：只有同时启用 `tessellationShader` 与 `fillModeNonSolid` 的设备，
+  才会为 tess 材质额外创建 `wireframe=true` 的 surface pipeline，并在绘制时用
+  `eLine` 观察细分后的三角形；非 tess 材质、shadow/local-shadow pass 仍绑定普通填充
+  管线。设备缺失 `fillModeNonSolid` 时打印一次提示并回退正常渲染。Wireframe 只切
+  管线，不把 `100` 写入全局 UBO `debugViewMode` 或材质 `u_debugMode`，因此不会
+  触发 Emissive 调试或 `M_terrain` 的层索引调试。
 - patch 索引：LOD0 为 `chunkQuads²` 个 base quad；LOD>0 为内圈
   `(quadsPerChunk-2)²` 个 quad 加过渡带三角形（每个三角形编码成
   `(i0,i1,i2,i2)` 退化 quad）。patch 顺序是 quad 周长 `a,b,d,c`。

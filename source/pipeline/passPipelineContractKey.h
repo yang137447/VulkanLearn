@@ -33,6 +33,7 @@ struct PassPipelineContractKey
     vk::StencilOp stencilPassOp = vk::StencilOp::eKeep;
     vk::StencilOp stencilDepthFailOp = vk::StencilOp::eKeep;
     bool isShadowPass = false;
+    bool wireframe = false;
 
     bool operator==(const PassPipelineContractKey& other) const
     {
@@ -49,7 +50,8 @@ struct PassPipelineContractKey
             stencilFailOp == other.stencilFailOp &&
             stencilPassOp == other.stencilPassOp &&
             stencilDepthFailOp == other.stencilDepthFailOp &&
-            isShadowPass == other.isShadowPass;
+            isShadowPass == other.isShadowPass &&
+            wireframe == other.wireframe;
     }
 
     bool operator!=(const PassPipelineContractKey& other) const
@@ -73,7 +75,8 @@ struct PassPipelineContractKey
                << "|stencilFail=" << static_cast<uint32_t>(stencilFailOp)
                << "|stencilPass=" << static_cast<uint32_t>(stencilPassOp)
                << "|stencilDepthFail=" << static_cast<uint32_t>(stencilDepthFailOp)
-               << "|shadowPass=" << isShadowPass;
+               << "|shadowPass=" << isShadowPass
+               << "|wireframe=" << wireframe;
         return stream.str();
     }
 
@@ -96,6 +99,7 @@ struct PassPipelineContractKey
         pipelineStateDesc.stencilDepthFailOp = stencilDepthFailOp;
         pipelineStateDesc.cullMode = cullMode;
         pipelineStateDesc.blendMode = blendMode;
+        pipelineStateDesc.wireframe = wireframe;
         return pipelineStateDesc;
     }
 };

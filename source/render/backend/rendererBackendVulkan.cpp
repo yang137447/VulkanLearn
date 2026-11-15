@@ -155,6 +155,18 @@ struct RendererSubmitPlan
 
 } // namespace
 
+bool RendererBackendVulkan::wireframeCapabilityEnabled = false;
+
+bool RendererBackendVulkan::SupportsWireframe() const
+{
+    return rhiDevice->IsFillModeNonSolidEnabled();
+}
+
+bool RendererBackendVulkan::SupportsWireframeCapability()
+{
+    return wireframeCapabilityEnabled;
+}
+
 RendererBackendVulkan::RendererBackendVulkan()
     : rhiDevice(std::make_unique<RHIDeviceVulkan>()),
       thumbnailImages(std::make_unique<RendererThumbnailImages>(*this))
@@ -190,6 +202,8 @@ void RendererBackendVulkan::Initialize(
     VL::PresentModePreference presentMode)
 {
     rhiDevice->Initialize(instanceExtensions, window, presentMode);
+    wireframeCapabilityEnabled =
+        rhiDevice->IsFillModeNonSolidEnabled();
     frameFenceEpochs.assign(rhiDevice->GetFrameFenceCount(), 0);
     initialized = true;
 }

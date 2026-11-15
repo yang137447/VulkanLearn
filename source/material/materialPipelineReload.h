@@ -69,6 +69,9 @@ struct MaterialPipelineReloadCommit
     bool replaceShadow = false;
     bool replaceLocalShadow = false;
     std::shared_ptr<PipelineBase> surfacePipeline;
+    // Wireframe 只是 surface pipeline 的 eLine 变体；replaceSurface 时一起
+    // 交换，缺少 tessellation 的新 artifact 会把这里置空。
+    std::shared_ptr<PipelineBase> wireframePipeline;
     std::shared_ptr<PipelineBase> shadowPipeline;
     std::shared_ptr<PipelineBase> localShadowPipeline;
     GraphicsShaderVariantArtifact surfaceArtifact;
@@ -80,6 +83,7 @@ struct MaterialPipelineReloadCommit
 struct RetiredMaterialPipelines
 {
     std::shared_ptr<PipelineBase> surfacePipeline;
+    std::shared_ptr<PipelineBase> wireframePipeline;
     std::shared_ptr<PipelineBase> shadowPipeline;
     std::shared_ptr<PipelineBase> localShadowPipeline;
 };

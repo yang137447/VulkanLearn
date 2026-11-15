@@ -147,7 +147,8 @@ GPU backing 保持原生窗口尺寸；相机 aspect、拾取和离线 film 尺�
 视口左上角叠加工具条；view mode、变换工具、变换坐标系与吸附都有真实后端。
 关卡视口的 Move/Rotate/Scale 工具驱动三轴 gizmo，World/Local 切换 gizmo 轴朝向，
 吸附步长在工具条内可编辑（默认 10 cm / 5° / 0.1）。详细边界见“停靠与视口契约”。
-视口左上视图模式下拉菜单提供 Lit、Unlit（既有 Base Color 调试映射）和禁用的 Wireframe。
+视口左上视图模式下拉菜单提供 Lit、Unlit（既有 Base Color 调试映射）和 Wireframe
+（仅对启用 tessellation 的材质切换 `eLine` surface pipeline，其余材质保持正常着色）。
 Buffer Visualization 子菜单恢复 Base Color、Emissive、World Normal、Roughness、Metallic、AO、
 Shadow、Direct Lighting、Indirect Diffuse/Specular、Shadow Cascade Index、Shading Model，
 统一发送既有 SetDebugViewMode；标题和选中状态以运行时快照回显，子菜单限高滚动。
@@ -254,8 +255,8 @@ ImGui→RmlUi 迁移丢了三项 Details 面板能力，本批把它们补回，
 - 场景仍按 swapchain 全尺寸渲染，UI 以完整 UV 采样，不是按停靠尺寸渲染。
 - 材质实例的纹理覆盖只在保存 JSON 后生效，不做 live descriptor 替换。
 - 关卡视口的变换工具与坐标系已接入 gizmo；资源编辑器里的模型预览标签仍只有本地高亮，
-  没有模型预览 gizmo。view mode 里的 Wireframe 没有 wireframe 光栅模式，也没有对应的
-  debug view，因此按钮保持禁用。
+  没有模型预览 gizmo。view mode 的 Wireframe 没有对应的 debug view，只对 tessellation
+  材质生效；非 tessellation 材质和设备缺失 `fillModeNonSolid` 时保持正常填充渲染。
 
 ## 目录与依赖
 
@@ -789,13 +790,14 @@ GT 文档只使用 `vl://scene-viewport` 逻辑纹理 token 和 framebuffer 像�
 
 视口工具条 `#viewport-toolbar` 叠在场景图像左上角，分三组：
 变换工具、变换坐标系、view mode。view mode 映射到既有
-`UiActionType::SetDebugViewMode`：Lit=0（完整画面），Unlit=1（基础色）。
+`UiActionType::SetDebugViewMode`：Lit=0（完整画面），Unlit=1（基础色），
+Wireframe=100（只切 tessellation 材质的 surface pipeline，不写 shader UBO
+`debugViewMode` 或 `M_terrain.u_debugMode`）。
 变换工具驱动关卡 gizmo：Select 不绘制手柄，Move/Rotate/Scale 分别编辑完整
 Location/Rotation/Scale；World/Local 决定三条轴用世界轴还是 actor 自身旋转后的局部轴。
 吸附开关与 Move/Rotate/Scale 步长是面板状态，默认 10 cm / 5° / 0.1，可在工具条内编辑。
-Wireframe 没有 wireframe 光栅模式，
-`debug.*` 表里也没有对应的 debug view，因此按钮常驻禁用并带说明，
-没有拿最接近的调试视图冒充。view mode 的高亮来自冻结的运行时快照
+`100` 与 Buffer Visualization 的调试编号（含 Emissive=2）和 `M_terrain.u_debugMode`
+范围都不重叠，避免视图模式互相别名。view mode 的高亮来自冻结的运行时快照
 `debugViewMode`，不是面板自己的第二份状态；运行时处于工具条之外的调试视图时
 Lit/Unlit 都不高亮，工具条不声明自己没有设置过的模式。
 `IsSceneViewportElement` 排除工具条与灯光/相机图标，否则点击按钮会同时驱动相机与拾取。

@@ -60,7 +60,10 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
 
     vk::PipelineRasterizationStateCreateInfo pipelineRasterizationStateCreateInfo;
     pipelineRasterizationStateCreateInfo
-        .setPolygonMode(vk::PolygonMode::eFill)
+        .setPolygonMode(
+            desc.pipelineStateDesc.wireframe
+                ? vk::PolygonMode::eLine
+                : vk::PolygonMode::eFill)
         .setCullMode(desc.pipelineStateDesc.cullMode)
         .setFrontFace(vk::FrontFace::eClockwise)
         .setDepthClampEnable(false)

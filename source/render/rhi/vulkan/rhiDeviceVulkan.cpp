@@ -175,6 +175,11 @@ bool RHIDeviceVulkan::IsTessellationShaderEnabled() const
     return VulkanManager::GetInstance().IsTessellationShaderEnabled();
 }
 
+bool RHIDeviceVulkan::IsFillModeNonSolidEnabled() const
+{
+    return VulkanManager::GetInstance().IsFillModeNonSolidEnabled();
+}
+
 bool RHIDeviceVulkan::IsDrawIndirectCountEnabled() const
 {
     return VulkanManager::GetInstance().IsDrawIndirectCountEnabled();

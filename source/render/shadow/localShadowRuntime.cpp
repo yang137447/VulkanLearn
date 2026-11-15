@@ -295,7 +295,8 @@ void RenderSystem::UpdateLocalShadowUBOForPass(
         ubo.invViewProjection = Eigen::Matrix4f::Identity();
     }
     ubo.previousViewProjection = ubo.viewProjection;
-    ubo.debugViewMode = currentRenderScene.debugViewMode;
+    ubo.debugViewMode =
+        RenderViewModeToDebugViewMode(currentRenderScene.debugViewMode);
     ubo.environmentIntensity = currentRenderScene.environment.intensity;
     ubo.environmentType =
         currentRenderScene.environment.type ==
