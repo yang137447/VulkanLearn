@@ -43,7 +43,5 @@ vec4 fogParams3;
 // xy = 场景逻辑渲染宽高（像素），zw = 1/宽、1/高。
 // 地形 TCS 用屏幕空间边长决定细分因子，远处不会按世界距离继续过采样。
 vec4 viewportParams;
-// xyz = 玩家/角色世界位置，w = 脚下位移抑制半径（cm）。
-vec4 terrainFocusParams;
 
 #endif

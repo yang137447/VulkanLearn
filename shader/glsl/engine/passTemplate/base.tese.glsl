@@ -86,18 +86,7 @@ void main()
     // 地表可能穿过相机近裁剪面或把相机包进背面剔除区域，看起来像“近处被裁剪”。
     const float nearGuardCm = 200.0;
     const float nearFade = smoothstep(0.0, nearGuardCm, cameraDistanceCm);
-    // 角色脚下抑制：物理仍踩在宏高度场上，视觉位移不能在脚边把地面抬高。
-    // xz 距离足够：角色站在地表，垂直分量对“脚边”判断没有帮助。
-    const float focusRadiusCm = max(uboVP.terrainFocusParams.w, 0.0);
-    float focusFade = 1.0;
-    if (focusRadiusCm > 1.0e-3)
-    {
-        const float focusDistanceCm = length(
-            worldPosition.xz - uboVP.terrainFocusParams.xz);
-        focusFade = smoothstep(
-            0.5 * focusRadiusCm, focusRadiusCm, focusDistanceCm);
-    }
-    const float displacementFade = farFade * nearFade * focusFade;
+    const float displacementFade = farFade * nearFade;
 
     // 与片元阶段共用同一份 top-4 解析；TES 没有可靠的隐式导数，因此
     // 所有层采样都走显式 LOD，并跳过 fragment 专用的 height-blend。

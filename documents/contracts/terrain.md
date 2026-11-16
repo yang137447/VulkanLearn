@@ -418,13 +418,10 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   在切线空间扰动。默认占位纹理是 clamp 常量 0.5，开启幅度前必须绑定
   `wrapMode: repeat` 的真实高度图。该叠加按主导层 `displacementM` 做
   `smoothstep(0.004, 0.03)` 掩码：River Water/Sea 等 `displacementM=0` 的
-  水面不叠加 tiling 高度，保持宏高度场平整；角色脚下另由
-  `terrainFocusParams` 抑制视觉位移。
-- 两种位移都乘 `u_terrainTessRadiusM` 的远距淡出、相机 2 m 内的近距淡出，
-  以及角色脚下 1.2 m 的水平抑制（`UBOGlobal.terrainFocusParams`；优先
-  `__blueprint/echo`，否则第一个蒙皮蓝图实例）。位移只影响视觉：物理仍使用
-  宏高度场；阴影/局部阴影 pass 不生成 tesc/tese，仍按未位移的宏网格投影，
-  因此幅度应保持较小以避免阴影与几何不一致。
+  水面不叠加 tiling 高度，保持宏高度场平整。
+- 两种位移都乘 `u_terrainTessRadiusM` 的远距淡出与相机 2 m 内的近距淡出。
+  位移只影响视觉：物理仍使用宏高度场；阴影/局部阴影 pass 不生成 tesc/tese，
+  仍按未位移的宏网格投影。因此几何位移必须与碰撞高度场容差一致（见下条）。
 - 相关材质参数：`u_layerDisplacementScale`（主导层位移倍率，默认 1）、
   `detailHeightMap`、`u_detailAmplitudeCm`、`u_detailNormalStrength`、
   `u_detailUvScale`（与 near-field detail 共用的 UV 倍率）、
@@ -435,6 +432,10 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   `detailMaterialInstancePath` 时显示 detail MI 路径和
   Tess Max / Tess Px / Radius / Detail Height(cm) / Detail UV / Disp Scale 输入，打开 detail MI
   后可直接编辑，基础 MI 不暴露这些字段。
+- 碰撞契约：Jolt heightfield 仍来自 TR 高度图（默认 `gridResolution+1` 采样），
+  不包含 tiling 高度位移。render-only 几何位移应控制在鞋子/脚 IK 能吸收的
+  厘米级；需要更大位移时，必须把同一 tiling 高度写入碰撞高度场或改用
+  virtual heightfield，不能靠角色附近的 render 抑制来掩盖。
 - 两个 MI 必须共享同一组 VT 纹理与参数：`RendererTerrainLoader` 会把基础 MI 的
   page table / atlas / 权重图纹理与 `u_pageTableSize`、`u_pageResolution`、
   `u_layerForceMip` 等 M_terrain 实际声明的参数同步到 detail MI，并把两者都
