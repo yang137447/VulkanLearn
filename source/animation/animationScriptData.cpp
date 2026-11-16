@@ -8,6 +8,7 @@
 #include <limits>
 #include <set>
 #include <stdexcept>
+#include <utility>
 
 namespace VL::Animation
 {
@@ -151,26 +152,65 @@ BlendSpaceAsset ParseBlendSpace(const nlohmann::json& json, const std::string& b
         json["name"].get<std::string>().empty())
         throw fail("name", "must be a nonempty string");
     if (!json.contains("type") || !json["type"].is_string() ||
-        json["type"].get<std::string>() != "blendSpace1D")
-        throw fail("type", "must be \"blendSpace1D\"");
+        (json["type"].get<std::string>() != "blendSpace1D" &&
+         json["type"].get<std::string>() != "blendSpace2D"))
+        throw fail("type", "must be \"blendSpace1D\" or \"blendSpace2D\"");
     if (!json.contains("description") || !json["description"].is_string() ||
         json["description"].get<std::string>().empty())
         throw fail("description", "must be a nonempty string");
-    if (!json.contains("axis") || !json["axis"].is_object())
-        throw fail("axis", "must be an object");
-    const auto& axis = json["axis"];
-    if (!axis.contains("name") || !axis["name"].is_string() ||
-        axis["name"].get<std::string>() != "Speed")
-        throw fail("axis.name", "must be \"Speed\"");
-    for (const char* bound : {"min", "max"})
-        if (axis.contains(bound) &&
-            (!axis[bound].is_number() || !std::isfinite(axis[bound].get<double>())))
-            throw fail(std::string("axis.") + bound, "must be finite");
 
     BlendSpaceAsset space;
     space.name = json["name"].get<std::string>();
     if (space.name.size() > 128)
         throw fail("name", "exceeds 128 characters");
+    const bool twoDimensional = json["type"].get<std::string>() == "blendSpace2D";
+    space.type = twoDimensional ? BlendSpaceType::TwoD : BlendSpaceType::OneD;
+
+    auto parseAxis = [&](const nlohmann::json& axis, const std::string& field,
+        std::string& name, std::optional<float>& minimum, std::optional<float>& maximum)
+    {
+        if (!axis.is_object())
+            throw fail(field, "must be an object");
+        if (!axis.contains("name") || !axis["name"].is_string() ||
+            axis["name"].get<std::string>().empty() ||
+            axis["name"].get<std::string>().size() > 64)
+            throw fail(field + ".name", "must be a nonempty string of at most 64 characters");
+        name = axis["name"].get<std::string>();
+        for (const char* bound : {"min", "max"})
+        {
+            if (!axis.contains(bound)) continue;
+            if (!axis[bound].is_number() || !std::isfinite(axis[bound].get<double>()))
+                throw fail(field + "." + bound, "must be finite");
+            std::optional<float>& value = std::string(bound) == "min" ? minimum : maximum;
+            value = axis[bound].get<float>();
+        }
+        if (minimum && maximum && !(*maximum > *minimum))
+            throw fail(field, "requires max > min");
+    };
+
+    if (twoDimensional)
+    {
+        if (!json.contains("axisX") || !json.contains("axisY"))
+            throw fail("axisX/axisY", "are required for blendSpace2D");
+        parseAxis(json["axisX"], "axisX", space.axisXName, space.axisXMin, space.axisXMax);
+        parseAxis(json["axisY"], "axisY", space.axisYName, space.axisYMin, space.axisYMax);
+        if (space.axisXName == space.axisYName)
+            throw fail("axisY.name", "must differ from axisX.name");
+    }
+    else
+    {
+        if (!json.contains("axis") || !json["axis"].is_object())
+            throw fail("axis", "must be an object");
+        const auto& axis = json["axis"];
+        if (!axis.contains("name") || !axis["name"].is_string() ||
+            axis["name"].get<std::string>() != "Speed")
+            throw fail("axis.name", "must be \"Speed\"");
+        for (const char* bound : {"min", "max"})
+            if (axis.contains(bound) &&
+                (!axis[bound].is_number() || !std::isfinite(axis[bound].get<double>())))
+                throw fail(std::string("axis.") + bound, "must be finite");
+    }
+
     if (json.contains("interpolation"))
     {
         if (!json["interpolation"].is_string())
@@ -193,21 +233,18 @@ BlendSpaceAsset ParseBlendSpace(const nlohmann::json& json, const std::string& b
     if (!json.contains("samples") || !json["samples"].is_array())
         throw fail("samples", "must be an array");
     const auto& samples = json["samples"];
-    if (samples.size() < 2 || samples.size() > 3)
+    if (twoDimensional && samples.size() != 4)
+        throw fail("samples", "requires exactly 4 entries for blendSpace2D");
+    if (!twoDimensional && (samples.size() < 2 || samples.size() > 3))
         throw fail("samples", "requires 2..3 entries");
-    float previous = -std::numeric_limits<float>::infinity();
-    std::set<std::string> clips;
+
     for (const auto& sample : samples)
     {
         if (!sample.is_object() || !sample.contains("clip") || !sample["clip"].is_string() ||
             sample["clip"].get<std::string>().empty())
             throw fail("samples[].clip", "must be a nonempty string");
-        if (!sample.contains("threshold") || !sample["threshold"].is_number() ||
-            !std::isfinite(sample["threshold"].get<double>()))
-            throw fail("samples[].threshold", "must be finite");
         BlendSpaceSample entry;
         entry.clip = sample["clip"].get<std::string>();
-        entry.threshold = sample["threshold"].get<float>();
         if (sample.contains("rate"))
         {
             if (!sample["rate"].is_number() || !std::isfinite(sample["rate"].get<double>()))
@@ -224,12 +261,63 @@ BlendSpaceAsset ParseBlendSpace(const nlohmann::json& json, const std::string& b
             if (entry.syncGroup.size() > 64 || entry.syncGroup.find('\0') != std::string::npos)
                 throw fail("samples[].syncGroup", "is invalid");
         }
+        if (twoDimensional)
+        {
+            for (const char* coordinate : {"x", "y"})
+                if (!sample.contains(coordinate) || !sample[coordinate].is_number() ||
+                    !std::isfinite(sample[coordinate].get<double>()))
+                    throw fail(std::string("samples[].") + coordinate,
+                        "must be finite for blendSpace2D");
+            entry.x = sample["x"].get<float>();
+            entry.y = sample["y"].get<float>();
+            if (space.axisXMin && entry.x < *space.axisXMin - 1e-4f)
+                throw fail("samples[].x", "is below axisX.min");
+            if (space.axisXMax && entry.x > *space.axisXMax + 1e-4f)
+                throw fail("samples[].x", "is above axisX.max");
+            if (space.axisYMin && entry.y < *space.axisYMin - 1e-4f)
+                throw fail("samples[].y", "is below axisY.min");
+            if (space.axisYMax && entry.y > *space.axisYMax + 1e-4f)
+                throw fail("samples[].y", "is above axisY.max");
+        }
+        else
+        {
+            if (!sample.contains("threshold") || !sample["threshold"].is_number() ||
+                !std::isfinite(sample["threshold"].get<double>()))
+                throw fail("samples[].threshold", "must be finite");
+            entry.threshold = sample["threshold"].get<float>();
+        }
+        space.samples.push_back(std::move(entry));
+    }
+
+    if (twoDimensional)
+    {
+        std::set<float> xs;
+        std::set<float> ys;
+        std::set<std::pair<float, float>> cells;
+        for (const BlendSpaceSample& sample : space.samples)
+        {
+            xs.insert(sample.x);
+            ys.insert(sample.y);
+            if (!cells.emplace(sample.x, sample.y).second)
+                throw fail("samples[]", "repeats a grid coordinate");
+        }
+        if (xs.size() != 2 || ys.size() != 2)
+            throw fail("samples[]", "must form a rectangular 2x2 grid");
+        if (cells.size() != 4)
+            throw fail("samples[]", "must cover all four grid corners");
+        return space;
+    }
+
+    float previous = -std::numeric_limits<float>::infinity();
+    std::set<std::string> clips;
+    for (BlendSpaceSample& entry : space.samples)
+    {
+        // 1D 的旧资产仍按阈值严格递增且 clip 不重复；2D 已在上方按矩形网格校验。
         if (!(entry.threshold > previous))
             throw fail("samples[].threshold", "must be strictly increasing");
         if (!clips.insert(entry.clip).second)
             throw fail("samples[].clip", "must not repeat");
         previous = entry.threshold;
-        space.samples.push_back(std::move(entry));
     }
     return space;
 }
@@ -402,10 +490,30 @@ nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset)
     {
         auto samples = nlohmann::json::array();
         for (const BlendSpaceSample& sample : space.samples)
-            samples.push_back({{"clip", sample.clip}, {"threshold", sample.threshold},
-                {"rate", sample.rate}, {"syncGroup", sample.syncGroup}});
-        blendSpaces[space.name] = {{"weightSpeedPerSec", space.weightSpeedPerSec},
-            {"interpolation", space.interpolation}, {"samples", std::move(samples)}};
+        {
+            nlohmann::json value{{"clip", sample.clip}, {"rate", sample.rate},
+                {"syncGroup", sample.syncGroup}};
+            if (space.type == BlendSpaceType::TwoD)
+            {
+                value["x"] = sample.x;
+                value["y"] = sample.y;
+            }
+            else
+                value["threshold"] = sample.threshold;
+            samples.push_back(std::move(value));
+        }
+        nlohmann::json value{{"type", space.type == BlendSpaceType::TwoD ?
+                "blendSpace2D" : "blendSpace1D"},
+            {"weightSpeedPerSec", space.weightSpeedPerSec},
+            {"interpolation", space.interpolation}, {"axisX", space.axisXName},
+            {"samples", std::move(samples)}};
+        if (space.type == BlendSpaceType::TwoD)
+            value["axisY"] = space.axisYName;
+        if (space.axisXMin) value["axisXMin"] = *space.axisXMin;
+        if (space.axisXMax) value["axisXMax"] = *space.axisXMax;
+        if (space.axisYMin) value["axisYMin"] = *space.axisYMin;
+        if (space.axisYMax) value["axisYMax"] = *space.axisYMax;
+        blendSpaces[space.name] = std::move(value);
     }
     if (!blendSpaces.empty()) result["blendSpaces"] = std::move(blendSpaces);
     auto blendProfiles = nlohmann::json::object();

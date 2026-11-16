@@ -502,6 +502,7 @@ TEST_F(ScriptLocomotionTest, BlendProfileResolvesSlotWeightsAndRejectsConflicts)
         SCOPED_TRACE(axis);
         EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
         EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
     }
 }
 
@@ -568,6 +569,45 @@ TEST_F(ScriptLocomotionTest, BlendSpaceSelectsClipsAndWeightsOnSpeedAxis)
 TEST_F(ScriptLocomotionTest, PoseGraphFlattensNodesCachesAndRejectsCycles)
 {
     Prepare(Json::object(), "ScriptFixtures.AnimationPoseGraphProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, PoseNodeStateCompletedUsesEffectiveClip)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphPoseStateCompletedProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, PoseNodeMontageCompletedUsesFeedbackClip)
+{
+    Prepare(Json::object(),
+        "ScriptFixtures.AnimationGraphMontageStateCompletedProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, PoseGraph2DAndMontageBridge)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationPoseGraph2DProbeBlueprint");
     Play(); Tick();
     EXPECT_FALSE(State()["failed"].get<bool>());
     for (int axis = 0; axis < 3; ++axis)

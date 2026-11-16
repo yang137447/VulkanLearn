@@ -125,9 +125,26 @@ inline LocalPose Crossfade(const LocalPose& source, LocalPose target, float alph
     return mixed;
 }
 
-// UE AAT_LocalSpaceBase：delta = additive * inverse(reference)，结果 = base * delta。
-// 权重按 UE 的 BlendFromIdentityAndAccumulate 语义把增量向 identity 收缩：
-// translation *= w、rotation = slerp(identity, delta, w)、scale = 1 + (delta-1)*w。
+// UE FTransform::BlendFromIdentityAndAccumulate 对部分权重使用
+// FQuat::FastLerp（最短路径）后归一化，而不是球面插值。
+inline Eigen::Quaternionf WeightedIdentityRotation(const Eigen::Quaternionf& delta, float weight)
+{
+    constexpr float ZeroAnimWeightThreshold = 1e-4f;
+    const float alpha = std::clamp(weight, 0.0f, 1.0f);
+    if (alpha <= ZeroAnimWeightThreshold) return Eigen::Quaternionf::Identity();
+    Eigen::Quaternionf source = delta.normalized();
+    if (alpha >= 1.0f - ZeroAnimWeightThreshold) return source;
+    if (source.w() < 0) source.coeffs() *= -1.0f;
+    Eigen::Quaternionf blended(
+        (1.0f - alpha) * Eigen::Quaternionf::Identity().coeffs() + alpha * source.coeffs());
+    if (blended.squaredNorm() <= 1e-12f) return Eigen::Quaternionf::Identity();
+    return blended.normalized();
+}
+
+// UE AAT_LocalSpaceBase 的 ConvertTransformToAdditive 是逐通道局部差值：
+// translation = additive - reference，rotation = additive * inverse(reference)，
+// scale 保存 ratio-1。累加时 UE AccumulateWithAdditiveScale 做
+// translation += delta、rotation = delta * base、scale *= 1 + delta。
 inline LocalPose ApplyLocalSpaceAdditive(const LocalPose& base, const LocalPose& additive,
     const LocalPose& reference, float alpha, size_t jointCount)
 {
@@ -139,17 +156,18 @@ inline LocalPose ApplyLocalSpaceAdditive(const LocalPose& base, const LocalPose&
     for (size_t joint = 0; joint < jointCount; ++joint)
     {
         const Eigen::Quaternionf referenceInverse = ref[joint].rotation.conjugate().normalized();
-        const Eigen::Vector3f referenceTranslationInverse = -(referenceInverse * ref[joint].translation);
         const Eigen::Vector3f referenceScaleInverse =
             ref[joint].scale.cwiseAbs().cwiseMax(Eigen::Vector3f::Constant(1e-6f)).cwiseInverse();
         const Eigen::Quaternionf deltaRotation =
             (add[joint].rotation * referenceInverse).normalized();
+        // UE ConvertTransformToAdditive 对平移使用父空间局部差值，不是
+        // additive * inverse(reference) 的旋转耦合平移；后者会把腿骨/手指的
+        // 参考平移再次旋转，落地叠加时出现折叠变形。
         const Eigen::Vector3f deltaTranslation =
-            add[joint].translation + add[joint].rotation * referenceTranslationInverse;
+            add[joint].translation - ref[joint].translation;
         const Eigen::Vector3f deltaScale = add[joint].scale.cwiseProduct(referenceScaleInverse);
-        // 逐通道向 identity 收缩；旋转用球面插值，避免平移/缩放被旋转耦合。
         const Eigen::Quaternionf weightedRotation =
-            Eigen::Quaternionf::Identity().slerp(alpha, deltaRotation).normalized();
+            WeightedIdentityRotation(deltaRotation, alpha);
         const Eigen::Vector3f weightedTranslation = deltaTranslation * alpha;
         const Eigen::Vector3f weightedScale =
             identityScale + (deltaScale - identityScale) * alpha;
@@ -246,8 +264,7 @@ inline LocalPose ApplyMeshSpaceRotationAdditive(const LocalPose& base, const Loc
     {
         const Eigen::Quaternionf delta =
             (addMesh[joint] * refMesh[joint].conjugate()).normalized();
-        const Eigen::Quaternionf weighted =
-            Eigen::Quaternionf::Identity().slerp(weight, delta).normalized();
+        const Eigen::Quaternionf weighted = WeightedIdentityRotation(delta, weight);
         resultMesh[joint] = (weighted * baseMesh[joint]).normalized();
     }
     for (size_t joint = 0; joint < jointCount; ++joint)
@@ -260,7 +277,7 @@ inline LocalPose ApplyMeshSpaceRotationAdditive(const LocalPose& base, const Loc
     return WriteKinematics(base, kinematics);
 }
 
-// BlendProfile：weights 是每关节原始权重（未列出的骨骼 1.0），最终权重 = alpha * weight。
+// BlendProfile：weights 是按关节展开的白名单（未列出 = 0），最终权重 = alpha * weight。
 inline LocalPose ApplyLayeredWeights(const LocalPose& base, const LocalPose& overlay,
     const std::vector<float>& weights, float alpha, size_t jointCount)
 {
@@ -270,7 +287,7 @@ inline LocalPose ApplyLayeredWeights(const LocalPose& base, const LocalPose& ove
     for (size_t joint = 0; joint < jointCount; ++joint)
     {
         const float weight = std::clamp(
-            alpha * (joint < weights.size() ? weights[joint] : 1.0f), 0.0f, 1.0f);
+            alpha * (joint < weights.size() ? weights[joint] : 0.0f), 0.0f, 1.0f);
         if (weight <= 0) continue;
         target[joint].translation =
             target[joint].translation * (1.0f - weight) + layer[joint].translation * weight;

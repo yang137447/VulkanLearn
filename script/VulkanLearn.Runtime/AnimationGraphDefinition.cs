@@ -14,8 +14,8 @@ public static class AnimationGraphBlendAxis
 
 // 每个 sample 是一个片段坐标；阈值必须严格递增，顺序即混合邻接顺序。
 public readonly record struct AnimationGraphBlendSample(string Clip, float Threshold,
-    float Rate = 1, string SyncGroup = "");
-// BP_*.json 解析后的逐骨权重；未列出的骨骼按 1.0。
+    float Rate = 1, string SyncGroup = "", float X = 0, float Y = 0);
+// BP_*.json 解析后的逐骨权重；未列出的骨骼按白名单 0。
 public readonly record struct AnimationGraphBoneWeight(string Bone, float Weight);
 
 // 方向分支是图级数据：runtime 只按顺序匹配第一个包含相对 yaw 的区间。
@@ -812,9 +812,13 @@ public sealed class AnimationGraphDefinition
                     throw new InvalidOperationException(
                         $"Animation graph state '{machine.Name}/{state.Name}' references unknown " +
                         $"blend space '{state.BlendSpace}'.");
+                if (space.Type != "blendSpace1D")
+                    throw new InvalidOperationException(
+                        $"Animation graph state '{machine.Name}/{state.Name}' requires a 1D " +
+                        $"blend space, but '{state.BlendSpace}' is {space.Type}.");
                 var samples = space.Samples
                     .Select(sample => new AnimationGraphBlendSample(sample.Clip, sample.Threshold,
-                        sample.Rate, sample.SyncGroup))
+                        sample.Rate, sample.SyncGroup, sample.X, sample.Y))
                     .ToArray();
                 states[stateIndex] = state.WithBlendSamples(samples, space.WeightSpeedPerSec);
             }
@@ -845,9 +849,13 @@ public sealed class AnimationGraphDefinition
                 throw new InvalidOperationException(
                     $"Cached pose branch '{branch.Name}' references unknown blend space " +
                     $"'{branch.BlendSpace}'.");
+            if (space.Type != "blendSpace1D")
+                throw new InvalidOperationException(
+                    $"Cached pose branch '{branch.Name}' requires a 1D blend space, but " +
+                    $"'{branch.BlendSpace}' is {space.Type}.");
             branches[index] = branch.WithBlendSamples(space.Samples
                 .Select(sample => new AnimationGraphBlendSample(sample.Clip, sample.Threshold,
-                    sample.Rate, sample.SyncGroup))
+                    sample.Rate, sample.SyncGroup, sample.X, sample.Y))
                 .ToArray());
         }
         return new AnimationGraphDefinition
@@ -877,9 +885,13 @@ public sealed class AnimationGraphDefinition
             if (!blendSpaces.TryGetValue(node.BlendSpace, out var space))
                 throw new InvalidOperationException(
                     $"Pose graph node '{node.Id}' references unknown blend space '{node.BlendSpace}'.");
+            var kind = space.Type == "blendSpace2D"
+                ? AnimationPoseNodeKind.BlendSpace2DPlayer
+                : AnimationPoseNodeKind.BlendSpacePlayer;
             nodes[index] = node.WithBlendSamples(space.Samples
                 .Select(sample => new AnimationGraphBlendSample(sample.Clip, sample.Threshold,
-                    sample.Rate, sample.SyncGroup)).ToArray());
+                    sample.Rate, sample.SyncGroup, sample.X, sample.Y)).ToArray(), kind,
+                space.WeightSpeedPerSec);
         }
         return new AnimationPoseGraph
         {
@@ -894,11 +906,13 @@ public sealed class AnimationGraphDefinition
         IReadOnlyDictionary<string, AnimationBlendProfile> blendProfiles)
     {
         ArgumentNullException.ThrowIfNull(blendProfiles);
-        if (StateMachines is null) return this;
+        ArgumentNullException.ThrowIfNull(StateMachines);
         bool any = StateMachines.Any(machine => machine?.States is not null &&
             machine.States.Any(state => state is not null &&
                 (!string.IsNullOrWhiteSpace(state.LayerBlendProfile) ||
                  !string.IsNullOrWhiteSpace(state.SlotBlendProfile))));
+        if (PoseGraph is not null)
+            any |= PoseGraph.Nodes.Any(node => !string.IsNullOrWhiteSpace(node.BlendProfile));
         if (!any) return this;
 
         var machines = new AnimationGraphStateMachine[StateMachines.Count];
@@ -935,6 +949,37 @@ public sealed class AnimationGraphDefinition
                 Transitions = machine.Transitions
             };
         }
+        var poseGraph = PoseGraph;
+        if (PoseGraph is not null &&
+            PoseGraph.Nodes.Any(node => !string.IsNullOrWhiteSpace(node.BlendProfile)))
+        {
+            var nodes = new AnimationPoseNode[PoseGraph.Nodes.Count];
+            for (int index = 0; index < nodes.Length; ++index)
+            {
+                var node = PoseGraph.Nodes[index];
+                if (string.IsNullOrWhiteSpace(node.BlendProfile))
+                {
+                    nodes[index] = node;
+                    continue;
+                }
+                if (node.Weights.Count > 0)
+                    throw new InvalidOperationException(
+                        $"Pose graph node '{node.Id}' cannot combine blend profile and weights.");
+                if (!blendProfiles.TryGetValue(node.BlendProfile, out var profile))
+                    throw new InvalidOperationException(
+                        $"Pose graph node '{node.Id}' references unknown blend profile " +
+                        $"'{node.BlendProfile}'.");
+                nodes[index] = node.WithBlendProfileWeights(profile.Bones
+                    .Select(bone => new AnimationGraphBoneWeight(bone.Bone, bone.Weight))
+                    .ToArray());
+            }
+            poseGraph = new AnimationPoseGraph
+            {
+                Name = PoseGraph.Name,
+                OutputNode = PoseGraph.OutputNode,
+                Nodes = nodes
+            };
+        }
         return new AnimationGraphDefinition
         {
             Name = Name,
@@ -942,7 +987,7 @@ public sealed class AnimationGraphDefinition
             RootStateMachine = RootStateMachine,
             SaveCachedPose = SaveCachedPose,
             CachedPoseBranches = CachedPoseBranches,
-            PoseGraph = PoseGraph,
+            PoseGraph = poseGraph,
             DirectionBranches = DirectionBranches,
             StateMachines = machines
         };

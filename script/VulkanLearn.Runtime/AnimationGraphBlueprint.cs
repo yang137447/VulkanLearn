@@ -27,6 +27,7 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
     private bool cachedPoseBranchesSubmitted;
     private bool nativePoseGraphActive;
     private bool poseGraphSubmitted;
+    private bool? lastPoseGraphInPlace;
     private string lastPoseGraphEntry = "";
     private float lastPlanarSpeed;
     private readonly Dictionary<string, float> cachedPoseBranchAxes = new(StringComparer.Ordinal);
@@ -79,6 +80,11 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
         foreach (var machine in graph.StateMachines)
             foreach (var state in machine.States)
                 if (!string.IsNullOrWhiteSpace(state.BlendSpace)) return true;
+        foreach (var branch in graph.CachedPoseBranches)
+            if (!string.IsNullOrWhiteSpace(branch.BlendSpace)) return true;
+        if (graph.PoseGraph is { } poseGraph)
+            foreach (var node in poseGraph.Nodes)
+                if (!string.IsNullOrWhiteSpace(node.BlendSpace)) return true;
         return false;
     }
 
@@ -89,6 +95,9 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
                 if (!string.IsNullOrWhiteSpace(state.LayerBlendProfile) ||
                     !string.IsNullOrWhiteSpace(state.SlotBlendProfile))
                     return true;
+        if (graph.PoseGraph is { } poseGraph)
+            foreach (var node in poseGraph.Nodes)
+                if (!string.IsNullOrWhiteSpace(node.BlendProfile)) return true;
         return false;
     }
 
@@ -101,12 +110,23 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
             CanEvaluateNatively(poseGraph))
         {
             Animation.SetPoseGraph(poseGraph.Nodes.Select(node => node.ToDefinition()).ToArray());
+            Animation.SetPoseGraphInPlace(InPlace);
+            lastPoseGraphInPlace = InPlace;
             nativePoseGraphActive = true;
             poseGraphSubmitted = true;
         }
+        if (nativePoseGraphActive && lastPoseGraphInPlace != InPlace)
+        {
+            Animation.SetPoseGraphInPlace(InPlace);
+            lastPoseGraphInPlace = InPlace;
+        }
         SubmitCachedPoseBranches();
         SubmitCachedPoseBranchAxes(input.PlanarSpeed);
-        decision = runtime!.Update(input);
+        var graphInput = input with
+        {
+            PoseGraphAxisY = input.PoseGraphAxisY != 0 ? input.PoseGraphAxisY : PoseGraphAxisY
+        };
+        decision = runtime!.Update(graphInput);
         SubmitDecision(decision);
     }
 
@@ -120,7 +140,8 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
         {
             if (node.Kind == AnimationPoseNodeKind.SaveCachedPose) saves.Add(node.CacheName);
             if (node.Kind == AnimationPoseNodeKind.Output) ++outputs;
-            if (node.Kind == AnimationPoseNodeKind.BlendSpacePlayer &&
+            if ((node.Kind == AnimationPoseNodeKind.BlendSpacePlayer ||
+                 node.Kind == AnimationPoseNodeKind.BlendSpace2DPlayer) &&
                 node.BlendSamples is not { Count: > 0 }) return false;
         }
         if (outputs != 1) return false;
@@ -129,6 +150,9 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
                 return false;
         return true;
     }
+
+    // 2D BlendSpace 的第二轴由具体蓝图提供；默认 0，AimOffset/TurnInPlace 子类可覆写。
+    protected virtual float PoseGraphAxisY => 0;
 
     // 命名分支只在图就绪后提交一次；轴值按平面速度逐帧下发（变化才发）。
     private void SubmitCachedPoseBranches()
@@ -166,13 +190,18 @@ public abstract class AnimationGraphBlueprint : AnimationBlueprint
             if (!string.Equals(lastPoseGraphEntry, next.PoseGraphNode, StringComparison.Ordinal))
             {
                 // 状态输出节点必须显式切换，否则原生图会一直返回 Output（Land 链）。
-                Animation.SetPoseGraphEntry(next.PoseGraphNode);
+                // 入口时间与 Crossfade 随切换一起下发；原生图负责切换根源并在目标
+                // 播放器上建立同一段交叉淡入。
+                Animation.SetPoseGraphEntry(next.PoseGraphNode, next.StartPosition,
+                    next.BlendSeconds);
                 lastPoseGraphEntry = next.PoseGraphNode;
             }
             foreach (var node in poseGraph.Nodes)
             {
                 if (node.Kind == AnimationPoseNodeKind.BlendSpacePlayer)
                     Animation.SetPoseGraphValue(node.Id, lastPlanarSpeed);
+                else if (node.Kind == AnimationPoseNodeKind.BlendSpace2DPlayer)
+                    Animation.SetPoseGraphValue(node.Id, lastPlanarSpeed, PoseGraphAxisY);
                 else if (node.Kind == AnimationPoseNodeKind.Select && node.Inputs.Count == 2)
                 {
                     // Locomotion 的 Idle/WalkRun 选择：叶子状态的 PoseNode 指向哪个输入。

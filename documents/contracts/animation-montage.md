@@ -327,11 +327,38 @@ sourceInputs（loader 追加，按加载顺序）
   `AM_<clip>F`（Cliff 多一个 F）；都不存在时拒绝并输出
   `catch-montage-missing clip=... tried=...`。
 
+## Pose Graph 内的 MontagePlayer
+
+原生 Pose Graph 的 `MontagePlayer` 节点复用本契约的 Montage 资产语义，而不是
+另造一套时间轴：节点按 `montage`（id 或资源相对路径）查找已导入资产，校验
+sections、segments、derived clip 与未知 section 后，在节点内持有一个
+`SkeletalPlayback` 子播放器并调用 `PlayMontage`。因此 section/link 推进、多段
+`clipStartTime/clipEndTime/rateScale/loop` 映射、Montage notify、根位移和
+MotionWarping 都与独立播放路径一致。
+
+- 节点有独立时钟；`SetPoseGraphValue(id, 0)` 停用并复位。正值是**启动上升沿**
+  （上一次值 `<=0`）；首次或显式 `0 → 正值` 时从 `startPosition` 启动。
+  持续正值不会让非循环 Montage 在完成后自动重播；要重播必须重新提交
+  `0 → 正值`，或把节点 `Loop` 设为 true。`loop=true` 在子播放器完成后从入口
+  重播，Montage 资产本身仍按一次性播放语义执行 section 链。
+- warp target 由 `SetPoseGraphMontageTargets(id, targets)` 在首次激活前提交，
+  键集合仍必须与 Montage 的 distinct warp target 名完全相等；缺失/多余 target
+  在激活时拒绝，不会静默按 0 位移播放。
+- `Slot` 节点有两个输入 `(base, MontagePlayer)` 时，只在子播放器激活期间按
+  weights/BlendProfile 把 Montage pose 叠到 base；未激活、播放完成或 alpha=0
+  时直接 pass-through。单输入 Slot 保留旧的插入点语义。
+- 只有 MontagePlayer 是 `Output.rootSource`，或当前 `SetPoseGraphEntry` 入口
+  解析到该 MontagePlayer 时，子播放器的根位移/根 yaw 才写回 Actor；作为 Slot
+  overlay 时 notify 仍发布，但不消费根通道。入口切换同时重置子播放器到
+  入口时间，并按 `SetPoseGraphEntry` 的 `blendSeconds` 从已发布姿态交叉淡入。
+
 ## section 链与 link 推进
 
 从 section 0 开始：单 section 的播放范围是 `[startTime, endTime]`；多 section（或单段
 自连接）安装 section 链，播放范围始终是当前 section 的 `[startTime, endTime]`，段末按
-`nextSection`/`linkMethod` 切到下一段。**只允许一次性播放**（`loop=true` 拒绝）；
+`nextSection`/`linkMethod` 切到下一段。**直接 `PlayMontage` 只允许一次性播放**
+（`loop=true` 拒绝；图内 `MontagePlayer` 可在完成后从入口重播，不改变单次
+资产 section 链的语义）；
 单 sequence 链式 Montage 的每个 section 必须在装配期证明落在已加载 clip 内；
 多段 Montage 由每段 `clipStartTime/clipEndTime` 与 `(endTime-startTime)*rateScale`
 的源码映射在装配期证明不越界。
@@ -464,7 +491,7 @@ C# 按网格路径缓存为 `MontageInfo`/曲线键，不逐帧跨桥。C# 的 `
 | `Static` 缺 `staticPose`、location 非有限或旋转退化 | 拒绝 |
 | `easing != "Linear"` | 拒绝：`only Linear is supported` |
 | `warpRotation=true` 且 `rotationMethod != "Slerp"` | 拒绝：`only Slerp is supported`（C#/原生） |
-| `loop == true` | 拒绝：Montage 不支持循环播放（C#/原生） |
+| `loop == true` | 拒绝：直接 `PlayMontage` 不支持循环播放（C#/原生）；图内 `MontagePlayer` 用节点 `Loop` 重播 |
 | `rate` 非有限或不在 `(0,4]` | 拒绝（C#/原生） |
 | `startTime` 非数字、非有限或负数 | 原生 `Script.InvalidMontageStartTime`；C# 抛 `ArgumentOutOfRangeException` |
 | `startTime > 0` 且落在 section 0 可播放范围外（或剩余不足 1e-3 s） | 拒绝：带 montage id/section/范围（原生；C# 不复制资产时间轴判断） |

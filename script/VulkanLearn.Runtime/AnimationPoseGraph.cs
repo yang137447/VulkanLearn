@@ -7,6 +7,8 @@ public enum AnimationPoseNodeKind
 {
     SequencePlayer,
     BlendSpacePlayer,
+    BlendSpace2DPlayer,
+    MontagePlayer,
     Blend,
     Select,
     ApplyAdditive,
@@ -28,15 +30,21 @@ public sealed class AnimationPoseNode
     public bool Loop { get; init; } = true;
     public float Rate { get; init; } = 1;
     public float StartPosition { get; init; } = -1;
+    // Pose graph BlendSpacePlayer 的权重插值速度；由 BS_*.json 解析填入。
+    public float WeightSpeedPerSec { get; init; } = 5;
     public IReadOnlyList<AnimationGraphBlendSample> BlendSamples { get; init; } =
         Array.Empty<AnimationGraphBlendSample>();
     // BlendSpacePlayer 的 BS_*.json 资产名；宿主解析后填入 BlendSamples。
     public string BlendSpace { get; init; } = "";
+    // MontagePlayer 的 Montage id 或资源相对路径。
+    public string MontageId { get; init; } = "";
 
     // Blend / ApplyAdditive / LayeredBoneBlend / Slot
     public float Alpha { get; init; } = 1;
     public IReadOnlyList<AnimationGraphBoneWeight> Weights { get; init; } =
         Array.Empty<AnimationGraphBoneWeight>();
+    // LayeredBoneBlend / Slot 的 BP_*.json 资产名；ResolveBlendProfiles 后清空并展开到 Weights。
+    public string BlendProfile { get; init; } = "";
 
     // SaveCachedPose / UseCachedPose / Slot
     public string CacheName { get; init; } = "";
@@ -44,7 +52,30 @@ public sealed class AnimationPoseNode
     // Output 节点的根位移/notify 来源（Player 节点 id）。
     public string RootSource { get; init; } = "";
 
-    internal AnimationPoseNode WithBlendSamples(IReadOnlyList<AnimationGraphBlendSample> samples) => new()
+    internal AnimationPoseNode WithBlendSamples(IReadOnlyList<AnimationGraphBlendSample> samples,
+        AnimationPoseNodeKind? kind = null, float weightSpeedPerSec = 5) => new()
+    {
+        Id = Id,
+        Kind = kind ?? Kind,
+        Inputs = Inputs,
+        Clip = Clip,
+        Loop = Loop,
+        Rate = Rate,
+        StartPosition = StartPosition,
+        WeightSpeedPerSec = weightSpeedPerSec,
+        BlendSpace = "",
+        BlendSamples = samples,
+        MontageId = MontageId,
+        Alpha = Alpha,
+        Weights = Weights,
+        BlendProfile = BlendProfile,
+        CacheName = CacheName,
+        SlotName = SlotName,
+        RootSource = RootSource
+    };
+
+    internal AnimationPoseNode WithBlendProfileWeights(
+        IReadOnlyList<AnimationGraphBoneWeight> weights) => new()
     {
         Id = Id,
         Kind = Kind,
@@ -53,22 +84,26 @@ public sealed class AnimationPoseNode
         Loop = Loop,
         Rate = Rate,
         StartPosition = StartPosition,
-        BlendSpace = "",
-        BlendSamples = samples,
+        WeightSpeedPerSec = WeightSpeedPerSec,
+        BlendSpace = BlendSpace,
+        BlendSamples = BlendSamples,
+        MontageId = MontageId,
         Alpha = Alpha,
-        Weights = Weights,
+        Weights = weights,
+        BlendProfile = "",
         CacheName = CacheName,
         SlotName = SlotName,
         RootSource = RootSource
     };
 
-    internal PoseGraphNodeDefinition ToDefinition() => new(
+    public PoseGraphNodeDefinition ToDefinition() => new(
         Id, Kind.ToString(), Inputs.ToArray(), Clip,
         BlendSamples.Select(sample => new PoseGraphSampleDefinition(
-            sample.Clip, sample.Threshold, sample.Rate, sample.SyncGroup)).ToArray(),
-        Rate, Loop, StartPosition, Alpha,
+            sample.Clip, sample.Threshold, sample.Rate, sample.SyncGroup,
+            sample.X, sample.Y)).ToArray(),
+        Rate, Loop, StartPosition < 0 ? 0 : StartPosition, Alpha,
         Weights.Select(weight => new AnimationBoneWeight(weight.Bone, weight.Weight)).ToArray(),
-        CacheName, SlotName, RootSource);
+        CacheName, SlotName, RootSource, MontageId, WeightSpeedPerSec);
 }
 
 // 扁平化结果：字段与 AnimationGraphDecision 的子集一一对应。
@@ -91,12 +126,15 @@ public sealed record AnimationPoseResult(
     float SlotAlpha,
     IReadOnlyList<AnimationGraphBoneWeight> SlotWeights,
     string UseCachedPose,
-    string SaveCachedPose);
+    string SaveCachedPose,
+    IReadOnlyList<AnimationGraphBlendSample>? BlendSpaceSamples = null,
+    IReadOnlyList<float>? BlendSpaceWeights = null,
+    string MontageId = "");
 
 public sealed class AnimationPoseGraph
 {
     public const int MaximumNodes = 128;
-    public const int MaximumBlendSamples = 3;
+    public const int MaximumBlendSamples = 4;
 
     public string Name { get; init; } = "";
     public string OutputNode { get; init; } = "";
@@ -139,6 +177,11 @@ public sealed class AnimationPoseGraph
                 if (!byId.ContainsKey(input))
                     throw new InvalidOperationException(
                         $"Pose graph node '{node.Id}' references unknown input '{input}'.");
+        foreach (var node in Nodes)
+            if (node.Kind == AnimationPoseNodeKind.Slot && node.Inputs.Count == 2 &&
+                byId[node.Inputs[1]].Kind != AnimationPoseNodeKind.MontagePlayer)
+                throw new InvalidOperationException(
+                    $"Pose graph Slot '{node.Id}' second input must be a MontagePlayer.");
 
         // 环检测 + 可达性：所有节点都必须能被 Output 用到，避免静默死节点。
         var visiting = new HashSet<string>(StringComparer.Ordinal);
@@ -186,10 +229,12 @@ public sealed class AnimationPoseGraph
         {
             AnimationPoseNodeKind.SequencePlayer => 0,
             AnimationPoseNodeKind.BlendSpacePlayer => 0,
+            AnimationPoseNodeKind.BlendSpace2DPlayer => 0,
+            AnimationPoseNodeKind.MontagePlayer => 0,
             AnimationPoseNodeKind.UseCachedPose => 0,
             AnimationPoseNodeKind.Output => 1,
             AnimationPoseNodeKind.SaveCachedPose => 1,
-            AnimationPoseNodeKind.Slot => 1,
+            AnimationPoseNodeKind.Slot => -1,
             AnimationPoseNodeKind.Blend => 2,
             AnimationPoseNodeKind.Select => 2,
             AnimationPoseNodeKind.ApplyAdditive => 2,
@@ -197,13 +242,27 @@ public sealed class AnimationPoseGraph
             _ => throw new InvalidOperationException(
                 $"Pose graph node '{node.Id}' has an unsupported kind.")
         };
-        if (node.Inputs.Count != expected)
+        if (node.Kind == AnimationPoseNodeKind.Slot)
+        {
+            if (node.Inputs.Count is not (1 or 2))
+                throw new InvalidOperationException(
+                    $"Pose graph node '{node.Id}' Slot requires one or two inputs.");
+        }
+        else if (node.Inputs.Count != expected)
             throw new InvalidOperationException(
                 $"Pose graph node '{node.Id}' requires {expected} inputs.");
         if (!float.IsFinite(node.Rate) || node.Rate <= 0 || node.Rate > 4)
             throw new InvalidOperationException($"Pose graph node '{node.Id}' rate is invalid.");
         if (!float.IsFinite(node.Alpha) || node.Alpha < 0 || node.Alpha > 1)
             throw new InvalidOperationException($"Pose graph node '{node.Id}' alpha is invalid.");
+        if (node.BlendProfile.Length > 0)
+        {
+            if (node.Weights.Count > 0)
+                throw new InvalidOperationException(
+                    $"Pose graph node '{node.Id}' cannot combine blend profile and weights.");
+            throw new InvalidOperationException(
+                $"Pose graph node '{node.Id}' blend profile '{node.BlendProfile}' was not resolved.");
+        }
         foreach (var weight in node.Weights)
         {
             if (string.IsNullOrWhiteSpace(weight.Bone) || weight.Bone.Length > 128 ||
@@ -221,9 +280,9 @@ public sealed class AnimationPoseGraph
                 break;
             case AnimationPoseNodeKind.BlendSpacePlayer:
                 if (node.BlendSamples is null || node.BlendSamples.Count < 2 ||
-                    node.BlendSamples.Count > MaximumBlendSamples)
+                    node.BlendSamples.Count > 3)
                     throw new InvalidOperationException(
-                        $"Pose graph node '{node.Id}' requires 2..{MaximumBlendSamples} samples.");
+                        $"Pose graph node '{node.Id}' requires 2..3 samples.");
                 float previous = float.NegativeInfinity;
                 foreach (var sample in node.BlendSamples)
                 {
@@ -233,6 +292,17 @@ public sealed class AnimationPoseGraph
                             $"Pose graph node '{node.Id}' has invalid blend samples.");
                     previous = sample.Threshold;
                 }
+                break;
+            case AnimationPoseNodeKind.BlendSpace2DPlayer:
+                ValidateBlendSpace2D(node);
+                break;
+            case AnimationPoseNodeKind.MontagePlayer:
+                if (string.IsNullOrWhiteSpace(node.MontageId) ||
+                    node.MontageId.Length > 256 ||
+                    node.MontageId.Trim().Length != node.MontageId.Length ||
+                    node.MontageId.Contains('\0'))
+                    throw new InvalidOperationException(
+                        $"Pose graph node '{node.Id}' requires a montage id.");
                 break;
             case AnimationPoseNodeKind.SaveCachedPose:
             case AnimationPoseNodeKind.UseCachedPose:
@@ -261,6 +331,32 @@ public sealed class AnimationPoseGraph
             case AnimationPoseNodeKind.LayeredBoneBlend:
                 break;
         }
+    }
+
+    private static void ValidateBlendSpace2D(AnimationPoseNode node)
+    {
+        if (node.BlendSamples is null || node.BlendSamples.Count != 4)
+            throw new InvalidOperationException(
+                $"Pose graph node '{node.Id}' requires exactly four 2D samples.");
+        var xs = new HashSet<float>();
+        var ys = new HashSet<float>();
+        var cells = new HashSet<(float X, float Y)>();
+        foreach (var sample in node.BlendSamples)
+        {
+            if (string.IsNullOrWhiteSpace(sample.Clip) ||
+                !float.IsFinite(sample.X) || !float.IsFinite(sample.Y) ||
+                !float.IsFinite(sample.Rate) || sample.Rate <= 0 || sample.Rate > 4)
+                throw new InvalidOperationException(
+                    $"Pose graph node '{node.Id}' has invalid 2D blend samples.");
+            xs.Add(sample.X);
+            ys.Add(sample.Y);
+            if (!cells.Add((sample.X, sample.Y)))
+                throw new InvalidOperationException(
+                    $"Pose graph node '{node.Id}' repeats a 2D grid coordinate.");
+        }
+        if (xs.Count != 2 || ys.Count != 2 || cells.Count != 4)
+            throw new InvalidOperationException(
+                $"Pose graph node '{node.Id}' samples must form a 2x2 grid.");
     }
 
     // entryNode：状态自己的 PoseNode；为空时才回退到图级 Output。
@@ -292,6 +388,14 @@ public sealed class AnimationPoseGraph
                     StartPosition = node.StartPosition
                 },
                 AnimationPoseNodeKind.BlendSpacePlayer => EvaluateBlendSpace(node, planarSpeed),
+                AnimationPoseNodeKind.BlendSpace2DPlayer => EvaluateBlendSpace2D(node, values),
+                AnimationPoseNodeKind.MontagePlayer => new PoseValue
+                {
+                    Rate = node.Rate,
+                    Loop = node.Loop,
+                    StartPosition = node.StartPosition,
+                    MontageId = node.MontageId
+                },
                 AnimationPoseNodeKind.Blend => EvaluateBlend(node,
                     EvaluateNode(node.Inputs[0]), EvaluateNode(node.Inputs[1]), node.Alpha),
                 AnimationPoseNodeKind.Select => EvaluateNode(node.Inputs[
@@ -304,7 +408,10 @@ public sealed class AnimationPoseGraph
                 AnimationPoseNodeKind.SaveCachedPose => EvaluateSave(node,
                     EvaluateNode(node.Inputs[0])),
                 AnimationPoseNodeKind.UseCachedPose => new PoseValue { UseCachedPose = node.CacheName },
-                AnimationPoseNodeKind.Slot => EvaluateSlot(node, EvaluateNode(node.Inputs[0])),
+                AnimationPoseNodeKind.Slot => node.Inputs.Count == 2
+                    ? EvaluateSlot(node, EvaluateNode(node.Inputs[0]),
+                        EvaluateNode(node.Inputs[1]))
+                    : EvaluateSlot(node, EvaluateNode(node.Inputs[0])),
                 AnimationPoseNodeKind.Output => EvaluateNode(node.Inputs[0]),
                 _ => throw new InvalidOperationException($"Unsupported pose node '{id}'.")
             };
@@ -319,7 +426,8 @@ public sealed class AnimationPoseGraph
             result.AdditiveClip, result.AdditiveAlpha, result.AdditiveLoop,
             result.LayerClip, result.LayerAlpha, result.LayerLoop, result.LayerWeights,
             result.Slot, result.SlotAlpha, result.SlotWeights,
-            result.UseCachedPose, result.SaveCachedPose);
+            result.UseCachedPose, result.SaveCachedPose,
+            result.BlendSpaceSamples, result.BlendSpaceWeights, result.MontageId);
     }
 
     private static PoseValue EvaluateBlendSpace(AnimationPoseNode node, float axis)
@@ -353,6 +461,41 @@ public sealed class AnimationPoseGraph
             BlendSamples = samples,
             BlendClip = blendClip,
             BlendWeight = target
+        };
+    }
+
+    private static PoseValue EvaluateBlendSpace2D(AnimationPoseNode node,
+        IReadOnlyDictionary<string, float>? values)
+    {
+        var samples = node.BlendSamples;
+        var xs = samples.Select(sample => sample.X).Distinct().OrderBy(value => value).ToArray();
+        var ys = samples.Select(sample => sample.Y).Distinct().OrderBy(value => value).ToArray();
+        float axisX = 0;
+        float axisY = 0;
+        if (values is not null && values.TryGetValue($"{node.Id}.y", out var y))
+            axisY = y;
+        if (values is not null && values.TryGetValue(node.Id, out var x))
+            axisX = x;
+        float alphaX = xs[1] > xs[0] ? Math.Clamp((axisX - xs[0]) / (xs[1] - xs[0]), 0, 1) : 0;
+        float alphaY = ys[1] > ys[0] ? Math.Clamp((axisY - ys[0]) / (ys[1] - ys[0]), 0, 1) : 0;
+        var weights = new float[4];
+        for (int index = 0; index < samples.Count; ++index)
+        {
+            var sample = samples[index];
+            float wx = sample.X == xs[0] ? 1 - alphaX : alphaX;
+            float wy = sample.Y == ys[0] ? 1 - alphaY : alphaY;
+            weights[index] = wx * wy;
+        }
+        return new PoseValue
+        {
+            // 根源/完成反馈固定为声明顺序第一个 sample，与原生一致。
+            Clip = samples[0].Clip,
+            Loop = node.Loop,
+            Rate = node.Rate,
+            StartPosition = node.StartPosition,
+            BlendSamples = samples,
+            BlendSpaceSamples = samples,
+            BlendSpaceWeights = weights
         };
     }
 
@@ -424,6 +567,14 @@ public sealed class AnimationPoseGraph
         return pose;
     }
 
+    private static PoseValue EvaluateSlot(AnimationPoseNode node, PoseValue pose,
+        PoseValue montage)
+    {
+        pose = EvaluateSlot(node, pose);
+        pose.MontageId = montage.MontageId;
+        return pose;
+    }
+
     private static PoseValue EvaluateSlot(AnimationPoseNode node, PoseValue pose)
     {
         pose = pose.Clone();
@@ -456,6 +607,9 @@ public sealed class AnimationPoseGraph
         public float SlotAlpha = 1;
         public IReadOnlyList<AnimationGraphBoneWeight> SlotWeights =
             Array.Empty<AnimationGraphBoneWeight>();
+        public IReadOnlyList<AnimationGraphBlendSample>? BlendSpaceSamples;
+        public IReadOnlyList<float>? BlendSpaceWeights;
+        public string MontageId = "";
         public string UseCachedPose = "";
         public string SaveCachedPose = "";
     }

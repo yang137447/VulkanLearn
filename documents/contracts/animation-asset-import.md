@@ -307,6 +307,9 @@ sourceModel/profile 路径，再写本地 clip/Montage 路径；loader 先写 SK
 曲线端点外作者 key 原样保留。没有承诺曲线插值、事件执行、虚拟骨重建或 UE 蓝图等价。
 运行时只通过显式 `SampleFloatCurve`/`SkeletalPlayback::SampleCurve` 读取曲线；
 没有 sidecar 的片段返回缺失而不是空曲线，曲线不参与导入期姿态或自动 AnimBP 图执行。
+Additive sidecar 的 `rootMotion` 额外保留 `additiveAnimType`、`refPoseType` 与
+`refFrameIndex`；`RefPose` 使用绑定姿态，`LocalAnimFrame` 使用本片段参考帧，
+外部 `RefPoseSeq` 的 `AnimFrame` 在导入期拒绝，不把它近似成绑定姿态。
 
 `compare_gasp_import.py` 使用固定 UE→VL 基底独立对照 UE RAW 数据。
 阈值为 0.1 cm、0.1 degree、0.00001 s，并检查元数据逐值保留和缺轨名单。
@@ -318,7 +321,7 @@ sourceModel/profile 路径，再写本地 clip/Montage 路径；loader 先写 SK
 根 GoogleTest 目标 `animation_preflight_tests` 中，`SkeletalImport`（30 项）覆盖
 手算轴向、父骨保留、九影响权重、MikkTSpace 展开、绑定姿态、缺轨、根位移、
 旋转/缩放和损坏资产拒绝；`AnimationSkeleton`（17 项）覆盖 SK 拓扑/槽位/曲线注册表、
-FBX 对照、`skinning.root` 拒绝与强制 `skinning.skeleton`；`AnimationSequenceData`（16 项）
+FBX 对照、`skinning.root` 拒绝与强制 `skinning.skeleton`；`AnimationSequenceData`（17 项）
 覆盖 sidecar 帧信息/曲线/notify/sync marker/player 绑定与采样；`AnimationMontage`（27 项）覆盖 Montage 解析、
 跨文件绑定、多 segment/缓存键与 `rotationMethod`；`AnimationScriptData`（37 项）覆盖 catalog/窗口
 装配/target 旋转/Static pose/section link/段边界 clip 切换/入口 `startTime`/sync 元数据发布；`MotionWarping`（28 项）覆盖

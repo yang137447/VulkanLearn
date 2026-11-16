@@ -27,7 +27,7 @@ struct BlendProfileAsset;
 // 两者不互相替换。
 nlohmann::json BuildAnimationScriptAssets(const SkeletalAsset& asset);
 
-// BS_*.json 的 1D BlendSpace 解析与跨资产校验。解析只做结构与数值校验；
+// BS_*.json 的 1D/2D BlendSpace 解析与跨资产校验。解析只做结构与数值校验；
 // clip 是否存在由 Loader 在 SkeletalAsset 的 clips 就绪后调用 ValidateBlendSpaceClips。
 BlendSpaceAsset ParseBlendSpace(const nlohmann::json& json, const std::string& basePath);
 void ValidateBlendSpaceClips(const BlendSpaceAsset& space, const SkeletalAsset& asset,

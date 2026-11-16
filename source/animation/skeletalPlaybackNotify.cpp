@@ -112,6 +112,10 @@ void SkeletalPlayback::RefreshActiveNotifyStates()
         state.endTime = notifyEvents[index].EndTime();
         activeNotifyStates.push_back(std::move(state));
     }
+    // 图内 MontagePlayer 拥有独立事件源；其活动区间与基础片段的 notifyState
+    // 并列发布，不能由上面的基础表清空。
+    activeNotifyStates.insert(activeNotifyStates.end(),
+        poseGraphActiveNotifyStates.begin(), poseGraphActiveNotifyStates.end());
 }
 
 void SkeletalPlayback::PushFired(const NotifyEvent& notify, const char* phase, float eventTime,

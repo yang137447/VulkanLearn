@@ -1093,6 +1093,143 @@ public sealed class AnimationGraphPoseGraphProbeBlueprint : Blueprint
     private static float Flag(bool ok) => ok ? 1 : 2;
 }
 
+// PoseNode 状态没有静态 Clip 时，StateCompleted 仍必须使用上一帧实际求值片段。
+public sealed class AnimationGraphPoseStateCompletedProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var runtime = new AnimationGraphRuntime(BuildGraph());
+        var first = runtime.Update(Input(false));
+        var second = runtime.Update(Input(true));
+        Transform.Position = new(
+            Flag(first.LeafState == "Shot" && first.Clip == "Shot"),
+            Flag(second.LeafState == "Idle" && second.Changed),
+            Flag(second.Clip == "Idle"));
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => new()
+    {
+        Name = "PoseStateCompleted",
+        RootStateMachine = "Root",
+        PoseGraph = new AnimationPoseGraph
+        {
+            Name = "Pose",
+            OutputNode = "out",
+            Nodes = new[]
+            {
+                new AnimationPoseNode { Id = "shot", Kind = AnimationPoseNodeKind.SequencePlayer,
+                    Clip = "Shot", Loop = false },
+                new AnimationPoseNode { Id = "idle", Kind = AnimationPoseNodeKind.SequencePlayer,
+                    Clip = "Idle", Loop = true },
+                new AnimationPoseNode { Id = "out", Kind = AnimationPoseNodeKind.Output,
+                    Inputs = new[] { "idle" } }
+            }
+        },
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "Shot",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "Shot", PoseNode = "shot", Loop = false },
+                    new AnimationGraphState { Name = "Idle", PoseNode = "idle", Loop = true }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "Shot", To = "Idle",
+                        Condition = AnimationGraphCondition.StateCompleted
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput Input(bool completed) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, 0, 0, 0, 0, 1f / 60,
+            "Shot", 0.8f, 0.8f, completed, true, 0);
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
+// MontagePlayer 没有静态 Clip；StateCompleted 必须使用原生反馈 clip 判定。
+public sealed class AnimationGraphMontageStateCompletedProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var runtime = new AnimationGraphRuntime(BuildGraph());
+        var first = runtime.Update(Input(false));
+        var second = runtime.Update(Input(true));
+        Transform.Position = new(
+            Flag(first.LeafState == "Montage" && first.Clip == "MontageDerived"),
+            Flag(second.LeafState == "Idle" && second.Changed),
+            Flag(second.Clip == "Idle"));
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => new()
+    {
+        Name = "MontagePoseStateCompleted",
+        RootStateMachine = "Root",
+        PoseGraph = new AnimationPoseGraph
+        {
+            Name = "Pose",
+            OutputNode = "out",
+            Nodes = new[]
+            {
+                new AnimationPoseNode
+                {
+                    Id = "montage", Kind = AnimationPoseNodeKind.MontagePlayer,
+                    MontageId = "AM_Test", Loop = false
+                },
+                new AnimationPoseNode
+                {
+                    Id = "idle", Kind = AnimationPoseNodeKind.SequencePlayer,
+                    Clip = "Idle", Loop = true
+                },
+                new AnimationPoseNode
+                {
+                    Id = "out", Kind = AnimationPoseNodeKind.Output,
+                    Inputs = new[] { "montage" }
+                }
+            }
+        },
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "Montage",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "Montage", PoseNode = "montage", Loop = false
+                    },
+                    new AnimationGraphState
+                    {
+                        Name = "Idle", PoseNode = "idle", Loop = true
+                    }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "Montage", To = "Idle",
+                        Condition = AnimationGraphCondition.StateCompleted
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput Input(bool completed) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, 0, 0, 0, 0, 1f / 60,
+            "MontageDerived", 0.8f, 0.8f, completed, true, 0);
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
 // BP_*.json 解析与图级 layer/slot 权重绑定探针。
 public sealed class AnimationGraphBlendProfileProbeBlueprint : Blueprint
 {
@@ -1146,6 +1283,14 @@ public sealed class AnimationGraphBlendProfileProbeBlueprint : Blueprint
             Flag(unknownProfile),
             Flag(unresolved),
             Flag(conflict));
+
+        var poseGraph = BuildPoseGraph().ResolveBlendProfiles(maps).Validate();
+        var slotNode = poseGraph.PoseGraph!.Nodes.Single(node => node.Id == "slot");
+        Transform.Scale = new(
+            Flag(slotNode.Weights.Count == 2),
+            Flag(slotNode.Weights.Any(w => w.Bone == "foot" &&
+                MathF.Abs(w.Weight - 0.5f) < 1e-4f)),
+            Flag(slotNode.BlendProfile.Length == 0));
     }
 
     private static bool Catch(Action action)
@@ -1171,6 +1316,50 @@ public sealed class AnimationGraphBlendProfileProbeBlueprint : Blueprint
                         Name = "A", Clip = "Clip_A", Slot = "DefaultSlot",
                         SlotBlendProfile = "BP_Upper"
                     }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BuildPoseGraph() => new()
+    {
+        Name = "PoseBlendProfileProbe",
+        RootStateMachine = "Root",
+        PoseGraph = new AnimationPoseGraph
+        {
+            Name = "Pose",
+            OutputNode = "out",
+            Nodes = new[]
+            {
+                new AnimationPoseNode
+                {
+                    Id = "base", Kind = AnimationPoseNodeKind.SequencePlayer, Clip = "Clip_A"
+                },
+                new AnimationPoseNode
+                {
+                    Id = "montage", Kind = AnimationPoseNodeKind.MontagePlayer,
+                    MontageId = "AM_Test"
+                },
+                new AnimationPoseNode
+                {
+                    Id = "slot", Kind = AnimationPoseNodeKind.Slot,
+                    Inputs = new[] { "base", "montage" }, SlotName = "DefaultSlot",
+                    BlendProfile = "BP_Upper"
+                },
+                new AnimationPoseNode
+                {
+                    Id = "out", Kind = AnimationPoseNodeKind.Output, Inputs = new[] { "slot" }
+                }
+            }
+        },
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", PoseNode = "slot" }
                 }
             }
         }

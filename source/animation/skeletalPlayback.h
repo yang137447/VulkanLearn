@@ -25,11 +25,20 @@
 
 namespace VL::Animation
 {
-// BS_*.json 的 1D BlendSpace：当前只支持 Speed 轴与 2..3 个 sample 的成对混合。
+enum class BlendSpaceType
+{
+    OneD,
+    TwoD
+};
+
+// BS_*.json 的 BlendSpace。1D 使用 threshold（2..3 个 sample，成对混合）；
+// 2D 使用 x/y（固定 2x2 矩形网格，四角双线性混合）。
 struct BlendSpaceSample
 {
     std::string clip;
     float threshold = 0;
+    float x = 0;
+    float y = 0;
     // 每 sample 播放速率与 marker 同步名（空 = 整段归一化相位）。
     float rate = 1;
     std::string syncGroup;
@@ -38,12 +47,20 @@ struct BlendSpaceSample
 struct BlendSpaceAsset
 {
     std::string name;
+    BlendSpaceType type = BlendSpaceType::OneD;
     std::vector<BlendSpaceSample> samples;
     float weightSpeedPerSec = 5;
     std::string interpolation = "EaseInOut";
+    // 2D 轴名与可选作者范围；1D 保留 axisX=Speed 以兼容旧资产。
+    std::string axisXName = "Speed";
+    std::string axisYName;
+    std::optional<float> axisXMin;
+    std::optional<float> axisXMax;
+    std::optional<float> axisYMin;
+    std::optional<float> axisYMax;
 };
 
-// BP_*.json 的逐骨权重；未列出的骨骼按 1.0（UE BlendProfile 语义）。
+// BP_*.json 的逐骨权重；运行期按白名单解释，未列出的骨骼权重为 0。
 struct BlendProfileBone
 {
     std::string name;
@@ -217,7 +234,7 @@ public:
     // 空 mask 视为全身；未知骨骼名拒绝。顺序固定为 base → additive → layered。
     void SetLayeredPose(const std::string& clipId, float alpha, bool loop,
         const std::vector<std::string>& boneMask);
-    // BlendProfile 重载：未列出的骨骼按 1.0，权重 × alpha 得到每关节权重。
+    // BlendProfile 重载：未列出的骨骼权重 0，权重 × alpha 得到每关节权重。
     void SetLayeredPoseWeights(const std::string& clipId, float alpha, bool loop,
         const std::vector<BlendProfileBone>& boneWeights);
     void ClearLayeredPose();
@@ -269,6 +286,8 @@ public:
     {
         std::string clip;
         float threshold = 0;
+        float x = 0;
+        float y = 0;
         // 图内 BlendSpacePlayer 的 per-sample 播放速率与 marker 同步组。
         float rate = 1;
         std::string syncGroup;
@@ -279,6 +298,8 @@ public:
         {
             SequencePlayer,
             BlendSpacePlayer,
+            BlendSpace2DPlayer,
+            MontagePlayer,
             Blend,
             Select,
             ApplyAdditive,
@@ -292,8 +313,12 @@ public:
         Kind kind = Kind::SequencePlayer;
         std::vector<std::string> inputs;
         std::string clip;
+        // MontagePlayer 的 Montage id 或资源相对路径。
+        std::string montage;
         std::vector<PoseGraphSample> samples;
         float rate = 1;
+        // BS_*.json 的 TargetWeightInterpolationSpeedPerSec；图内 1D 也读取它。
+        float weightSpeedPerSec = 5;
         bool loop = true;
         float startPosition = 0;
         float alpha = 1;
@@ -305,10 +330,27 @@ public:
     void SetPoseGraph(std::vector<PoseGraphNode> nodes);
     void ClearPoseGraph();
     bool PoseGraphActive() const { return poseGraphActive; }
+    // 原生图不经过 Play()，因此必须显式同步 C# 的 InPlace 根消费策略。
+    // 该值只影响图内 Sample/MontagePlayer，不重置时钟或节点状态。
+    void SetPoseGraphInPlace(bool value);
     // 每帧驱动参数：BlendSpace 轴、Blend/Additive/Layer 的 alpha。
+    // MontagePlayer 的 0 停止并复位；正值上升沿从 startPosition 启动。
+    // 持续正值不会在非循环 Montage 完成后自动重播；重播需 0 → 正值，
+    // 或节点 Loop=true。
     void SetPoseGraphValue(const std::string& id, float value);
+    // 2D BlendSpace 的双轴值；X/Y 都会写入节点状态。
+    void SetPoseGraphValue(const std::string& id, float valueX, float valueY);
+    // 只更新一个轴；axis 接受 "X"/"Y"（大小写不敏感）。
+    void SetPoseGraphAxisValue(const std::string& id, const std::string& axis, float value);
+    // 图内 MontagePlayer 的 warp target；必须在首次激活前设置。更换 target 会
+    // 从当前时钟重建该节点的候选播放器（失败时保留旧播放器）。
+    void SetPoseGraphMontageTargets(const std::string& id,
+        std::map<std::string, MotionWarpTarget> targets);
     // 状态机当前状态的输出节点；求值返回该节点而非图级 Output（空 = Output）。
-    void SetPoseGraphEntry(const std::string& id);
+    // 状态切换同时把根源切换到入口可达的播放器，并用 startPosition/blendSeconds
+    // 复现状态机的入口时间与交叉淡入。重复提交同一入口不会重置播放时钟。
+    void SetPoseGraphEntry(const std::string& id, float startPosition = 0,
+        float blendSeconds = 0);
     void SetCachedPoseBranchAxis(const std::string& name, float value);
     bool CachedPoseActive() const { return useCachedPoseActive; }
     std::string CachedPoseName() const { return useCachedPoseActive ? useCachedPoseName : std::string(); }
@@ -412,6 +454,8 @@ public:
     bool IsBlending() const { return !blendSource.empty() || !inertialization.Empty(); }
     float BlendAlpha() const { return IsBlending() ? blendElapsed / blendDuration : 1.0f; }
     bool InPlace() const { return inPlace; }
+    // 运行时切换根消费策略；不重置片段时钟、notify 或图节点状态。
+    void SetInPlace(bool value) { inPlace = value; }
     bool IsLooping() const { return looping; }
     float Rate() const { return rate; }
     // 外部作者/调用方请求的速率；SyncGroup follower 的生效速率可能被时长比重算。
@@ -462,6 +506,8 @@ public:
         return VL::Animation::SyncGroupDiagnosticName(syncDecision.diagnostic);
     }
     const SkeletalAsset& Asset() const { return *asset; }
+    // 原生图内 Montage 子播放器求值后的最终局部姿态；只供图求值与诊断读取。
+    const LocalPose& CurrentLocalPose() const { return displayedLocals; }
     const std::vector<Eigen::Matrix4f>& Models() const { return *jointModels; }
     // MM 使用规范 post-blend 姿态；pre-IK 另含可选视觉根修正，不反馈给搜索。
     const std::vector<Eigen::Matrix4f>& MotionModels() const { return *motionModels; }
@@ -494,6 +540,9 @@ private:
         const LocalPose& locals, uint64_t epoch,
         std::shared_ptr<const std::vector<Eigen::Matrix4f>>& models) const;
     LocalPose Sample(size_t clipIndex, float sampleTime) const;
+    // LocalSpaceBase/ RotationOffsetMeshSpace 的参考姿态：优先读取 UE RefFrameIndex，
+    // 未声明时才回退到骨架绑定姿态。
+    LocalPose AdditiveReferencePose(size_t clipIndex) const;
     LocalPose PreviewPose(float aheadSeconds) const;
     float ClipDuration() const;
     // 由当前片段 Sequence notifies 与可选 Montage notifies 合成按 time 稳定排序的事件表；
@@ -594,7 +643,7 @@ private:
     // 逐关节 mask；空输入 mask 会展开为全身。
     std::vector<uint8_t> layeredMask;
     size_t layeredMaskBones = 0;
-    // 非空时优先于 layeredMask：每关节原始权重（未列出 1.0）。
+    // 非空时优先于 layeredMask：每关节原始权重（未列出 0）。
     std::vector<float> layeredWeights;
     bool slotMontageActive = false;
     size_t slotMontageClip = 0;
@@ -628,6 +677,13 @@ private:
         float time = 0;
         float weight = 0;
         bool weightValid = false;
+        Eigen::Vector2f axis = Eigen::Vector2f::Zero();
+        bool axisValid = false;
+        std::shared_ptr<SkeletalPlayback> montagePlayer;
+        bool montageActive = true;
+        bool montageCompleted = false;
+        bool montageInitialized = false;
+        float montageStartPosition = 0;
     };
     bool poseGraphActive = false;
     std::vector<PoseGraphNode> poseGraphNodes;
@@ -638,12 +694,22 @@ private:
     size_t poseGraphRoot = static_cast<size_t>(-1);
     std::vector<PoseGraphPlayerState> poseGraphStates;
     std::unordered_map<std::string, float> poseGraphValues;
+    std::unordered_map<std::string, Eigen::Vector2f> poseGraphAxisValues;
+    std::unordered_map<std::string, std::map<std::string, MotionWarpTarget>>
+        poseGraphMontageTargets;
     std::unordered_map<std::string, LocalPose> poseGraphCachedPoses;
     std::unordered_map<std::string, LocalPose> poseGraphNodePoses;
+    std::vector<ActiveNotifyState> poseGraphActiveNotifyStates;
     float poseGraphRootPreviousTime = 0;
     bool poseGraphRootValid = false;
+    bool poseGraphRootMontage = false;
+    Eigen::Vector3f poseGraphMontageRootDelta = Eigen::Vector3f::Zero();
+    float poseGraphMontageRootYawDelta = 0;
     void RebuildPoseGraphOrder();
-    LocalPose EvaluatePoseGraph(float deltaSeconds);
+    size_t ResolvePoseGraphRoot(size_t entry) const;
+    void ResetPoseGraphRootState(size_t root, float startPosition);
+    LocalPose EvaluatePoseGraph(float deltaSeconds, const Eigen::Matrix4f* meshTransform,
+        const Eigen::Vector3f* actorPosition, float actorYaw);
     bool useCachedPoseActive = false;
     std::string useCachedPoseName;
     // 缓存姿态以快照为 Base：不推进片段时钟，也不产生根位移/notify。

@@ -722,7 +722,8 @@ Blueprint Destroy、故障隔离或 EndPlay 触发的 owner 清理会为仍在 l
 
 ```json
 "gameplayInput": {
-  "actions": {"Jump": ["Space"], "Interact": ["F"], "Fire": ["MouseLeft"]},
+  "actions": {"Jump": ["Space"], "Interact": ["F"], "Fire": ["MouseLeft"],
+              "Sprint": ["Left Shift"], "Walk": ["Left Shift"]},
   "axes": {
     "MoveForward": [{"key": "W", "scale": 1}, {"key": "S", "scale": -1}],
     "MoveRight": [{"key": "D", "scale": 1}, {"key": "A", "scale": -1}]
@@ -730,8 +731,9 @@ Blueprint Destroy、故障隔离或 EndPlay 触发的 owner 清理会为仍在 l
 }
 ```
 
-省略 actions/axes 时分别使用默认集：上述按钮、W/S/D/A/E/Q 三个 Move 轴及 MouseX/MouseY
-两个 Look 轴。鼠标按钮另支持 MouseRight/MouseMiddle。
+省略 actions/axes 时分别使用默认集：上述按钮（含 `Sprint`/`Walk` 的 Left Shift）、
+W/S/D/A/E/Q 三个 Move 轴及 MouseX/MouseY 两个 Look 轴。鼠标按钮另支持
+MouseRight/MouseMiddle。
 每类最多 64 个名称、名称最长 128 字节、每名称 1..16 个绑定；轴 scale 有限且绝对值≤10000。
 `Input.IsPressed` 为当前保持，WasPressed/WasReleased 为物理边沿，GetAxis 返回轴值；
 Move Vector2 与旧 MoveForward/Right/Up 字段保留兼容。

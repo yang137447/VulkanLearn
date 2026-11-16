@@ -249,12 +249,38 @@ def settings_record(raw_clip):
     if additive not in ADDITIVE_NAMES:
         raise RuntimeError("Clip %r has unknown AdditiveAnimType %r" %
                            (raw_clip.get("name"), additive))
-    return {
+    result = {
         "enableRootMotion": settings["enable_root_motion"],
         "forceRootLock": settings["force_root_lock"],
         "rootMotionRootLock": ROOT_LOCK_NAMES[lock],
         "additiveAnimType": ADDITIVE_NAMES[additive],
     }
+    if "ref_frame_index" in settings:
+        reference_frame = settings["ref_frame_index"]
+        if isinstance(reference_frame, bool) or not isinstance(reference_frame, int) \
+                or reference_frame < 0:
+            raise RuntimeError("Clip %r has invalid RefFrameIndex %r" %
+                               (raw_clip.get("name"), reference_frame))
+        result["refFrameIndex"] = reference_frame
+    raw_reference_type = settings.get("ref_pose_type", "")
+    reference_type = raw_reference_type.strip() if isinstance(raw_reference_type, str) else ""
+    if reference_type:
+        reference_type = reference_type[1:-1].rsplit(".", 1)[-1].split(":", 1)[0].strip() \
+            if reference_type.startswith("<") and reference_type.endswith(">") \
+            else reference_type
+        reference_type = {
+            "ABPT_RefPose": "RefPose",
+            "ABPT_LocalAnimFrame": "LocalAnimFrame",
+            "ABPT_AnimFrame": "AnimFrame",
+        }.get(reference_type, reference_type)
+        if reference_type not in ("RefPose", "LocalAnimFrame", "AnimFrame"):
+            raise RuntimeError("Clip %r has unknown RefPoseType %r" %
+                               (raw_clip.get("name"), reference_type))
+        result["refPoseType"] = reference_type
+    elif additive != "None" and "ref_frame_index" in settings:
+        raise RuntimeError("Clip %r additive reference has no RefPoseType" %
+                           raw_clip.get("name"))
+    return result
 
 
 def sequence_document(raw_clip, skeleton_blake3, joint_names, players):

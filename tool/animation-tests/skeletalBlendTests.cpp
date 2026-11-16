@@ -1,5 +1,6 @@
 #include "animation/skeletalPlayback.h"
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <ozz/animation/offline/animation_builder.h>
@@ -130,6 +131,102 @@ std::shared_ptr<SkeletalAsset> MakeBlendAsset()
     return asset;
 }
 
+std::shared_ptr<SkeletalAsset> MakeBlend2DAsset()
+{
+    auto asset = MakeAsset();
+    asset->clips.push_back(MakeClip("bs00", 0, 0, 1));
+    asset->clips.push_back(MakeClip("bs10", 40, 0, 1));
+    asset->clips.push_back(MakeClip("bs01", 80, 0, 1));
+    asset->clips.push_back(MakeClip("bs11", 120, 0, 1));
+    // 相位夹具：reference 4s，右上角 2s 且 rate=2；reference 到 1s 时
+    // 右上角应采样到本地 1s（40 cm），而不是单纯相位 0.5s（20 cm）。
+    asset->clips.push_back(MakeTravelClip("phase-ref", 4, 0, 40));
+    asset->clips.push_back(MakeTravelClip("phase-fast", 2, 0, 80));
+    asset->clips.push_back(MakeTravelClip("phase-y1", 4, 0, 40));
+    asset->clips.push_back(MakeTravelClip("phase-y1x1", 4, 0, 40));
+    return asset;
+}
+
+TEST(SkeletalBlendSpace2D, BilinearWeightsAtCornersAndCenter)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeBlend2DAsset();
+    SkeletalPlayback player(asset);
+    Node root; root.id = "root"; root.kind = Node::Kind::SequencePlayer; root.clip = "a";
+    Node space; space.id = "space"; space.kind = Node::Kind::BlendSpace2DPlayer;
+    space.loop = true;
+    space.samples = {
+        {"bs00", 0, 0, 0, 1, ""},
+        {"bs10", 0, 1, 0, 1, ""},
+        {"bs01", 0, 0, 1, 1, ""},
+        {"bs11", 0, 1, 1, 1, ""},
+    };
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"space"}; out.rootSource = "root";
+    player.SetPoseGraph({root, space, out});
+
+    player.SetPoseGraphValue("space", 0.0f, 0.0f);
+    player.Tick(1.0f / 60);
+    EXPECT_NEAR(player.Models()[1](0, 3), player.Models()[0](0, 3), 1e-3f);
+    player.SetPoseGraphValue("space", 1.0f, 0.0f);
+    player.Tick(1.0f / 60);
+    EXPECT_NEAR(player.Models()[1](0, 3), player.Models()[0](0, 3) + 40.0f, 1e-3f);
+    player.SetPoseGraphValue("space", 0.0f, 1.0f);
+    player.Tick(1.0f / 60);
+    EXPECT_NEAR(player.Models()[1](0, 3), player.Models()[0](0, 3) + 80.0f, 1e-3f);
+    // 中心四角平均：(0 + 40 + 80 + 120) / 4 = 60；模型 x 含 root 的 3 cm。
+    player.SetPoseGraphValue("space", 0.5f, 0.5f);
+    player.Tick(1.0f / 60);
+    EXPECT_NEAR(player.Models()[1](0, 3), player.Models()[0](0, 3) + 60.0f, 1e-3f);
+    // 单值兼容入口只改 X，保留已下发的 Y=0.5：左沿两角平均 (0+80)/2 = 40。
+    player.SetPoseGraphValue("space", 0.0f);
+    player.Tick(1.0f / 60);
+    EXPECT_NEAR(player.Models()[1](0, 3), player.Models()[0](0, 3) + 40.0f, 1e-3f);
+}
+
+TEST(SkeletalBlendSpace2D, PerSampleRateAlignsPhaseToReferenceClip)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeBlend2DAsset();
+    SkeletalPlayback player(asset);
+    Node root; root.id = "root"; root.kind = Node::Kind::SequencePlayer; root.clip = "a";
+    Node space; space.id = "space"; space.kind = Node::Kind::BlendSpace2DPlayer;
+    space.loop = true;
+    space.samples = {
+        {"phase-ref", 0, 0, 0, 1, ""},
+        {"phase-fast", 0, 1, 0, 2, ""},
+        {"phase-y1", 0, 0, 1, 1, ""},
+        {"phase-y1x1", 0, 1, 1, 1, ""},
+    };
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"space"}; out.rootSource = "root";
+    player.SetPoseGraph({root, space, out});
+    player.SetPoseGraphValue("space", 1.0f, 0.0f);
+    player.Tick(1.0f);
+    // reference 4s 片段走 1s = 10 cm；rate=2 的 2s 片段对齐到本地 1s = 40 cm。
+    EXPECT_NEAR(player.Models()[1](0, 3), player.Models()[0](0, 3) + 40.0f, 2e-2f);
+}
+
+TEST(SkeletalBlendSpace2D, RejectsNonRectangularGrid)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeBlend2DAsset();
+    SkeletalPlayback player(asset);
+    Node root; root.id = "root"; root.kind = Node::Kind::SequencePlayer; root.clip = "a";
+    Node space; space.id = "space"; space.kind = Node::Kind::BlendSpace2DPlayer;
+    space.samples = {
+        {"bs00", 0, 0, 0, 1, ""},
+        {"bs10", 0, 1, 0, 1, ""},
+        {"bs01", 0, 0, 1, 1, ""},
+    };
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"space"}; out.rootSource = "root";
+    EXPECT_ANY_THROW(player.SetPoseGraph({root, space, out}));
+
+    space.samples.push_back({"bs11", 0, 0, 1, 1, ""});
+    EXPECT_ANY_THROW(player.SetPoseGraph({root, space, out}));
+}
+
 TEST(SkeletalBlendSpace, SecondClipFollowsNormalizedPhaseAndWeight)
 {
     auto asset = MakeBlendAsset();
@@ -237,6 +334,29 @@ std::shared_ptr<SkeletalAsset> MakeAdditiveAsset()
     return asset;
 }
 
+std::shared_ptr<SkeletalAsset> MakeReferenceAdditiveAsset()
+{
+    auto asset = MakeAsset();
+    Clip clip = MakeClip("refadd", 0, 0, 1);
+    clip.raw.tracks[1].translations = {
+        {0, {0, 10, 0}}, {3.2f, {20, 10, 0}}, {4, {40, 10, 0}}};
+    clip.raw.tracks[1].rotations = {
+        {0, ozz::math::Quaternion::identity()},
+        {3.2f, ozz::math::Quaternion{0, 1, 0, 0}},
+        {4, ozz::math::Quaternion{0, 0, 0, 1}}};
+    ozz::animation::offline::AnimationBuilder builder;
+    clip.runtime = builder(clip.raw);
+    clip.sequence.additiveAnimType = "LocalSpaceBase";
+    clip.sequence.additiveReferencePoseType = "LocalAnimFrame";
+    clip.sequence.additiveReferenceFrame = 4;
+    clip.sequence.numFrames = 4;
+    clip.sequence.numKeys = 5;
+    clip.sequence.frameRateNumerator = 1;
+    clip.sequence.frameRateDenominator = 1;
+    asset->clips.push_back(std::move(clip));
+    return asset;
+}
+
 TEST(SkeletalAdditive, LocalSpaceDeltaComposesOntoBasePose)
 {
     auto asset = MakeAdditiveAsset();
@@ -279,6 +399,47 @@ TEST(SkeletalAdditive, LocalSpaceDeltaComposesOntoBasePose)
     half.Tick(1.0f / 60);
     EXPECT_NEAR(half.Models()[1](0, 3), 5.5f, 1e-3f);
     EXPECT_NEAR((half.Models()[1].block<3, 3>(0, 0).col(0).norm()), 1.5f, 1e-3f);
+}
+
+TEST(SkeletalAdditive, LocalSpaceTranslationUsesParentSpaceDifference)
+{
+    auto asset = MakeReferenceAdditiveAsset();
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.SetAdditive("refadd", 1, false);
+    player.Tick(1e-4f);
+    // FrameIndex=4 / NumberOfSampledKeys=5 => reference time=3.2s。
+    // additive frame 0 hip.x=0，reference hip.x=20；UE 的局部平移差是
+    // 0-20=-20，不能把 reference 平移先旋转后再做逆复合，也不能按 4/1fps
+    // 误取末帧的 hip.x=40。
+    EXPECT_NEAR(player.Models()[1](0, 3), 3.0f - 20.0f, 2e-2f);
+}
+
+TEST(SkeletalAdditive, ReferencePoseTypeSelectsBindPoseOrLocalFrame)
+{
+    auto asset = MakeReferenceAdditiveAsset();
+    asset->clips.back().sequence.additiveReferencePoseType = "RefPose";
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.SetAdditive("refadd", 1, false);
+    player.Tick(1e-4f);
+    // RefPose ignores refFrameIndex; hip local delta is zero against the bind pose.
+    EXPECT_NEAR(player.Models()[1](0, 3), 3.0f, 2e-2f);
+}
+
+TEST(SkeletalAdditive, PartialWeightUsesUeFastLerpRotation)
+{
+    auto asset = MakeAsset();
+    asset->clips.push_back(MakeAdditiveClip("yaw120", 0, 120, 1));
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.5f);
+    player.SetAdditive("yaw120", 0.25f, false);
+    player.Tick(1e-4f);
+    const Eigen::Matrix3f rotation = player.Models()[1].block<3, 3>(0, 0);
+    const Eigen::AngleAxisf angle(rotation);
+    // 120° delta at alpha=.25: UE FastLerp+normalize is ~27.8°, not slerp's 30°.
+    EXPECT_NEAR(angle.angle() * 180.0f / 3.14159265358979323846f, 27.8f, 0.15f);
 }
 
 TEST(SkeletalAdditive, RejectsNonLocalSpaceAndClearsWithPlay)
@@ -328,6 +489,35 @@ TEST(SkeletalAdditiveMeshSpace, RotatesInMeshSpaceAndIgnoresTranslationScale)
     const Eigen::Quaternionf expected(
         Eigen::AngleAxisf(3.14159265358979323846f, Eigen::Vector3f::UnitY()));
     EXPECT_LT(orientation.angularDistance(expected), 0.01f);
+}
+
+TEST(SkeletalAdditiveMeshSpace, PartialWeightUsesFastLerpNotSlerp)
+{
+    auto asset = MakeAsset();
+    Clip additive = MakeClip("meshHalf", 5, 180, 2);
+    additive.sequence.additiveAnimType = "RotationOffsetMeshSpace";
+    asset->clips.push_back(std::move(additive));
+
+    SkeletalPlayback player(asset);
+    player.Play("a", true, 1, true);
+    player.Tick(0.5f);
+    player.SetAdditive("meshHalf", 0.25f, false);
+    player.Tick(1.0f / 60);
+
+    Eigen::Quaternionf actual(player.Models()[1].block<3, 3>(0, 0));
+    actual.normalize();
+    // UE FastLerp: normalize((1-w)*identity + w*180deg)；w=.25 得约 36.87°，
+    // 而 slerp 会得到 45°。该差异足以验证两条路径没有混用。
+    const float expectedAngle = 2.0f * std::acos(
+        0.75f / std::sqrt(0.75f * 0.75f + 0.25f * 0.25f));
+    // 模型基会把轴符号翻成 -Y；比较绕 Y 轴的角度分量，仍能把
+    // 36.87° 的 nlerp 与 45° 的 slerp 区分开。
+    EXPECT_NEAR(std::abs(actual.y()), std::sin(expectedAngle * 0.5f), 1e-3f);
+    EXPECT_NEAR(std::abs(actual.w()), std::cos(expectedAngle * 0.5f), 1e-3f);
+    EXPECT_LT(std::abs(actual.x()), 1e-3f);
+    EXPECT_LT(std::abs(actual.z()), 1e-3f);
+    EXPECT_GT(actual.angularDistance(Eigen::Quaternionf(
+        Eigen::AngleAxisf(0.7853981633974483f, Eigen::Vector3f::UnitY()))), 0.05f);
 }
 
 TEST(SkeletalAdditiveCurves, AccumulatesBaseAndWeightedAdditiveCurves)
@@ -680,30 +870,326 @@ TEST(SkeletalLayered, BlendProfileWeightsAreWhitelisted)
     EXPECT_NEAR(scale, 1.5f, 1e-2f);
 }
 
-TEST(SkeletalSlotMontage, BlendProfileWeightsScaleListedAndDefaultUnlistedToOne)
+TEST(SkeletalSlotMontage, BlendProfileWeightsScaleListedAndDefaultUnlistedToZero)
 {
     auto asset = MakeAsset();
+    Clip overlayClip = MakeClip("slot-profile", 8, 90, 2);
+    overlayClip.raw.tracks[0].translations = {{0, {13, 2, 1}}};
+    overlayClip.raw.tracks[2].translations = {{0, {0, 0, 8}}};
+    ozz::animation::offline::AnimationBuilder overlayBuilder;
+    overlayClip.runtime = overlayBuilder(overlayClip.raw);
+    asset->clips.push_back(std::move(overlayClip));
+
     SkeletalPlayback base(asset);
     base.Play("a", true, 1, true);
     base.Tick(0.5f);
     base.Tick(1.0f / 60);
 
     SkeletalPlayback overlay(asset);
-    overlay.Play("b", true, 1, true);
+    overlay.Play("slot-profile", true, 1, true);
     overlay.Tick(0.5f);
     overlay.Tick(1.0f / 60);
 
     SkeletalPlayback player(asset);
     player.Play("a", true, 1, true);
     player.Tick(0.5f);
-    player.PlaySlotMontageWeights("b", 1.0f, true, 1.0f, {{"hip", 0.5f}});
+    player.PlaySlotMontageWeights("slot-profile", 1.0f, true, 1.0f, {{"hip", 0.5f}});
     player.Tick(1.0f / 60);
+    // 只列 hip：root 与 foot 未列出，必须保持 base，而不是按 UE 的 1.0 默认值覆盖。
+    EXPECT_TRUE(player.Models()[0].isApprox(base.Models()[0], 1e-4f));
     EXPECT_NEAR(player.Models()[1](0, 3),
         (base.Models()[1](0, 3) + overlay.Models()[1](0, 3)) * 0.5f, 1e-2f);
     const Eigen::Matrix4f playerFoot = player.Models()[1].inverse() * player.Models()[2];
-    const Eigen::Matrix4f overlayFoot = overlay.Models()[1].inverse() * overlay.Models()[2];
-    EXPECT_TRUE(playerFoot.isApprox(overlayFoot, 1e-4f));
+    const Eigen::Matrix4f baseFoot = base.Models()[1].inverse() * base.Models()[2];
+    EXPECT_TRUE(playerFoot.isApprox(baseFoot, 1e-4f));
     EXPECT_EQ(player.SlotMontageMaskCount(), 1u);
+}
+
+Montage MakeGraphMontage()
+{
+    Montage montage;
+    montage.id = "AM_Graph";
+    montage.derivedClipId = "montage";
+    montage.slot = "DefaultSlot";
+    montage.length = 1.0f;
+    montage.sections = {
+        {"A", 0.0f, 0.5f, "B", 0.5f, "Absolute"},
+        {"B", 0.5f, 1.0f, "", 0.0f, ""},
+    };
+    montage.notifies = {
+        {"notify", "Graph", "Low", 0.1f, 0.0f, std::nullopt},
+        {"notifyState", "Graph", "Window", 0.2f, 0.2f, std::nullopt},
+        {"notify", "Graph", "High", 0.75f, 0.0f, std::nullopt},
+    };
+    return montage;
+}
+
+std::shared_ptr<SkeletalAsset> MakeGraphMontageAsset()
+{
+    auto asset = MakeAsset();
+    asset->clips.push_back(MakeClip("montage", 80, 0, 1));
+    asset->clips.back().sequence.id = "montage";
+    asset->montages.push_back(MakeGraphMontage());
+    return asset;
+}
+
+TEST(SkeletalPoseGraph, MontageSlotAdvancesSectionsAndFiresNotifies)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeGraphMontageAsset();
+    SkeletalPlayback player(asset);
+    Node base; base.id = "base"; base.kind = Node::Kind::SequencePlayer; base.clip = "a";
+    Node montage; montage.id = "montage"; montage.kind = Node::Kind::MontagePlayer;
+    montage.montage = "AM_Graph"; montage.loop = false;
+    Node slot; slot.id = "slot"; slot.kind = Node::Kind::Slot;
+    slot.inputs = {"base", "montage"}; slot.slotName = "DefaultSlot";
+    slot.weights = {{"hip", 1.0f}};
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"slot"}; out.rootSource = "base";
+    player.SetPoseGraph({base, montage, slot, out});
+
+    player.Tick(1.0f / 60);
+    // Montage 只覆盖 hip；base 的 0 cm 被 montage 的 80 cm 替换。
+    EXPECT_NEAR(player.Models()[1](0, 3), player.Models()[0](0, 3) + 80.0f, 1e-2f);
+    player.Tick(0.2f);
+    EXPECT_TRUE(std::any_of(player.FiredNotifies().begin(), player.FiredNotifies().end(),
+        [](const FiredNotify& notify) { return notify.name == "Low"; }));
+    EXPECT_TRUE(std::any_of(player.ActiveNotifyStates().begin(),
+        player.ActiveNotifyStates().end(),
+        [](const ActiveNotifyState& notify) { return notify.name == "Window"; }));
+    player.Tick(0.6f);
+    // [0.216, 0.816) 跨过 B 段并触发 High；Window 的 end 也在此窗口内。
+    EXPECT_TRUE(std::any_of(player.FiredNotifies().begin(), player.FiredNotifies().end(),
+        [](const FiredNotify& notify) { return notify.name == "High"; }));
+    EXPECT_TRUE(std::none_of(player.ActiveNotifyStates().begin(),
+        player.ActiveNotifyStates().end(),
+        [](const ActiveNotifyState& notify) { return notify.name == "Window"; }));
+}
+
+TEST(SkeletalPoseGraph, EmptySlotWeightsCoverWholeBody)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeGraphMontageAsset();
+    SkeletalPlayback player(asset);
+    Node base; base.id = "base"; base.kind = Node::Kind::SequencePlayer; base.clip = "a";
+    Node montage; montage.id = "montage"; montage.kind = Node::Kind::MontagePlayer;
+    montage.montage = "AM_Graph"; montage.loop = false;
+    Node slot; slot.id = "slot"; slot.kind = Node::Kind::Slot;
+    slot.inputs = {"base", "montage"}; slot.slotName = "DefaultSlot";
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"slot"}; out.rootSource = "base";
+    player.SetPoseGraph({base, montage, slot, out});
+    player.Tick(1.0f / 60);
+    // 空 weights 是全身覆盖，不能退化成全零 pass-through。
+    EXPECT_NEAR(player.Models()[1](0, 3), player.Models()[0](0, 3) + 80.0f, 1e-2f);
+}
+
+TEST(SkeletalPoseGraph, NonRootMontageDoesNotResetBaseClock)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeGraphMontageAsset();
+    SkeletalPlayback player(asset);
+    Node base; base.id = "base"; base.kind = Node::Kind::SequencePlayer; base.clip = "a";
+    Node montage; montage.id = "montage"; montage.kind = Node::Kind::MontagePlayer;
+    montage.montage = "AM_Graph"; montage.loop = false;
+    Node slot; slot.id = "slot"; slot.kind = Node::Kind::Slot;
+    slot.inputs = {"base", "montage"}; slot.slotName = "DefaultSlot";
+    slot.weights = {{"hip", 1.0f}};
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"slot"}; out.rootSource = "base";
+    player.SetPoseGraph({base, montage, slot, out});
+
+    // 先关闭 overlay，让 base 时钟独立推进，再以启动上升沿打开 Montage。
+    player.SetPoseGraphValue("montage", 0.0f);
+    player.Tick(0.25f);
+    EXPECT_NEAR(player.Time(), 0.25f, 1e-3f);
+    player.SetPoseGraphValue("montage", 1.0f);
+    player.Tick(0.05f);
+    // Slot overlay 不能把父 SequencePlayer 的时钟重置到 Montage 入口。
+    EXPECT_NEAR(player.Time(), 0.30f, 1e-3f);
+    // Time() 会从 root state 重新写回；RootMotionDelta 才是旧实现重置
+    // time=0 后最直接的观测。正常 0.05 s 的根位移约 1.9 cm。
+    EXPECT_LT(player.RootMotionDelta().norm(), 3.0f);
+}
+
+TEST(SkeletalPoseGraph, InactiveMontageSlotPassesBaseThrough)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeGraphMontageAsset();
+    SkeletalPlayback player(asset);
+    Node base; base.id = "base"; base.kind = Node::Kind::SequencePlayer; base.clip = "a";
+    Node montage; montage.id = "montage"; montage.kind = Node::Kind::MontagePlayer;
+    montage.montage = "AM_Graph";
+    Node slot; slot.id = "slot"; slot.kind = Node::Kind::Slot;
+    slot.inputs = {"base", "montage"}; slot.slotName = "DefaultSlot";
+    slot.weights = {{"hip", 1.0f}};
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"slot"}; out.rootSource = "base";
+    player.SetPoseGraph({base, montage, slot, out});
+    player.SetPoseGraphValue("montage", 0.0f);
+    player.Tick(0.1f);
+    EXPECT_NEAR(player.Models()[1](0, 3), player.Models()[0](0, 3), 1e-3f);
+    EXPECT_TRUE(player.FiredNotifies().empty());
+}
+
+TEST(SkeletalPoseGraph, ReplacingGraphClearsStaleEntry)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeAsset();
+    SkeletalPlayback player(asset);
+    // node 0 是不可达的旧入口候选；Output 实际取 node 1。
+    Node unused; unused.id = "unused"; unused.kind = Node::Kind::SequencePlayer;
+    unused.clip = "b";
+    Node base; base.id = "base"; base.kind = Node::Kind::SequencePlayer; base.clip = "a";
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"base"}; out.rootSource = "base";
+    player.SetPoseGraph({unused, base, out});
+    player.SetPoseGraphEntry("unused");
+    player.Tick(1.0f / 60);
+    EXPECT_NEAR(player.Models()[1](0, 3) - player.Models()[0](0, 3), 8.0f, 2e-2f);
+
+    player.ClearPoseGraph();
+    player.SetPoseGraph({unused, base, out});
+    player.Tick(1.0f / 60);
+    // ClearPoseGraph 必须清掉旧入口；否则仍会求值 node 0 的 "b"。
+    EXPECT_NEAR(player.Models()[1](0, 3) - player.Models()[0](0, 3), 0.0f, 2e-2f);
+}
+
+TEST(SkeletalPoseGraph, MontageSlotRejectsUnknownAssetSectionAndNonMontageInput)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeGraphMontageAsset();
+    SkeletalPlayback player(asset);
+    Node base; base.id = "base"; base.kind = Node::Kind::SequencePlayer; base.clip = "a";
+    Node montage; montage.id = "montage"; montage.kind = Node::Kind::MontagePlayer;
+    Node slot; slot.id = "slot"; slot.kind = Node::Kind::Slot;
+    slot.inputs = {"base", "montage"}; slot.slotName = "DefaultSlot";
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"slot"}; out.rootSource = "base";
+
+    montage.montage = "AM_Missing";
+    EXPECT_ANY_THROW(player.SetPoseGraph({base, montage, slot, out}));
+    montage.montage = "AM_Graph";
+    Node badSlot = slot;
+    badSlot.inputs = {"base", "base"};
+    EXPECT_ANY_THROW(player.SetPoseGraph({base, montage, badSlot, out}));
+
+    asset->montages[0].sections[0].nextSection = "Missing";
+    EXPECT_ANY_THROW(player.SetPoseGraph({base, montage, slot, out}));
+}
+
+TEST(SkeletalPoseGraph, MontageRootOwnsTimelineAndNotifies)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeGraphMontageAsset();
+    SkeletalPlayback player(asset);
+    Node montage; montage.id = "montage"; montage.kind = Node::Kind::MontagePlayer;
+    montage.montage = "AM_Graph"; montage.loop = false;
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"montage"}; out.rootSource = "montage";
+    player.SetPoseGraph({montage, out});
+    player.Tick(0.6f);
+    EXPECT_EQ(player.SelectedClipId(), "montage");
+    EXPECT_NEAR(player.Time(), 0.6f, 1e-3f);
+    EXPECT_TRUE(std::any_of(player.FiredNotifies().begin(), player.FiredNotifies().end(),
+        [](const FiredNotify& notify) { return notify.name == "Low"; }));
+    player.Tick(0.2f);
+    EXPECT_TRUE(std::any_of(player.FiredNotifies().begin(), player.FiredNotifies().end(),
+        [](const FiredNotify& notify) { return notify.name == "High"; }));
+}
+
+TEST(SkeletalPoseGraph, MontageEntryAndPositiveRetriggerUseStartPosition)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeGraphMontageAsset();
+    SkeletalPlayback player(asset);
+    Node montage; montage.id = "montage"; montage.kind = Node::Kind::MontagePlayer;
+    montage.montage = "AM_Graph"; montage.loop = false;
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"montage"}; out.rootSource = "montage";
+    player.SetPoseGraph({montage, out});
+    player.SetPoseGraphEntry("montage", 0.4f, 0.0f);
+    player.Tick(0.1f);
+    EXPECT_NEAR(player.Time(), 0.5f, 1e-3f);
+
+    player.Tick(0.7f);
+    EXPECT_TRUE(player.Completed());
+    player.SetPoseGraphValue("montage", 1.0f);
+    EXPECT_TRUE(player.IsPlaying());
+    EXPECT_EQ(player.SelectedClipId(), "montage");
+    EXPECT_GT(player.Duration(), 0.0f);
+    player.Tick(0.05f);
+    EXPECT_NEAR(player.Time(), 0.05f, 1e-3f);
+
+    // 持续正值不是持续播放请求：完成后不能自动重播。
+    player.Tick(1.0f);
+    EXPECT_TRUE(player.Completed());
+    const float completedTime = player.Time();
+    player.SetPoseGraphValue("montage", 1.0f);
+    player.Tick(0.05f);
+    EXPECT_FALSE(player.IsPlaying());
+    EXPECT_NEAR(player.Time(), completedTime, 1e-3f);
+
+    // 显式 0 → 正值才是新的启动边沿。
+    player.SetPoseGraphValue("montage", 0.0f);
+    player.SetPoseGraphValue("montage", 1.0f);
+    player.Tick(0.05f);
+    EXPECT_TRUE(player.IsPlaying());
+    EXPECT_NEAR(player.Time(), 0.05f, 1e-3f);
+}
+
+TEST(SkeletalPoseGraph, MontageRootRequiresAndAcceptsWarpTargets)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto withWarp = [&]
+    {
+        auto asset = MakeGraphMontageAsset();
+        MontageWarp warp;
+        warp.target = "WarpA";
+        warp.provider = "None";
+        asset->montages[0].notifies.push_back(
+            {"notifyState", "Warp", "WarpWindow", 0.2f, 0.2f, warp});
+        return asset;
+    };
+    Node montage; montage.id = "montage"; montage.kind = Node::Kind::MontagePlayer;
+    montage.montage = "AM_Graph"; montage.loop = false;
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"montage"}; out.rootSource = "montage";
+
+    auto missing = withWarp();
+    SkeletalPlayback missingPlayer(missing);
+    missingPlayer.SetPoseGraph({montage, out});
+    EXPECT_ANY_THROW(missingPlayer.Tick(0.25f));
+
+    auto submitted = withWarp();
+    SkeletalPlayback player(submitted);
+    player.SetPoseGraph({montage, out});
+    MotionWarpTarget target;
+    target.location = Eigen::Vector3f(-300, 90, 0);
+    player.SetPoseGraphMontageTargets("montage", {{"WarpA", target}});
+    EXPECT_NO_THROW(player.Tick(0.25f));
+
+    target.location = Eigen::Vector3f(240, 90, 0);
+    EXPECT_NO_THROW(player.SetPoseGraphMontageTargets("montage", {{"WarpA", target}}));
+    EXPECT_NO_THROW(player.Tick(0.1f));
+}
+
+TEST(SkeletalPoseGraph, InPlaceSwitchUpdatesActiveMontage)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeGraphMontageAsset();
+    SkeletalPlayback player(asset);
+    Node montage; montage.id = "montage"; montage.kind = Node::Kind::MontagePlayer;
+    montage.montage = "AM_Graph"; montage.loop = false;
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"montage"}; out.rootSource = "montage";
+    player.SetPoseGraph({montage, out});
+    player.SetPoseGraphInPlace(false);
+    player.Tick(0.2f);
+    EXPECT_GT(player.Models()[0](0, 3), 3.5f);
+    player.SetPoseGraphInPlace(true);
+    player.Tick(0.01f);
+    EXPECT_NEAR(player.Models()[0](0, 3), 3.0f, 1e-3f);
 }
 
 TEST(SkeletalPoseGraph, TwoPlayersBlendAndRootSource)
@@ -722,6 +1208,174 @@ TEST(SkeletalPoseGraph, TwoPlayersBlendAndRootSource)
     // root 在 0..4s 从 3 线性到 83（t=0.5 → 13）；hip a=0、b=8，50% 混合 → 17。
     EXPECT_NEAR(player.Models()[1](0, 3), 17.0f, 1e-2f);
     EXPECT_TRUE(player.PoseGraphActive());
+}
+
+TEST(SkeletalPoseGraph, InPlaceStripsSequenceRootMotion)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeAsset();
+    SkeletalPlayback player(asset);
+    Node root; root.id = "root"; root.kind = Node::Kind::SequencePlayer; root.clip = "a";
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"root"}; out.rootSource = "root";
+    player.SetPoseGraph({root, out});
+    player.SetPoseGraphInPlace(true);
+    player.Tick(1.0f);
+    // clip a 的根从 x=3 走到 x=23；in-place 必须恢复绑定根 (3,2,1)。
+    EXPECT_NEAR(player.Models()[0](0, 3), 3.0f, 1e-3f);
+    EXPECT_NEAR(player.Models()[0](1, 3), 2.0f, 1e-3f);
+    EXPECT_NEAR(player.Models()[0](2, 3), 1.0f, 1e-3f);
+}
+
+TEST(SkeletalPoseGraph, EntrySwitchMovesRootClockAndCrossfades)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeAsset();
+    SkeletalPlayback player(asset);
+    Node idle; idle.id = "idle"; idle.kind = Node::Kind::SequencePlayer;
+    idle.clip = "a"; idle.loop = true;
+    Node jump; jump.id = "jump"; jump.kind = Node::Kind::SequencePlayer;
+    jump.clip = "b"; jump.loop = true;
+    Node out; out.id = "out"; out.kind = Node::Kind::Output; out.inputs = {"idle"};
+    player.SetPoseGraph({idle, jump, out});
+    player.SetPoseGraphInPlace(true);
+    player.SetPoseGraphEntry("idle");
+    player.Tick(0.1f);
+    ASSERT_EQ(player.SelectedClipId(), "a");
+
+    player.SetPoseGraphEntry("jump", 0.0f, 0.5f);
+    player.Tick(0.25f);
+    // 入口切换必须同时切换根源时钟，并从入口时间 0 开始推进。
+    EXPECT_EQ(player.SelectedClipId(), "b");
+    EXPECT_NEAR(player.Time(), 0.25f, 1e-3f);
+    EXPECT_FLOAT_EQ(player.BlendAlpha(), 0.5f);
+    // idle hip.x=0 -> jump hip.x=8；root rest x=3，50% 处模型 x=7。
+    EXPECT_NEAR(player.Models()[1](0, 3), 7.0f, 2e-3f);
+
+    const float before = player.Time();
+    player.SetPoseGraphEntry("jump", 2.0f, 0.5f);
+    player.Tick(0.1f);
+    EXPECT_NEAR(player.Time(), before + 0.1f, 1e-3f);
+}
+
+TEST(SkeletalPoseGraph, BlendSpaceEntryProvidesRootClockAndClip)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeBlendAsset();
+    SkeletalPlayback player(asset);
+    Node idle; idle.id = "idle"; idle.kind = Node::Kind::SequencePlayer;
+    idle.clip = "a"; idle.loop = true;
+    Node space; space.id = "space"; space.kind = Node::Kind::BlendSpacePlayer;
+    space.loop = true;
+    space.samples = {
+        {"travel-slow", 0, 0, 0, 1, ""},
+        {"travel-fast", 1, 0, 0, 1, ""},
+    };
+    Node out; out.id = "out"; out.kind = Node::Kind::Output; out.inputs = {"idle"};
+    player.SetPoseGraph({idle, space, out});
+    player.SetPoseGraphEntry("space");
+    player.SetPoseGraphValue("space", 0.0f);
+    player.Tick(0.25f);
+    // 1D BlendSpace 的根源反馈必须指向基准 sample，而不是保持 idle 的时钟。
+    EXPECT_EQ(player.SelectedClipId(), "travel-slow");
+    EXPECT_NEAR(player.Time(), 0.25f, 1e-3f);
+    EXPECT_TRUE(player.IsLooping());
+}
+
+TEST(SkeletalPoseGraph, TwoDimensionalReferenceUsesDeclarationOrder)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeBlend2DAsset();
+    SkeletalPlayback player(asset);
+    Node space; space.id = "space"; space.kind = Node::Kind::BlendSpace2DPlayer;
+    space.loop = true;
+    space.samples = {
+        {"bs11", 0, 1, 1, 1, ""},
+        {"bs00", 0, 0, 0, 1, ""},
+        {"bs10", 0, 1, 0, 1, ""},
+        {"bs01", 0, 0, 1, 1, ""},
+    };
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"space"};
+    player.SetPoseGraph({space, out});
+    player.SetPoseGraphEntry("space");
+    player.SetPoseGraphValue("space", 0.0f, 0.0f);
+    player.Tick(0.1f);
+    // 轴为最小角时仍以声明顺序第一个 sample 作为根源/完成参考。
+    EXPECT_EQ(player.SelectedClipId(), "bs11");
+}
+
+TEST(SkeletalPoseGraph, BlendWeightSpeedComesFromAsset)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeBlend2DAsset();
+    SkeletalPlayback player(asset);
+    Node space; space.id = "space"; space.kind = Node::Kind::BlendSpacePlayer;
+    space.loop = true;
+    space.weightSpeedPerSec = 1.0f;
+    space.samples = {
+        {"bs00", 0, 0, 0, 1, ""},
+        {"bs10", 1, 0, 0, 1, ""},
+    };
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"space"};
+    player.SetPoseGraph({space, out});
+    player.SetPoseGraphEntry("space");
+    player.SetPoseGraphValue("space", 0.0f);
+    player.Tick(1.0f / 60);
+    player.SetPoseGraphValue("space", 1.0f);
+    player.Tick(0.1f);
+    const float hipLocal = player.Models()[1](0, 3) - player.Models()[0](0, 3);
+    EXPECT_NEAR(hipLocal, 4.0f, 0.2f);
+}
+
+TEST(SkeletalPoseGraph, OneShotSequenceRootReportsCompletionAtClipEnd)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeAsset();
+    SkeletalPlayback player(asset);
+    Node idle; idle.id = "idle"; idle.kind = Node::Kind::SequencePlayer;
+    idle.clip = "a"; idle.loop = true;
+    Node shot; shot.id = "shot"; shot.kind = Node::Kind::SequencePlayer;
+    shot.clip = "b"; shot.loop = false;
+    Node out; out.id = "out"; out.kind = Node::Kind::Output; out.inputs = {"idle"};
+    out.rootSource = "shot";
+    player.SetPoseGraph({idle, shot, out});
+    player.SetPoseGraphEntry("shot");
+    player.Tick(5.0f);
+    // 非循环根源停在 clip duration，而不是 duration-1e-4；否则图状态机
+    // 的 StateCompleted 永远不会触发 Jump→Fall。
+    EXPECT_NEAR(player.Time(), 4.0f, 1e-4f);
+    EXPECT_TRUE(player.Completed());
+    // 一次性状态完成后 playing=false；下一入口必须重新启动目标播放器。
+    player.SetPoseGraphEntry("idle");
+    player.Tick(0.25f);
+    EXPECT_EQ(player.SelectedClipId(), "a");
+    EXPECT_NEAR(player.Time(), 0.25f, 1e-3f);
+}
+
+TEST(SkeletalPoseGraph, AdditiveEntryResolvesAdditiveRootClock)
+{
+    using Node = SkeletalPlayback::PoseGraphNode;
+    auto asset = MakeAdditiveAsset();
+    SkeletalPlayback player(asset);
+    Node base; base.id = "base"; base.kind = Node::Kind::SequencePlayer;
+    base.clip = "a"; base.loop = true;
+    Node save; save.id = "save"; save.kind = Node::Kind::SaveCachedPose;
+    save.inputs = {"base"}; save.cacheName = "Base";
+    Node use; use.id = "use"; use.kind = Node::Kind::UseCachedPose;
+    use.cacheName = "Base";
+    Node add; add.id = "add"; add.kind = Node::Kind::SequencePlayer;
+    add.clip = "add"; add.loop = true;
+    Node apply; apply.id = "apply"; apply.kind = Node::Kind::ApplyAdditive;
+    apply.inputs = {"use", "add"}; apply.alpha = 1;
+    Node out; out.id = "out"; out.kind = Node::Kind::Output;
+    out.inputs = {"apply"};
+    player.SetPoseGraph({base, save, use, add, apply, out});
+    player.SetPoseGraphEntry("apply");
+    player.Tick(0.25f);
+    EXPECT_EQ(player.SelectedClipId(), "add");
+    EXPECT_NEAR(player.Time(), 0.25f, 1e-3f);
 }
 
 TEST(SkeletalPoseGraph, SaveUseSameFrameAndAdditive)
@@ -743,6 +1397,28 @@ TEST(SkeletalPoseGraph, SaveUseSameFrameAndAdditive)
     player.Tick(0.5f);
     player.Tick(1.0f / 60);
     // t = 0.5 + 1/60 → root x ≈ 13.333；hip a=0 + additive 5 → 18.333。
+    EXPECT_NEAR(player.Models()[1](0, 3), 18.333f, 2e-2f);
+}
+
+TEST(SkeletalPoseGraph, SaveCachedPoseOrdersBeforeUseWhenDeclaredLater)
+{
+    auto asset = MakeAdditiveAsset();
+    SkeletalPlayback player(asset);
+    using Node = SkeletalPlayback::PoseGraphNode;
+    Node use; use.id = "use"; use.kind = Node::Kind::UseCachedPose; use.cacheName = "L";
+    Node base; base.id = "base"; base.kind = Node::Kind::SequencePlayer; base.clip = "a";
+    Node save; save.id = "save"; save.kind = Node::Kind::SaveCachedPose;
+    save.inputs = {"base"}; save.cacheName = "L";
+    Node additive; additive.id = "add"; additive.kind = Node::Kind::SequencePlayer;
+    additive.clip = "add";
+    Node apply; apply.id = "apply"; apply.kind = Node::Kind::ApplyAdditive;
+    apply.inputs = {"use", "add"}; apply.alpha = 1.0f;
+    Node out; out.id = "out"; out.kind = Node::Kind::Output; out.inputs = {"apply"};
+    out.rootSource = "base";
+    // Use 在 Save 之前声明；原生图必须补隐式依赖并同帧连接。
+    player.SetPoseGraph({use, save, base, additive, apply, out});
+    player.Tick(0.5f);
+    player.Tick(1.0f / 60);
     EXPECT_NEAR(player.Models()[1](0, 3), 18.333f, 2e-2f);
 }
 

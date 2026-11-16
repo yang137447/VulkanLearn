@@ -1121,6 +1121,65 @@ TEST(AnimationScriptData, BlendSpaceClipsAndCatalogPublishing)
     EXPECT_EQ(catalog["blendSpaces"]["BS_Test"]["samples"].size(), 2u);
 }
 
+json BlendSpace2DJson()
+{
+    return json::parse(R"({
+      "name": "BS_Test2D",
+      "type": "blendSpace2D",
+      "description": "unit test 2D blend space",
+      "axisX": { "name": "Speed", "min": 0, "max": 500 },
+      "axisY": { "name": "Direction", "min": -90, "max": 90 },
+      "interpolation": "EaseInOut",
+      "weightSpeedPerSec": 5,
+      "samples": [
+        { "clip": "WalkFwd",  "x": 0,   "y": -90, "rate": 1, "syncGroup": "Foot" },
+        { "clip": "WalkLeft", "x": 500, "y": -90, "rate": 1, "syncGroup": "Foot" },
+        { "clip": "RunFwd",   "x": 0,   "y": 90,  "rate": 2, "syncGroup": "Foot" },
+        { "clip": "RunLeft",  "x": 500, "y": 90,  "rate": 2, "syncGroup": "Foot" }
+      ]
+    })");
+}
+
+TEST(AnimationScriptData, ParsesBlendSpace2DRectangularGridAndPublishesAxes)
+{
+    const BlendSpaceAsset space = ParseBlendSpace(BlendSpace2DJson(), "BS_Test2D.json");
+    EXPECT_EQ(space.type, BlendSpaceType::TwoD);
+    EXPECT_EQ(space.axisXName, "Speed");
+    EXPECT_EQ(space.axisYName, "Direction");
+    ASSERT_EQ(space.samples.size(), 4u);
+    EXPECT_FLOAT_EQ(space.samples[1].x, 500.0f);
+    EXPECT_FLOAT_EQ(space.samples[2].y, 90.0f);
+    EXPECT_FLOAT_EQ(space.samples[3].rate, 2.0f);
+
+    SkeletalAsset asset;
+    for (const char* clip : {"WalkFwd", "WalkLeft", "RunFwd", "RunLeft"})
+    {
+        asset.clips.push_back(Clip{});
+        asset.clips.back().id = clip;
+    }
+    asset.blendSpaces.push_back(space);
+    const json catalog = BuildAnimationScriptAssets(asset);
+    const json& published = catalog["blendSpaces"]["BS_Test2D"];
+    EXPECT_EQ(published["type"], "blendSpace2D");
+    EXPECT_EQ(published["axisX"], "Speed");
+    EXPECT_EQ(published["axisY"], "Direction");
+    EXPECT_FLOAT_EQ(published["samples"][0]["x"].get<float>(), 0.0f);
+
+    auto missingCorner = BlendSpace2DJson();
+    missingCorner["samples"].erase(3);
+    EXPECT_NE(ErrorOf([&] { ParseBlendSpace(missingCorner, "x"); }).find("exactly 4"),
+        std::string::npos);
+
+    auto duplicateCell = BlendSpace2DJson();
+    duplicateCell["samples"][1]["x"] = 0;
+    EXPECT_NE(ErrorOf([&] { ParseBlendSpace(duplicateCell, "x"); }).find("grid coordinate"),
+        std::string::npos);
+
+    auto missingAxis = BlendSpace2DJson();
+    missingAxis.erase("axisY");
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendSpace(missingAxis, "x"); }).empty());
+}
+
 json BlendProfileJson()
 {
     return json::parse(R"({

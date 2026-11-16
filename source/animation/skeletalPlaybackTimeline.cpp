@@ -717,6 +717,29 @@ LocalPose SkeletalPlayback::Sample(size_t clipIndex, float sampleTime) const
     return locals;
 }
 
+LocalPose SkeletalPlayback::AdditiveReferencePose(size_t clipIndex) const
+{
+    const auto& animation = asset->AnimationAsset();
+    const auto rest = asset->mesh.runtime->joint_rest_poses();
+    LocalPose fallback(rest.begin(), rest.end());
+    if (clipIndex >= animation.clips.size()) return fallback;
+    const SequenceData& sequence = animation.clips.at(clipIndex).sequence;
+    if (sequence.additiveReferencePoseType != "LocalAnimFrame") return fallback;
+    if (sequence.additiveReferenceFrame < 0) return fallback;
+    const float duration = animation.clips.at(clipIndex).runtime
+        ? animation.clips.at(clipIndex).runtime->duration() : 0.0f;
+    if (duration <= 0) return fallback;
+    // UE UAnimSequence::GetSequencePose 用
+    // FrameIndex / GetNumberOfSampledKeys() * PlayLength() 取参考帧，而不是
+    // FrameIndex / frameRate。两者在末尾参考帧上会相差一整个采样区间。
+    const int sampledKeys = sequence.numKeys > 0
+        ? sequence.numKeys : std::max(1, sequence.numFrames + 1);
+    const float fraction = std::clamp(
+        float(sequence.additiveReferenceFrame) / float(sampledKeys), 0.0f, 1.0f);
+    const float referenceTime = duration * fraction;
+    return Sample(clipIndex, referenceTime);
+}
+
 LocalPose SkeletalPlayback::PreviewPose(float aheadSeconds) const
 {
     // 缓存姿态没有自己的片段时钟：离开 Land 时若仍按旧片段采样，会把“缓存姿态 vs

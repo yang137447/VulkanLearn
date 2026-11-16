@@ -410,8 +410,9 @@ State 的片段、时间、时长、完成及播放标记来自原生反馈，�
 C# `CurveValue` 保持键间线性、区间外 clamp 与单键常量的同一语义；`CurveNames` 对
 已知但无曲线的片段返回空列表，未知片段仍报错；缺失曲线诊断列出可用曲线名，不把缺失
 当成 0。`CurveSnapshot(names)` 只采样调用方显式列出的 1..64 个名字，并拒绝重复名。
-曲线消费边界仍是只读采样：`ModifyCurve`、additive 曲线、曲线驱动 IK、
-AimOffset 与面部 RigLogic 执行均未实现。`FootPlacement` 是独立后处理，
+曲线消费边界仍是只读采样：`ModifyCurve`、曲线驱动 IK、AimOffset 与面部
+RigLogic 执行均未实现；additive 片段曲线按 alpha 累加并随 feedback 发布。
+`FootPlacement` 是独立后处理，
 不读取这些 Float 曲线。Echo 的 `Echo_SlopeWarping_CtrlRig` 已由原生
 `SlopeWarpingSolver` 承接，但当前启用/权重来自 C# `SetSlopeWarping`，不读取
 T3D 里的 `DisableIK` 曲线。
@@ -646,7 +647,8 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   交叉淡入；内层迁移只在没有外层迁移时接管 blend。
 - `AnimationGraphInput` 的输入包括接地/坐下、世界方向、速度、MaxSpeed、输入幅度、
   当前 clip/time/duration/completed/playing、syncPhase/marker、曲线表与 clip
-  StartPosition 表。宿主每帧构造一次，不把图求值写回 World/GPU。
+  StartPosition 表，以及图内 2D BlendSpace 的 `PoseGraphAxisY`。宿主每帧构造一次，
+  不把图求值写回 World/GPU。
 - `LocomotionAnimationBlueprint` 是图宿主：保留原有 `[Expose]` 参数与
   `SetLocomotionInput`，内部用 `AnimationGraphRuntime` 求值，再通过
   `PlayClip`/`PlayTransition` 提交。`AnimationGraphRuntime` 的 `SyncPhaseFromSource`
@@ -670,7 +672,7 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 
 - 求值：输出 `(Clip = 基准 sample, BlendClip = 相邻 sample)`——两个 sample 时基准是
   首 sample，三个 sample 时基准是中间 sample；目标权重按 `smoothstep` 成形，并受
-  `5/s` 的权重变化上限约束；进入状态首帧
+  资产 `weightSpeedPerSec` 的权重变化上限约束；进入状态首帧
   直接取目标值。低于首 sample 或高于末 sample 时仍保留相邻片段对（权重 0/1），
   避免 A 片段在端点换片而重启时钟。
 - 基准 sample：两个 sample 时 A 固定为首 sample；三个 sample 时 A 固定为中间
@@ -690,13 +692,36 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   用 `Crossfade` 混合；权重 0/1 直接取 A/B 采样结果，不经过 ozz 归一化。相位基准
   是 A 的播放范围，而不是所有 sample 时长的加权值；当前资源满足 A 时长恒定。
 - 限制：根位移、根 yaw、notify、Montage 与 SyncGroup 仍只属于 A；B 不产生事件或
-  根轨迹。`Play`/`TransitionTo`/`Select`/`Seek`/`Stop` 会清除混合源。暂不支持
-  BlendSpace2D、每 sample 播放速率、per-sample 同步组或 UE 的 marker sync
-  （当前只有归一化相位同步）。1D 轴最多 3 个 sample：原生是“基准 sample +
-  一个邻居”的成对混合，不是 N 路加权采样。
+  根轨迹。`Play`/`TransitionTo`/`Select`/`Seek`/`Stop` 会清除混合源。1D 轴最多
+  3 个 sample：原生是“基准 sample + 一个邻居”的成对混合，不是 N 路加权采样。
+  2D 轴使用独立的四角网格节点，见下节。
 - 原生批量命令：`animationCommands` 的 `blendSpace` 候选必须跟随同一组件本批次的
   `play`/`transitionTo`（或单独更新权重），字段为 `enabled`/`clipA`/`clipB`/`weight`；
   原生反馈在 `blendSpace = { active, clip, weight }` 中发布。
+
+### BlendSpace2D
+
+- 资产：`BS_*.json` 的 `type: "blendSpace2D"` 使用 `axisX {name,min?,max?}`、
+  `axisY {name,min?,max?}` 与恰好 4 个
+  `samples[] {clip, x, y, rate?, syncGroup?}`。四点的 `x` 必须只有两个不同值、
+  `y` 必须只有两个不同值，且覆盖全部四个交叉坐标；重复坐标、缺角、非 2×2
+  矩形、未知 clip 或非法 rate/syncGroup 在导入期拒绝。`axisX.name` 与
+  `axisY.name` 必须非空且不同；声明 min/max 时要求 `max > min`，角点必须落在
+  范围内。
+- 原生图节点 `BlendSpace2DPlayer`：四角按轴值做双线性权重，X/Y 各自夹紧到两个
+  角点坐标之间。`SetPoseGraphValue(id, x, y)` 一次写双轴，
+  `SetPoseGraphAxisValue(id, "X"|"Y", value)` 只写单轴；旧的
+  `SetPoseGraphValue(id, value)` 作为 X 轴兼容入口，Y 默认为 0。C# 前端
+  `AnimationGraphInput.PoseGraphAxisY` 与原生 `poseGraphValue` 使用同一双轴值，
+  `AnimationGraphRuntime` 的 Clip/完成反馈也与原生一样取声明顺序第一个 sample。
+- 相位：声明顺序的第一个 sample 是参考片段，节点时钟按参考片段时长推进；
+  其余三个角点按
+  `phase * ownDuration * (ownRate / referenceRate)` 对齐，声明了同名
+  `syncGroup` 时改用参考片段与目标片段的 marker 区间映射。loop 时各角点在
+  自身时长内回绕，非 loop 时 clamp 到末帧前。
+- 求值先按 X 混合下沿/上沿两对片段，再按 Y 混合；权重 0/1 的端点直接取单角
+  采样，不经过 ozz 归一化。该节点的根位移/notify 归属仍由
+  `Output.rootSource` 选择，2D 节点本身不产生根通道。
 
 ### Conduit
 
@@ -732,42 +757,93 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
 ### Pose-node graph（前端模型，纯代码）
 
 - `AnimationPoseGraph` 是 C# 纯代码节点图：节点 + 输入引用，支持
-  `SequencePlayer`、`BlendSpacePlayer`、`Blend`、`ApplyAdditive`、
-  `LayeredBoneBlend`、`SaveCachedPose`、`UseCachedPose`、`Slot`、`Output`；
-  没有可视化编辑器。
+  `SequencePlayer`、`BlendSpacePlayer`、`BlendSpace2DPlayer`、`MontagePlayer`、
+  `Blend`、`Select`、`ApplyAdditive`、`LayeredBoneBlend`、`SaveCachedPose`、
+  `UseCachedPose`、`Slot`、`Output`；没有可视化编辑器。
 - 校验：节点 id 唯一、单一 `Output`、无环、输入数量正确、所有节点从 Output
   可达、缓存名唯一；`UseCachedPose` 必须引用图内的 `SaveCachedPose`。
+  2D 节点必须四角成矩形；Montage 节点必须声明 `MontageId`；双输入 Slot 的
+  第二输入必须是 MontagePlayer。
 - 求值：拓扑序记忆化求值，`Save/Use` 按名字同帧连接；结果扁平化为
-  `AnimationPoseResult`，字段对应现有原生决策子集。
+  `AnimationPoseResult`，字段对应现有原生决策子集。2D 结果额外保留
+  `BlendSpaceSamples` 与四个精确的 `BlendSpaceWeights`；Montage 结果保留
+  `MontageId`，实际姿态由原生 MontagePlayer 子播放器求值。
 - 扁平化限制：`Blend` 只支持两个单片段 player；每条链最多一个 additive、
-  一个 layered、一个 slot；`BlendSpacePlayer` 只能作基底；尚未接入状态机或
-  原生多播放器，`ThirdPersonLocomotionGraph` 仍走现有路径。
+  一个 layered、一个 slot；`BlendSpacePlayer`/`BlendSpace2DPlayer` 只能作基底。
+  MontagePlayer、2D 节点与双输入 Slot 需要原生 Pose Graph；C# 只输出定义与
+  诊断，不近似成 1D 或单片段。
 
 ### Pose Graph：Cached Pose / Additive / Slot
 
 #### 原生 Pose Graph（阶段 B1）
 
 - 原生 `SkeletalPlayback` 新增 `SetPoseGraph(nodes)` / `ClearPoseGraph()` /
-  `SetPoseGraphValue(id, value)`。节点类型：`SequencePlayer`、`BlendSpacePlayer`、
-  `Blend`、`ApplyAdditive`、`LayeredBoneBlend`、`SaveCachedPose`、`UseCachedPose`、
-  `Slot`、`Output`。
-- 每个 Player 节点拥有独立时钟（clip 或 2..3 sample blend space、rate、loop、
-  start position）；`SetPoseGraphValue` 下发 BlendSpace 轴与 Blend/Additive/Layer 的
-  alpha。
-- 求值：`SetPoseGraph` 校验 DAG（单 Output、无环、输入存在）并建立拓扑序；每 Tick
-  依次推进 Player、求值节点，`SaveCachedPose` 写入帧内命名槽、`UseCachedPose`
-  同帧读取；`Output` 的姿态直接成为状态输出，替换旧的单片段采样。
-- 根位移/notify：`Output.rootSource` 必须是 `SequencePlayer`（默认第一个）；
-  只有它贡献根位移、根 yaw 与 notify，其余 Player 不产生这些通道。
+  `SetPoseGraphValue(id, value)` / `SetPoseGraphValue(id, x, y)` /
+  `SetPoseGraphAxisValue(id, axis, value)` / `SetPoseGraphInPlace(bool)` /
+  `SetPoseGraphEntry(id, startPosition, blendSeconds)`。节点类型：
+  `SequencePlayer`、
+  `BlendSpacePlayer`、`BlendSpace2DPlayer`、`MontagePlayer`、`Blend`、`Select`、
+  `ApplyAdditive`、`LayeredBoneBlend`、`SaveCachedPose`、`UseCachedPose`、`Slot`、
+  `Output`。
+- 每个 Player 节点拥有独立时钟（clip、1D blend space、四角 2D blend space 或
+  Montage 子播放器；均含 rate/loop/start position）。`SetPoseGraphValue` 下发
+  BlendSpace 轴与 Blend/Additive/Layer alpha；双轴 2D 值不会退化成一个轴。
+  C# 的 `StartPosition < 0` 是“由片段/资产决定”的哨兵，`ToDefinition()` 在提交
+  原生图前规范化为 0，避免把 C# 默认值 `-1` 当成非法原生时间。
+- 原生图不经过 `Play()`，因此 C# 图的 `InPlace` 必须通过
+  `SetPoseGraphInPlace`（wire `poseGraphInPlace`）显式同步；`AnimationGraphBlueprint`
+  在注册图和 `InPlace` 变化时提交。`true` 时 `Sample` 恢复根绑定 TRS，防止
+  角色在胶囊内继续播放源根位移而出现滑步/速度翻倍；该开关不重置图节点时钟。
+- 求值：`SetPoseGraph` 校验 DAG（单 Output、无环、输入存在）并建立拓扑序；
+  `UseCachedPose` 按 cacheName 把对应 `SaveCachedPose` 作为隐式依赖，反向声明顺序
+  也会在同一帧先 Save 后 Use。每 Tick 清空帧内缓存后依次推进 Player、求值节点；
+  `Output` 的姿态直接成为状态输出，替换旧的单片段采样。
+- 状态入口：`SetPoseGraphEntry` 选择当前叶子 PoseNode。入口切换同时把根源
+  切换到该入口可达的 Player（直接 Player、`Select` 当前分支、或 Additive/输出
+  链上的第一个可达 Player），并把目标 Player 的时钟重置到 `startPosition`。
+  未显式 Pause 时入口会重新开启目标播放器，避免前一个一次性状态完成后留下的
+  `playing=false` 冻结 Fall/Land。同一个入口重复提交不会重置时钟。非零
+  `blendSeconds` 冻结当前已发布姿态作为
+  交叉混合源，在新的图输出上做线性 Crossfade；这是状态机 `Crossfade` 参数的
+  图内实现。图路径不把 `Inertialization` 当作额外姿态层，当前用同一段线性混合
+  代替（旧扁平路径仍使用原生惯性化）。
+- MontagePlayer：按 Montage id 或资源路径查找 `SkeletalAsset::montages`，校验
+  sections/segments 与 derived clip 后，在节点内拥有一个 `SkeletalPlayback`
+  子播放器。`SetPoseGraphValue(id, 0)` 停用并复位；正值是启动上升沿
+  （上一次值 `<=0`），首次或显式 `0 → 正值` 时从 `startPosition` 启动。
+  持续正值不会让非循环 Montage 在完成后自动重播；要重播必须重新提交
+  `0 → 正值`，或把节点 `Loop` 设为 true。入口切换传入的
+  `startPosition` 优先于节点默认值。子播放器复用 `PlayMontage` 的 section/link、
+  多段 clip 映射、notify、根位移与 MotionWarping；notify 合并进父播放器的
+  `FiredNotifies`/`ActiveNotifyStates`。
+- MontagePlayer 的 warp targets 通过
+  `SetPoseGraphMontageTargets(id, targets)` 提交；键集合与目标 Montage 的
+  distinct warp target 名必须完全相等。活动期间更换 targets 会从当前子播放器
+  时钟重建，失败保留旧播放器。图内 Montage 的根通道只在该节点是
+  `Output.rootSource` 时生效；切换 `InPlace` 会同步已激活的子播放器。
+  非根源 Montage（例如 `Slot(base, montage)`）的启动/重播只重置自己的子播放器，
+  不改写父 `Time`、播放范围或 base 时钟。
+- 根位移/notify：`Output.rootSource` 可以是 `SequencePlayer`、`BlendSpacePlayer`、
+  `BlendSpace2DPlayer` 或 `MontagePlayer`；未显式声明时由当前
+  `SetPoseGraphEntry` 入口解析可达 Player。只有根源 Player 贡献 `SelectedClip`/
+  `Time`/根位移/根 yaw 与 notify，其余 Player 不产生这些通道。1D/2D BlendSpace
+  的根反馈使用基准 sample（1D 为中间 sample，2D 为声明顺序第一个 sample），因此混合态
+  的反馈仍是一个可采样的片段时钟，而不是把 A/B 姿态误当成单片段。
+  `ClearPoseGraph()` 同时清除入口覆盖，之后的 `SetPoseGraph()` 从 Output 重新解析根源。
 - 与旧路径的关系：图激活时不再应用旧的 additive/layered/slot 修饰（这些由图中
-  节点表达）；`Slot` 节点当前只是插入点，montage overlay 仍由宿主播放层承担。
-  过渡（`TransitionTo`/inertialization）仍作用在图输出姿态之上。
-- 限制：单 Output、单 additive/layer 链；BlendSpace 仍 1D/Speed、2..3 sample；
-  无图内 Montage/Transition 节点。C# 桥已接通（`poseGraph`/`poseGraphValue`），
-  但只有满足“每个 `UseCachedPose` 都有图内 `SaveCachedPose` 生产者”的图才走原生；
-  Third Person 的 Locomotion 来自内层状态机，暂未能在图内表达 Save，因此仍走旧
-  扁平化路径。图内 BlendSpace sample 目前只带 threshold，per-sample rate/syncGroup
-  仍由旧 BlendSpace 路径支持。
+  节点表达）。单输入 `Slot` 是兼容插入点；双输入
+  `Slot(base, MontagePlayer)` 在 Montage 激活时按 `weights`/BlendProfile 白名单
+  把 Montage pose 叠到 base，未激活或 alpha=0 时 pass-through。图输出姿态本身的
+  状态入口过渡由 `SetPoseGraphEntry` 的 Crossfade 负责；旧扁平路径的
+  `TransitionTo`/惯性化不会叠加在已经激活的图输出上。
+- 图内 `LayeredBoneBlend` / `Slot` 节点可用 `BlendProfile` 资产名代替显式
+  `Weights`；`ResolveBlendProfiles` 展开为逐骨白名单权重，二者不可同时声明。
+- 限制：单 Output、单 additive/layer 链；2D 固定四角矩形，不支持 N 维或多层
+  网格。C# 桥为 `poseGraph`/`poseGraphValue`（含 `valueY` 或 `axis`）/
+  `poseGraphMontageTargets` / `poseGraphInPlace` / `poseGraphEntry`（含
+  `startPosition`、`blendSeconds`）；`BlendSpace2DPlayer`、`MontagePlayer` 与双输入
+  Slot 必须走原生图。Third Person 的 Locomotion 已使用原生
+  `Select → SaveCachedPose → UseCachedPose/ApplyAdditive` 路径。
 
 - `SaveCachedPose` / `UseCachedPose`（快照路径）：原生播放器按名字保存当前最终
   局部姿态（含关节数的快照）。`UseCachedPose` 状态下不推进原片段时钟、不产生
@@ -778,18 +854,41 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   会让下一帧把它当 Base 重复叠加（缩放/位移逐帧累积）。这条限制只针对快照路径；
   命名分支（见下节）在同帧写入、由 `UseCachedPose` 优先读取。
 - `AdditiveClip`：接受 `additiveAnimType = LocalSpaceBase` 与 `RotationOffsetMeshSpace`。
-  LocalSpaceBase 的增量为 `delta = additive * inverse(reference)`，再以
-  `base * delta` 复合；RotationOffsetMeshSpace 先把 base/additive/reference 的局部
-  旋转累乘成 mesh-space 旋转，在 mesh 空间做 `R_mesh * delta`，最后按修改后的父链
-  转回局部（只改旋转，平移/缩放不变）。权重按 UE
-  `BlendFromIdentityAndAccumulate` 把增量向 identity 收缩。
+  LocalSpaceBase 逐骨骼使用局部父空间 TRS 差值：
+  `deltaRotation = additive.rotation * inverse(reference.rotation)`、
+  `deltaTranslation = additive.translation - reference.translation`、
+  `deltaScale = additive.scale / reference.scale - 1`。α 收缩为
+  `deltaTranslation * α`、UE `FastLerp(identity, deltaRotation, α)` 后归一化、
+  `1 + deltaScale * α`，再按 UE `AccumulateWithAdditiveScale` 复合：
+  平移直接相加、旋转预乘 `weightedDeltaRotation * base.rotation`、缩放相乘。
+  注意平移是父空间直接相减，不是把 additive/reference 的整体 TRS 做矩阵除法；
+  后者会再次旋转参考平移，造成腿部/手指折叠。
+  sidecar 的 `rootMotion.refPoseType` 明确区分 `RefPose` 与
+  `LocalAnimFrame`。`LocalAnimFrame` 且存在 `rootMotion.refFrameIndex` 时，
+  参考姿态采样自本片段
+  `RefFrameIndex / NumberOfSampledKeys * duration`（UE
+  `UAnimSequence::GetSequencePose` 的公式，`NumberOfSampledKeys` 取 sidecar
+  `numKeys`）；`RefPose` 或未声明参考帧时回退骨架绑定姿态。`MM_Land` 的
+  `refFrameIndex=26 / numKeys=27 / duration=0.8667 s` 因而取
+  `0.8333 s`，不是末帧 `0.8667 s`。外部 `RefPoseSeq` 的 `ABPT_AnimFrame`
+  在导入期拒绝；当前只导入 `ABPT_RefPose` 与 `ABPT_LocalAnimFrame`。
+  RotationOffsetMeshSpace 先把 base/additive/reference 的局部旋转累乘成
+  mesh-space 旋转，在 mesh 空间做 `R_mesh * delta`，最后按修改后的父链转回局部
+  （只改旋转，平移/缩放不变）。权重同样按 UE
+  `BlendFromIdentityAndAccumulate`：部分权重使用 `FastLerp`（最短路径）后
+  归一化，不是球面插值；把增量向 identity 收缩。
   additive 有独立时钟（rate 1、按 loop 或 clamp），不产生根位移/notify；它叠加
   在状态姿态上、参与过渡混合之前。
-- 曲线：每帧 `FrameCurves()` 汇总基础片段（BlendSpace 按 A/B 权重）与 additive
-  片段（× alpha）的同名曲线值；反馈 `curves = { name: value }`（跳过 0 值、最多
-  64 个键）。layered/slot 曲线不参与，曲线本身不驱动骨骼或图条件。
-- `Slot`：图级单槽位；声明 `SlotMask`/`SlotAlpha` 时 montage 以骨骼 mask 叠加，
-  未声明时仍是整身覆盖。详见下方 Masked Slot Montage 契约。
+- 曲线：扁平路径每帧 `FrameCurves()` 汇总基础片段（BlendSpace 按 A/B 权重）与
+  additive 片段（× alpha）的同名曲线值；反馈 `curves = { name: value }`（跳过
+  0 值、最多 64 个键）。原生 Pose Graph 目前只保留根源/扁平字段曲线，尚未做
+  任意节点的完整权重曲线传播；layered/slot 曲线不参与，曲线本身不驱动骨骼或
+  图条件。
+- `Slot`：图级单槽位；单输入节点保留旧元数据/插入点语义。双输入
+  `Slot(base, montage)` 只在 Montage 激活时叠加；`weights` 非空时按
+  **白名单**解释（未列出骨骼权重 0），空 weights 表示全身。alpha 来自
+  `SetPoseGraphValue(slotId, value)` 或节点 alpha。详见下方 Masked Slot Montage
+  契约。
 - `LayeredBoneBlend`：原生 `SetLayeredPose(clip, alpha, loop, mask)` 在
   base → additive 之后按 mask 混合 overlay：命中关节权重为 `alpha`，未命中关节
   保持 base；旋转用 slerp、平移/缩放线性。overlay 有独立时钟（rate 1、loop 或
@@ -847,10 +946,11 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   begin/end、循环回绕“先尾后头”），事件进入同一 `FiredNotifies` 缓冲；
   基础片段的 notify 仍按基础时钟触发，两套事件互不覆盖。结束/Stop 会对
   仍活动的 overlay notifyState 补 `end(interrupted=true)`。
-- 限制：当前只取 montage 的 `derivedClipId`（或第一段），忽略 section 链接、
-  与 warp；支持二值 mask 或 BP_*.json 逐骨权重，二者互斥；
-  不支持 UE 的 BlendProfile。`Slot` 仍是单槽位，不支持多槽位叠加。
-  LayeredBoneBlend 支持二值 mask 或 BP_*.json 逐骨权重，尚未实现 profile 曲线。
+- 旧扁平 `PlaySlotMontage` 只取 montage 的 `derivedClipId`（或第一段），忽略
+  section 链接与 warp；它支持二值 mask 或 BP_*.json 白名单权重，二者互斥。
+  图内 `MontagePlayer` 走完整 Montage 资产语义（section/link、多段映射、
+  notify、根位移与 MotionWarping），见 `animation-montage.md`。
+  `Slot` 仍是单槽位，不支持多槽位叠加；layer/slot 都不支持 profile 曲线。
 
 ### BlendProfile（BP_*.json）
 
@@ -859,7 +959,8 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   SKM 的关节，权重有限且 ∈ [0,1]，最多 256 项；内容摘要进入 cache key/sourceInputs。
 - 语义：`LayerBlendProfile` / `SlotBlendProfile` 在 catalog 绑定后由
   `ResolveBlendProfiles()` 展开成逐骨权重；运行期每关节权重 = `alpha * weight`，
-  **未列出的骨骼按 1.0**（UE BlendProfile 语义）。与 `LayerMask`/`SlotMask`
+  **未列出的骨骼权重 0（白名单）**。这是 VL 的有意差异；UE 原生 BlendProfile
+  未列出骨骼按 1.0。与 `LayerMask`/`SlotMask`
   互斥，不能同时声明。
 - 解析时机与 BlendSpace 相同：prepare 阶段 catalog 未绑定时延迟到首次求值；
   未解析的 profile 引用在 `Validate()` 中明确报错。
@@ -876,13 +977,12 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   slot alpha 越界，以及状态机/状态/transition/条件预算超限。
   状态迁移本身允许成环（Idle↔Walk 必须成环）；“循环”校验只针对嵌套状态机引用。
 - 当前节点子集覆盖 StateMachine + SequencePlayer 语义、State Alias、
-  SyncGroup/MarkerSync 数据、曲线条件、`VerticalSpeed`、Inertialization 标记与
-  单层 pose 输出、1D BlendSpace 与 Conduit；
-  R4 的 Slot/Montage 动作层由宿主 `PlayAction` + 原生 `PlayMontage` 提供；
-  声明 `SlotMask` 时按骨骼 mask 叠在基础姿态上，未声明时仍是整身覆盖。
-  AimOffset、TurnInPlace、Pivot、
-  LayeredBoneBlend、FootPlacement、additive 仍未实现；SlopeWarping 是图后的
-  原生姿态后处理，不进入图节点。曲线驱动骨骼/AimOffset 仍归后续阶段。
+  SyncGroup/MarkerSync 数据、曲线条件、`VerticalSpeed`、Inertialization 标记、
+  1D/2D BlendSpace、Conduit、同帧 CachedPose、LayeredBoneBlend、additive、
+  双输入 Slot/MontagePlayer 与原生 Pose Graph。R4 的 Slot/Montage 动作层由宿主
+  `PlayAction` + 原生 `PlayMontage` 提供；图内动作层由 `MontagePlayer + Slot`
+  表达。AimOffset、TurnInPlace、Pivot 仍未实现；FootPlacement 与 SlopeWarping
+  是图后的原生姿态后处理，不进入图节点。曲线驱动骨骼/AimOffset 仍归后续阶段。
 
 ## 预览与调试
 

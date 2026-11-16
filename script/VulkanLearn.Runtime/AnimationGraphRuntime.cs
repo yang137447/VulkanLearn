@@ -24,7 +24,8 @@ public readonly record struct AnimationGraphInput(
     float SyncMarkerAlpha = 0,
     IReadOnlyDictionary<string, float>? Curves = null,
     IReadOnlyDictionary<string, float>? StartPositions = null,
-    float VerticalSpeed = 0)
+    float VerticalSpeed = 0,
+    float PoseGraphAxisY = 0)
 {
     internal void Validate()
     {
@@ -48,6 +49,8 @@ public readonly record struct AnimationGraphInput(
             throw new ArgumentOutOfRangeException(nameof(SyncMarkerAlpha));
         if (!float.IsFinite(VerticalSpeed))
             throw new ArgumentOutOfRangeException(nameof(VerticalSpeed));
+        if (!float.IsFinite(PoseGraphAxisY))
+            throw new ArgumentOutOfRangeException(nameof(PoseGraphAxisY));
     }
 
     internal bool TryCurve(string name, out float value)
@@ -119,6 +122,8 @@ public sealed class AnimationGraphRuntime
         public AnimationGraphStateMachine Definition = null!;
         public string State = "";
         public float StateTime;
+        // PoseNode 状态没有静态 Clip，完成判定使用上一帧实际求值出的片段。
+        public string EffectiveClip = "";
         // 状态机自己的时钟：MinTimeBeforeReentry 用，不受内层状态重置影响。
         public float Clock;
         public readonly Dictionary<string, float> EnteredAt = new(StringComparer.Ordinal);
@@ -348,7 +353,24 @@ public sealed class AnimationGraphRuntime
         string saveCachedPose = definition.SaveCachedPose;
         if (leafState.PoseNode.Length > 0 && definition.PoseGraph is not null)
         {
-            var pose = definition.PoseGraph.Evaluate(input.PlanarSpeed, leafState.PoseNode);
+            IReadOnlyDictionary<string, float>? poseValues = null;
+            var values = new Dictionary<string, float>(StringComparer.Ordinal);
+            foreach (var node in definition.PoseGraph.Nodes)
+            {
+                if (node.Kind == AnimationPoseNodeKind.BlendSpace2DPlayer)
+                {
+                    // C# 前端与原生使用同一双轴值；X 是平面速度，Y 由蓝图覆写。
+                    values[node.Id] = input.PlanarSpeed;
+                    values[$"{node.Id}.y"] = input.PoseGraphAxisY;
+                }
+                else if (node.Kind == AnimationPoseNodeKind.Select && node.Inputs.Count == 2)
+                {
+                    values[node.Id] = node.Inputs[1] == leafState.PoseNode ? 1 : 0;
+                }
+            }
+            if (values.Count > 0) poseValues = values;
+            var pose = definition.PoseGraph.Evaluate(
+                input.PlanarSpeed, leafState.PoseNode, poseValues);
             clip = pose.Clip;
             loop = pose.Loop;
             startPosition = pose.StartPosition >= 0 ? pose.StartPosition : input.StartPosition(clip);
@@ -366,9 +388,13 @@ public sealed class AnimationGraphRuntime
             slotAlpha = pose.SlotAlpha;
             useCachedPose = pose.UseCachedPose;
             if (pose.SaveCachedPose.Length > 0) saveCachedPose = pose.SaveCachedPose;
+            // MontagePlayer 的片段由原生子播放器选择；C# 只收到实际播放时钟，
+            // 因此用反馈 clip 作为完成判定来源，不能保持空 clip 永不完成。
+            if (pose.MontageId.Length > 0 && clip.Length == 0) clip = input.Clip;
         }
         float stateTime = ResolveStateTime(leafMachine, leafState, input);
         bool completed = clip.Length > 0 && input.Clip == clip && input.ClipCompleted;
+        leafMachine.EffectiveClip = clip;
         string direction = ResolveDirection(leafState, leafMachine.Definition, input);
 
         // 外层迁移拥有整个内层状态机的交叉淡入；内层迁移只在没有外层迁移时接管 blends。
@@ -448,8 +474,14 @@ public sealed class AnimationGraphRuntime
     private float ResolveStateTime(ActiveMachine machine, AnimationGraphState state, in AnimationGraphInput input) =>
         IsClipReady(state, input) && input.Clip == state.Clip ? input.ClipTime : machine.StateTime;
 
-    private bool IsCompleted(ActiveMachine machine, AnimationGraphState state, in AnimationGraphInput input) =>
-        state.Clip.Length > 0 && IsClipReady(state, input) && input.Clip == state.Clip && input.ClipCompleted;
+    private bool IsCompleted(ActiveMachine machine, AnimationGraphState state, in AnimationGraphInput input)
+    {
+        // PoseNode 状态（例如 Third Person 的 Jump）没有静态 Clip；用上一帧图求值
+        // 得到的 EffectiveClip 判断完成，否则 StateCompleted 永远不会触发。
+        string expected = state.Clip.Length > 0 ? state.Clip : machine.EffectiveClip;
+        return expected.Length > 0 && IsClipReady(state, input) && input.Clip == expected &&
+            input.ClipCompleted;
+    }
 
     private ResolvedTransition? SelectTransition(ActiveMachine machine,
         IReadOnlyList<AnimationGraphTransition> transitions, in AnimationGraphInput input,
@@ -557,6 +589,7 @@ public sealed class AnimationGraphRuntime
     {
         machine.State = stateName;
         machine.StateTime = 0;
+        machine.EffectiveClip = "";
         machine.EnteredAt[stateName] = machine.Clock;
         machine.EntryFromState = previousState;
         machine.JustEntered = false;

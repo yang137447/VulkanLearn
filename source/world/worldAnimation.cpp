@@ -418,7 +418,8 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             mode == "configureBonePhysics" || mode == "blendSpace" ||
             mode == "additive" || mode == "layeredPose" || mode == "cachedPose" ||
             mode == "cachedPoseBranches" || mode == "cachedPoseBranchAxis" ||
-            mode == "poseGraph" || mode == "poseGraphValue" || mode == "poseGraphEntry";
+            mode == "poseGraph" || mode == "poseGraphValue" || mode == "poseGraphEntry" ||
+            mode == "poseGraphInPlace" || mode == "poseGraphMontageTargets";
         if (!player || (!postProcessConfiguration && candidates.count(player)))
             throw std::invalid_argument("Script.InvalidAnimationTarget");
         const auto existing = candidates.find(player);
@@ -875,6 +876,8 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                 using Kind = Animation::SkeletalPlayback::PoseGraphNode::Kind;
                 if (kind == "SequencePlayer") parsed.kind = Kind::SequencePlayer;
                 else if (kind == "BlendSpacePlayer") parsed.kind = Kind::BlendSpacePlayer;
+                else if (kind == "BlendSpace2DPlayer") parsed.kind = Kind::BlendSpace2DPlayer;
+                else if (kind == "MontagePlayer") parsed.kind = Kind::MontagePlayer;
                 else if (kind == "Blend") parsed.kind = Kind::Blend;
                 else if (kind == "Select") parsed.kind = Kind::Select;
                 else if (kind == "ApplyAdditive") parsed.kind = Kind::ApplyAdditive;
@@ -893,7 +896,15 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                     }
                 if (node.contains("clip") && node["clip"].is_string())
                     parsed.clip = node["clip"].get<std::string>();
+                if (node.contains("montage") && node["montage"].is_string())
+                    parsed.montage = node["montage"].get<std::string>();
                 if (node.contains("rate")) parsed.rate = node["rate"].get<float>();
+                if (node.contains("weightSpeedPerSec"))
+                {
+                    if (!node["weightSpeedPerSec"].is_number())
+                        throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                    parsed.weightSpeedPerSec = node["weightSpeedPerSec"].get<float>();
+                }
                 if (node.contains("loop")) parsed.loop = node["loop"].get<bool>();
                 if (node.contains("startPosition"))
                     parsed.startPosition = node["startPosition"].get<float>();
@@ -908,12 +919,28 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                     for (const auto& sample : node["samples"])
                     {
                         if (!sample.is_object() || !sample.contains("clip") ||
-                            !sample["clip"].is_string() || !sample.contains("threshold") ||
-                            !sample["threshold"].is_number())
+                            !sample["clip"].is_string())
                             throw std::invalid_argument("Script.InvalidPoseGraphRequest");
                         Animation::SkeletalPlayback::PoseGraphSample parsedSample;
                         parsedSample.clip = sample["clip"].get<std::string>();
-                        parsedSample.threshold = sample["threshold"].get<float>();
+                        if (sample.contains("threshold"))
+                        {
+                            if (!sample["threshold"].is_number())
+                                throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                            parsedSample.threshold = sample["threshold"].get<float>();
+                        }
+                        if (sample.contains("x"))
+                        {
+                            if (!sample["x"].is_number())
+                                throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                            parsedSample.x = sample["x"].get<float>();
+                        }
+                        if (sample.contains("y"))
+                        {
+                            if (!sample["y"].is_number())
+                                throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                            parsedSample.y = sample["y"].get<float>();
+                        }
                         if (sample.contains("rate"))
                         {
                             if (!sample["rate"].is_number())
@@ -948,14 +975,57 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             if (!request.contains("id") || !request["id"].is_string() ||
                 !request.contains("value") || !request["value"].is_number())
                 throw std::invalid_argument("Script.InvalidPoseGraphValueRequest");
-            candidate.SetPoseGraphValue(request["id"].get<std::string>(),
-                request["value"].get<float>());
+            const std::string id = request["id"].get<std::string>();
+            if (request.contains("axis"))
+            {
+                if (!request["axis"].is_string())
+                    throw std::invalid_argument("Script.InvalidPoseGraphValueRequest");
+                candidate.SetPoseGraphAxisValue(id, request["axis"].get<std::string>(),
+                    request["value"].get<float>());
+            }
+            else if (request.contains("valueY"))
+            {
+                if (!request["valueY"].is_number())
+                    throw std::invalid_argument("Script.InvalidPoseGraphValueRequest");
+                candidate.SetPoseGraphValue(id, request["value"].get<float>(),
+                    request["valueY"].get<float>());
+            }
+            else
+                candidate.SetPoseGraphValue(id, request["value"].get<float>());
+        }
+        else if (request.value("mode", std::string()) == "poseGraphMontageTargets")
+        {
+            if (!request.contains("id") || !request["id"].is_string())
+                throw std::invalid_argument("Script.InvalidPoseGraphMontageTargetsRequest");
+            candidate.SetPoseGraphMontageTargets(request["id"].get<std::string>(),
+                ParseMontageTargets(request));
+        }
+        else if (request.value("mode", std::string()) == "poseGraphInPlace")
+        {
+            if (!request.contains("enabled") || !request["enabled"].is_boolean())
+                throw std::invalid_argument("Script.InvalidPoseGraphInPlaceRequest");
+            candidate.SetPoseGraphInPlace(request["enabled"].get<bool>());
         }
         else if (request.value("mode", std::string()) == "poseGraphEntry")
         {
             if (!request.contains("id") || !request["id"].is_string())
                 throw std::invalid_argument("Script.InvalidPoseGraphEntryRequest");
-            candidate.SetPoseGraphEntry(request["id"].get<std::string>());
+            float startPosition = 0;
+            float blendSeconds = 0;
+            if (request.contains("startPosition"))
+            {
+                if (!request["startPosition"].is_number())
+                    throw std::invalid_argument("Script.InvalidPoseGraphEntryRequest");
+                startPosition = request["startPosition"].get<float>();
+            }
+            if (request.contains("blendSeconds"))
+            {
+                if (!request["blendSeconds"].is_number())
+                    throw std::invalid_argument("Script.InvalidPoseGraphEntryRequest");
+                blendSeconds = request["blendSeconds"].get<float>();
+            }
+            candidate.SetPoseGraphEntry(request["id"].get<std::string>(), startPosition,
+                blendSeconds);
         }
         else if (request.value("mode", std::string()) == "layeredPose")
         {

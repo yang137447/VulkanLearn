@@ -195,21 +195,76 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     if (poseGraphActive)
     {
         // 图求值直接给出最终姿态；根位移/notify 仍由 rootSource Player 提供。
-        locals = EvaluatePoseGraph(deltaSeconds);
+        locals = EvaluatePoseGraph(deltaSeconds, meshTransform, actorPosition, actorYaw);
         if (poseGraphRootValid)
         {
             const PoseGraphNode& rootNode = poseGraphNodes.at(poseGraphRoot);
-            size_t rootClip = 0;
-            while (rootClip < asset->AnimationAsset().clips.size() &&
-                asset->AnimationAsset().clips[rootClip].id != rootNode.clip)
-                ++rootClip;
-            selected = rootClip;
-            looping = rootNode.loop;
-            playbackRangeStart = 0;
-            playbackRangeEnd = 0;
-            previousTime = poseGraphRootPreviousTime;
-            time = previousTime;
-            sampleTime = poseGraphStates.at(poseGraphRoot).time;
+            if (rootNode.kind == PoseGraphNode::Kind::MontagePlayer)
+            {
+                const auto& montagePlayer =
+                    poseGraphStates.at(poseGraphRoot).montagePlayer;
+                if (montagePlayer)
+                {
+                    selected = montagePlayer->SelectedClip();
+                    looping = false;
+                    playbackRangeStart = montagePlayer->PlaybackRangeStart();
+                    playbackRangeEnd = montagePlayer->PlaybackRangeEnd();
+                    time = montagePlayer->Time();
+                    sampleTime = time;
+                }
+            }
+            else if (rootNode.kind == PoseGraphNode::Kind::BlendSpacePlayer)
+            {
+                const auto findClip = [&](const std::string& clip)
+                {
+                    size_t index = 0;
+                    const auto& clips = asset->AnimationAsset().clips;
+                    while (index < clips.size() && clips[index].id != clip) ++index;
+                    return index;
+                };
+                const size_t baseIndex = rootNode.samples.size() >= 3 ? 1 : 0;
+                const size_t baseClip = findClip(rootNode.samples.at(baseIndex).clip);
+                const auto& rootState = poseGraphStates.at(poseGraphRoot);
+                selected = baseClip;
+                looping = rootNode.loop;
+                playbackRangeStart = 0;
+                playbackRangeEnd = 0;
+                previousTime = poseGraphRootPreviousTime;
+                time = previousTime;
+                sampleTime = rootState.time;
+            }
+            else if (rootNode.kind == PoseGraphNode::Kind::BlendSpace2DPlayer)
+            {
+                const auto findClip = [&](const std::string& clip)
+                {
+                    size_t index = 0;
+                    const auto& clips = asset->AnimationAsset().clips;
+                    while (index < clips.size() && clips[index].id != clip) ++index;
+                    return index;
+                };
+                const auto& rootState = poseGraphStates.at(poseGraphRoot);
+                selected = findClip(rootNode.samples.front().clip);
+                looping = rootNode.loop;
+                playbackRangeStart = 0;
+                playbackRangeEnd = 0;
+                previousTime = poseGraphRootPreviousTime;
+                time = previousTime;
+                sampleTime = rootState.time;
+            }
+            else
+            {
+                size_t rootClip = 0;
+                while (rootClip < asset->AnimationAsset().clips.size() &&
+                    asset->AnimationAsset().clips[rootClip].id != rootNode.clip)
+                    ++rootClip;
+                selected = rootClip;
+                looping = rootNode.loop;
+                playbackRangeStart = 0;
+                playbackRangeEnd = 0;
+                previousTime = poseGraphRootPreviousTime;
+                time = previousTime;
+                sampleTime = poseGraphStates.at(poseGraphRoot).time;
+            }
         }
     }
     else
@@ -271,31 +326,47 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     displayedLocals.swap(locals);
     if (epoch == discontinuity)
     {
-        const auto& clip = asset->AnimationAsset().clips.at(selected);
-        rootMotionDelta = RootTranslation(clip, sampleTime) - RootTranslation(clip, time);
-        const auto rotation = RootRotation(clip, sampleTime) *
-            RootRotation(clip, time).inverse();
-        // 先放原始根 yaw；旋转 warp 只在本 tick 有激活窗口且提交了 target 旋转时
-        // 覆盖它，平移结果（rootMotionDelta）与 yaw 通道互不覆盖。
-        float yawDelta = YawFromQuaternion(rotation);
-        // 原生 modifier 在模型空间改写本 tick 的根位移/根 yaw；C# 只消费最终
-        // rootMotion/rootMotionYaw 交给 Jolt 与 Actor 旋转，不做窗口提取、
-        // target 换算或 SkewWarp 数学。
-        if (!motionWarp.Empty())
+        if (poseGraphActive && poseGraphRootMontage)
         {
-            if (meshTransform && actorPosition)
-                rootMotionDelta = motionWarp.Apply(asset->AnimationAsset().mesh, clip, time, sampleTime,
-                    rootMotionDelta, *meshTransform, *actorPosition, actorYaw, &yawDelta);
-            motionWarpState = motionWarp.DebugState(time);
+            // 图内 MontagePlayer 是其子播放器的唯一时钟；子播放器已完成段映射、
+            // notify 与 MotionWarping，父播放器只转发根通道。
+            rootMotionDelta = poseGraphMontageRootDelta;
+            rootMotionYawDelta = poseGraphMontageRootYawDelta;
         }
-        else motionWarpState.clear();
-        rootMotionYawDelta = yawDelta;
+        else
+        {
+            const auto& clip = asset->AnimationAsset().clips.at(selected);
+            rootMotionDelta = RootTranslation(clip, sampleTime) - RootTranslation(clip, time);
+            const auto rotation = RootRotation(clip, sampleTime) *
+                RootRotation(clip, time).inverse();
+            // 先放原始根 yaw；旋转 warp 只在本 tick 有激活窗口且提交了 target 旋转时
+            // 覆盖它，平移结果（rootMotionDelta）与 yaw 通道互不覆盖。
+            float yawDelta = YawFromQuaternion(rotation);
+            // 原生 modifier 在模型空间改写本 tick 的根位移/根 yaw；C# 只消费最终
+            // rootMotion/rootMotionYaw 交给 Jolt 与 Actor 旋转，不做窗口提取、
+            // target 换算或 SkewWarp 数学。
+            if (!motionWarp.Empty())
+            {
+                if (meshTransform && actorPosition)
+                    rootMotionDelta = motionWarp.Apply(asset->AnimationAsset().mesh, clip,
+                        time, sampleTime, rootMotionDelta, *meshTransform, *actorPosition,
+                        actorYaw, &yawDelta);
+                motionWarpState = motionWarp.DebugState(time);
+            }
+            else motionWarpState.clear();
+            rootMotionYawDelta = yawDelta;
+        }
     }
     time = sampleTime;
     RefreshSyncMarker();
     // notify 只在姿态求值成功后提交：异常 tick 不改变活动区间。事件按实际位置穿越触发，
     // 显式 seek/切片段不补发历史（见 Seek/Select 的清理）。
-    if (wrapped)
+    if (poseGraphActive && poseGraphRootMontage)
+    {
+        // 图内 Montage 的 notify 已由子播放器在 EvaluatePoseGraph 中追加到
+        // firedNotifies/poseGraphActiveNotifyStates；不要再按父 selected 片段扫描。
+    }
+    else if (wrapped)
     {
         ScanNotifySegment(std::max(double(previousTime), double(rangeStart)), double(rangeEnd), false);
         // 回绕时仍活跃的区间先在循环末尾补 end(interrupted)，再扫描新循环头部；
@@ -349,8 +420,7 @@ LocalPose SkeletalPlayback::ApplyAdditive(LocalPose locals) const
     if (!additiveActive || additiveAlpha <= 0) return locals;
     const auto& animation = asset->AnimationAsset();
     if (additiveClip >= animation.clips.size()) return locals;
-    const auto rest = asset->mesh.runtime->joint_rest_poses();
-    const LocalPose reference(rest.begin(), rest.end());
+    const LocalPose reference = AdditiveReferencePose(additiveClip);
     const LocalPose sample = Sample(additiveClip, additiveTime);
     const auto& clip = animation.clips[additiveClip];
     if (clip.sequence.additiveAnimType == "RotationOffsetMeshSpace")

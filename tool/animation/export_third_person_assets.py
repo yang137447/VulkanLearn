@@ -167,7 +167,8 @@ def clip_record(animation):
         "frameRate": frame_rate_record(animation, duration, num_frames),
         "settings": properties(animation, (
             "skeleton", "enable_root_motion", "root_motion_root_lock",
-            "force_root_lock", "additive_anim_type", "retarget_source")),
+            "force_root_lock", "additive_anim_type", "ref_frame_index", "ref_pose_type",
+            "ref_pose_seq", "retarget_source")),
         "tracks": [str(name) for name in library.get_animation_track_names(
             animation)],
         "curves": [],

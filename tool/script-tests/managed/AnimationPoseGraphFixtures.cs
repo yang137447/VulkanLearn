@@ -215,3 +215,144 @@ public sealed class AnimationPoseGraphProbeBlueprint : Blueprint
     // 失败值不能是 0：宿主会拒绝零缩放。
     private static float Flag(bool ok) => ok ? 1 : 2;
 }
+
+// 2D BlendSpace 与 MontagePlayer/Slot 的桥接探针：验证双轴权重、sample 坐标、
+// MontageId 透传以及非法网格/非法 Slot 输入拒绝。
+public sealed class AnimationPoseGraph2DProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var graph = Build2DGraph();
+        var result = graph.Evaluate(0.5f, "",
+            new Dictionary<string, float>(StringComparer.Ordinal)
+            {
+                ["space"] = 0.5f,
+                ["space.y"] = 0.5f
+            });
+        var definition = graph.Nodes[0].ToDefinition();
+        var montageGraph = BuildMontageGraph();
+        montageGraph.Validate();
+        var montageNode = montageGraph.Nodes[1].ToDefinition();
+
+        Transform.Position = new(
+            Flag(result.BlendSpaceWeights is { Count: 4 } &&
+                result.BlendSpaceWeights.All(weight => MathF.Abs(weight - 0.25f) < 1e-5f) &&
+                definition.StartPosition == 0),
+            Flag(definition.MontageId.Length == 0),
+            Flag(montageNode.MontageId == "AM_Test"));
+        Transform.Rotation = new(
+            Flag(definition.Samples.Length == 4 &&
+                MathF.Abs(definition.Samples[3].X - 1) < 1e-5f &&
+                MathF.Abs(definition.Samples[3].Y - 1) < 1e-5f),
+            Flag(Throws(InvalidGridGraph())),
+            Flag(Throws(MissingMontageGraph())));
+        Transform.Scale = new(
+            Flag(Throws(SlotWithoutMontageGraph())),
+            Flag(result.BlendSpaceSamples is { Count: 4 }),
+            Flag(montageGraph.Nodes[2].Kind == AnimationPoseNodeKind.Slot));
+    }
+
+    private static AnimationPoseGraph Build2DGraph() => new()
+    {
+        Name = "2D", OutputNode = "out",
+        Nodes = new[]
+        {
+            new AnimationPoseNode
+            {
+                Id = "space", Kind = AnimationPoseNodeKind.BlendSpace2DPlayer,
+                BlendSamples = new[]
+                {
+                    new AnimationGraphBlendSample("A", 0, 1, "", 0, 0),
+                    new AnimationGraphBlendSample("B", 0, 1, "", 1, 0),
+                    new AnimationGraphBlendSample("C", 0, 1, "", 0, 1),
+                    new AnimationGraphBlendSample("D", 0, 1, "", 1, 1)
+                }
+            },
+            new AnimationPoseNode { Id = "out", Kind = AnimationPoseNodeKind.Output,
+                Inputs = new[] { "space" } }
+        }
+    };
+
+    private static AnimationPoseGraph BuildMontageGraph() => new()
+    {
+        Name = "Montage", OutputNode = "out",
+        Nodes = new[]
+        {
+            Player("base", "A"),
+            new AnimationPoseNode { Id = "montage", Kind = AnimationPoseNodeKind.MontagePlayer,
+                MontageId = "AM_Test", Loop = false },
+            new AnimationPoseNode { Id = "slot", Kind = AnimationPoseNodeKind.Slot,
+                Inputs = new[] { "base", "montage" }, SlotName = "DefaultSlot",
+                Weights = new[] { new AnimationGraphBoneWeight("hip", 1) } },
+            new AnimationPoseNode { Id = "out", Kind = AnimationPoseNodeKind.Output,
+                Inputs = new[] { "slot" } }
+        }
+    };
+
+    private static AnimationPoseGraph InvalidGridGraph() => new()
+    {
+        Name = "BadGrid", OutputNode = "out",
+        Nodes = new[]
+        {
+            new AnimationPoseNode
+            {
+                Id = "space", Kind = AnimationPoseNodeKind.BlendSpace2DPlayer,
+                BlendSamples = new[]
+                {
+                    new AnimationGraphBlendSample("A", 0, 1, "", 0, 0),
+                    new AnimationGraphBlendSample("B", 0, 1, "", 1, 0),
+                    new AnimationGraphBlendSample("C", 0, 1, "", 0, 1),
+                    new AnimationGraphBlendSample("D", 0, 1, "", 0, 0)
+                }
+            },
+            new AnimationPoseNode { Id = "out", Kind = AnimationPoseNodeKind.Output,
+                Inputs = new[] { "space" } }
+        }
+    };
+
+    private static AnimationPoseGraph MissingMontageGraph() => new()
+    {
+        Name = "MissingMontage", OutputNode = "out",
+        Nodes = new[]
+        {
+            new AnimationPoseNode { Id = "montage", Kind = AnimationPoseNodeKind.MontagePlayer },
+            new AnimationPoseNode { Id = "out", Kind = AnimationPoseNodeKind.Output,
+                Inputs = new[] { "montage" } }
+        }
+    };
+
+    private static AnimationPoseGraph SlotWithoutMontageGraph() => new()
+    {
+        Name = "SlotInput", OutputNode = "out",
+        Nodes = new[]
+        {
+            Player("a", "A"),
+            Player("b", "B"),
+            new AnimationPoseNode { Id = "slot", Kind = AnimationPoseNodeKind.Slot,
+                Inputs = new[] { "a", "b" }, SlotName = "DefaultSlot" },
+            new AnimationPoseNode { Id = "out", Kind = AnimationPoseNodeKind.Output,
+                Inputs = new[] { "slot" } }
+        }
+    };
+
+    private static AnimationPoseNode Player(string id, string clip) => new()
+    {
+        Id = id, Kind = AnimationPoseNodeKind.SequencePlayer, Clip = clip
+    };
+
+    private static bool Throws(AnimationPoseGraph graph)
+    {
+        try
+        {
+            graph.Validate();
+            graph.Evaluate(0);
+            return false;
+        }
+        catch (Exception)
+        {
+            return true;
+        }
+    }
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
+}
