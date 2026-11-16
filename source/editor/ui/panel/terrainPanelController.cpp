@@ -199,6 +199,7 @@ void MaterialInstanceAssetEditorPanel::RefreshTerrainMaterialPanel()
     };
     const TessControl tessControls[] = {
         {"terrain-material-tess-max", "u_terrainTessMax"},
+        {"terrain-material-tess-pixels", "u_terrainTessTargetPixels"},
         {"terrain-material-tess-radius", "u_terrainTessRadiusM"},
         {"terrain-material-detail-height", "u_detailAmplitudeM"},
         {"terrain-material-detail-uv", "u_detailUvScale"},

@@ -890,6 +890,7 @@ void RenderSystem::DrawEditorGridGeometry(
 
 void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
 {
+    const vk::Extent2D extent = GetSceneRenderExtent();
     frameRecorder.UpdateGlobalUBO(
         commandBuffer,
         frameResources,
@@ -898,7 +899,9 @@ void RenderSystem::UpdateUBOGlobal(vk::CommandBuffer& commandBuffer)
         hasRenderScene,
         [this] { RefreshRenderSceneFromActiveWorld(); },
         csmRuntime,
-        currentFrame);
+        currentFrame,
+        extent.width,
+        extent.height);
 }
 
 void RenderSystem::UpdateUBOGlobalWithProjectionTransform(
@@ -908,6 +911,7 @@ void RenderSystem::UpdateUBOGlobalWithProjectionTransform(
     float projectionOffsetX,
     float projectionOffsetY)
 {
+    const vk::Extent2D extent = GetSceneRenderExtent();
     frameRecorder.UpdateGlobalUBOWithProjectionTransform(
         commandBuffer,
         frameResources,
@@ -917,6 +921,8 @@ void RenderSystem::UpdateUBOGlobalWithProjectionTransform(
         [this] { RefreshRenderSceneFromActiveWorld(); },
         csmRuntime,
         currentFrame,
+        extent.width,
+        extent.height,
         projectionScaleX,
         projectionScaleY,
         projectionOffsetX,

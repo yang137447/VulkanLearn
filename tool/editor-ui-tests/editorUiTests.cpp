@@ -9167,6 +9167,7 @@ TEST_F(EditorUiTest, LandscapeDetailMaterialExposesTessellationControls)
             ->HasAttribute("disabled"));
     const char* tessControls[] = {
         "terrain-material-tess-max",
+        "terrain-material-tess-pixels",
         "terrain-material-tess-radius",
         "terrain-material-detail-height",
         "terrain-material-detail-uv",
@@ -9190,6 +9191,7 @@ TEST_F(EditorUiTest, LandscapeDetailMaterialExposesTessellationControls)
         asset.parameters.push_back(parameter);
     };
     addFloat("u_terrainTessMax", 24.0f);
+    addFloat("u_terrainTessTargetPixels", 6.0f);
     addFloat("u_terrainTessRadiusM", 140.0f);
     addFloat("u_detailAmplitudeM", 0.6f);
     addFloat("u_detailUvScale", 5.0f);
@@ -9200,6 +9202,7 @@ TEST_F(EditorUiTest, LandscapeDetailMaterialExposesTessellationControls)
     for (const char* id : tessControls)
         EXPECT_FALSE(document->GetElementById(id)->HasAttribute("disabled")) << id;
     EXPECT_FLOAT_EQ(FieldNumber("terrain-material-tess-max"), 24.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-tess-pixels"), 6.0f);
     EXPECT_FLOAT_EQ(FieldNumber("terrain-material-tess-radius"), 140.0f);
     EXPECT_FLOAT_EQ(FieldNumber("terrain-material-detail-height"), 0.6f);
     EXPECT_FLOAT_EQ(FieldNumber("terrain-material-detail-uv"), 5.0f);

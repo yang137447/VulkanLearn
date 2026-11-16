@@ -862,9 +862,9 @@ Lambert + GGX、固定 key light 与 ambient。displacement 主路径是
 路径与全局 tiling。全局 tiling 与 `u_detailAmplitudeM`/`u_detailUvScale`/
 `u_layerDisplacementScale` 相邻，Tess Max/Radius 单独留给细分本身。TR 声明
 `detailMaterialInstancePath` 时同时显示 LOD0 detail MI 与
-Tess Max / Radius / Detail Height / Detail UV / Disp Scale 五组输入。这些输入只在
+Tess Max / Tess Px / Radius / Detail Height / Detail UV / Disp Scale 输入。这些输入只在
 detail MI 文档打开时启用，并通过既有 `SetMaterialParameterOverride` 写入
-`u_terrainTessMax`、`u_terrainTessRadiusM`、`u_detailAmplitudeM`、
+`u_terrainTessMax`、`u_terrainTessTargetPixels`、`u_terrainTessRadiusM`、`u_detailAmplitudeM`、
 `u_detailUvScale`、`u_layerDisplacementScale`；基础 MI 没有这些参数。
 搜索按名称、key、source set 过滤并显示可见/总数；无匹配时显示显式空消息。Grid/List
 各自按固定尺寸窗口挂载：Grid 卡宽 144px + 6px 间距 = 150px 单元格、行高

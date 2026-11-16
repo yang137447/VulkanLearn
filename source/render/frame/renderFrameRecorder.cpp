@@ -113,7 +113,9 @@ void RenderFrameRecorder::UpdateGlobalUBO(
     bool hasRenderScene,
     const std::function<void()>& refreshRenderScene,
     VL::CsmRuntime& csmRuntime,
-    uint32_t currentFrame)
+    uint32_t currentFrame,
+    uint32_t viewportWidth,
+    uint32_t viewportHeight)
 {
     UpdateGlobalUBOWithProjectionTransform(
         commandBuffer,
@@ -124,6 +126,8 @@ void RenderFrameRecorder::UpdateGlobalUBO(
         refreshRenderScene,
         csmRuntime,
         currentFrame,
+        viewportWidth,
+        viewportHeight,
         1.0f,
         1.0f,
         0.0f,
@@ -139,6 +143,8 @@ void RenderFrameRecorder::UpdateGlobalUBOWithProjectionTransform(
     const std::function<void()>& refreshRenderScene,
     VL::CsmRuntime& csmRuntime,
     uint32_t currentFrame,
+    uint32_t viewportWidth,
+    uint32_t viewportHeight,
     float projectionScaleX,
     float projectionScaleY,
     float projectionOffsetX,
@@ -231,6 +237,13 @@ void RenderFrameRecorder::UpdateGlobalUBOWithProjectionTransform(
         static_cast<float>(VL::kMaxVolumetricFogLayers),
         fogEnabled ? 1.0f : 0.0f);
     ubo.fogParams3 = Eigen::Vector4f::Zero();
+    const float renderWidth = static_cast<float>(std::max(viewportWidth, 1u));
+    const float renderHeight = static_cast<float>(std::max(viewportHeight, 1u));
+    ubo.viewportParams = Eigen::Vector4f(
+        renderWidth,
+        renderHeight,
+        1.0f / renderWidth,
+        1.0f / renderHeight);
     const float cameraExposureScale = VL::ExposureScale(camera.exposure);
     const bool autoExposureEnabled =
         camera.exposure.mode == VL::ExposureMode::Auto;

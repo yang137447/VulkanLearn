@@ -16,17 +16,30 @@ layout(vertices = 4) out;
 layout(location = 0) in MaterialVaryings v2fIn[];
 layout(location = 0) out MaterialVaryings v2fOut[];
 
-// 距离越近细分越高，半径外严格回到 1，保证与未细分邻接 patch 的边界一致。
-float TerrainTessFactorForDistance(float distanceCm)
+// 细分因子按 patch 边在屏幕上的像素长度计算：近处自然高、远处按目标像素数
+// 降到 1，而不是按世界距离继续细分。u_terrainTessRadiusM 仍是作者上限，
+// 在 0.8R..R 平滑退回 1，避免 LOD0 边界硬跳。
+float TerrainTessFactorForEdge(vec3 edgeStart, vec3 edgeEnd)
 {
-    const float radiusCm = max(u_terrainTessRadiusM, 0.0) * 100.0;
     const float maxTess = max(u_terrainTessMax, 1.0);
-    if (radiusCm <= 1.0e-3)
-    {
-        return 1.0;
-    }
-    const float falloff = 1.0 - smoothstep(0.0, radiusCm, distanceCm);
-    return clamp(mix(1.0, maxTess, falloff), 1.0, maxTess);
+    const float targetPixels = clamp(u_terrainTessTargetPixels, 1.0, 16.0);
+    const vec2 viewportPixels = max(uboVP.viewportParams.xy, vec2(1.0));
+    const vec4 clipStart = uboVP.viewProjection * vec4(edgeStart, 1.0);
+    const vec4 clipEnd = uboVP.viewProjection * vec4(edgeEnd, 1.0);
+    // 任一端点在相机后方时 NDC 会翻转；直接退回 1，避免生成巨大因子。
+    if (clipStart.w <= 0.05 || clipEnd.w <= 0.05) return 1.0;
+    const vec2 ndcStart = clipStart.xy / clipStart.w;
+    const vec2 ndcEnd = clipEnd.xy / clipEnd.w;
+    const float edgePixels = length((ndcEnd - ndcStart) * 0.5 * viewportPixels);
+
+    const float radiusCm = max(u_terrainTessRadiusM, 0.0) * 100.0;
+    const float midDistance = length(
+        0.5 * (edgeStart + edgeEnd) - uboVP.cameraPosition);
+    const float radiusFade = radiusCm <= 1.0e-3
+        ? 0.0
+        : 1.0 - smoothstep(0.8 * radiusCm, radiusCm, midDistance);
+    const float factor = clamp(edgePixels / targetPixels, 1.0, maxTess);
+    return mix(1.0, factor, radiusFade);
 }
 
 void main()
@@ -37,26 +50,25 @@ void main()
 
     if (gl_InvocationID == 0)
     {
-        const vec3 cameraPosition = uboVP.cameraPosition;
         const vec3 p0 = v2fIn[0].worldPosition;
         const vec3 p1 = v2fIn[1].worldPosition;
         const vec3 p2 = v2fIn[2].worldPosition;
         const vec3 p3 = v2fIn[3].worldPosition;
 
         // 外边因子只用边的两个端点计算。相邻 patch 共享同一条边时端点相同，
-        // 因此中点距离相同，equal_spacing 下边界顶点完全一致，不会产生裂缝。
-        gl_TessLevelOuter[0] = TerrainTessFactorForDistance(
-            length(0.5 * (p0 + p1) - cameraPosition));
-        gl_TessLevelOuter[1] = TerrainTessFactorForDistance(
-            length(0.5 * (p1 + p2) - cameraPosition));
-        gl_TessLevelOuter[2] = TerrainTessFactorForDistance(
-            length(0.5 * (p2 + p3) - cameraPosition));
-        gl_TessLevelOuter[3] = TerrainTessFactorForDistance(
-            length(0.5 * (p3 + p0) - cameraPosition));
+        // 因此屏幕投影相同，equal_spacing 下边界顶点完全一致，不会产生裂缝。
+        const float edge01 = TerrainTessFactorForEdge(p0, p1);
+        const float edge12 = TerrainTessFactorForEdge(p1, p2);
+        const float edge23 = TerrainTessFactorForEdge(p2, p3);
+        const float edge30 = TerrainTessFactorForEdge(p3, p0);
+        gl_TessLevelOuter[0] = edge01;
+        gl_TessLevelOuter[1] = edge12;
+        gl_TessLevelOuter[2] = edge23;
+        gl_TessLevelOuter[3] = edge30;
 
-        // 内部因子不参与跨 patch 边界匹配，直接用 patch 中心距离即可。
-        const float insideFactor = TerrainTessFactorForDistance(
-            length(0.25 * (p0 + p1 + p2 + p3) - cameraPosition));
+        // 内部因子不参与跨 patch 边界匹配；取四条边的最大值，避免内部比
+        // 屏幕空间目标更稀。
+        const float insideFactor = max(max(edge01, edge12), max(edge23, edge30));
         gl_TessLevelInner[0] = insideFactor;
         gl_TessLevelInner[1] = insideFactor;
     }

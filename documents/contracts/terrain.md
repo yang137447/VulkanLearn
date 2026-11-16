@@ -397,8 +397,11 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
 - patch 索引：LOD0 为 `chunkQuads²` 个 base quad；LOD>0 为内圈
   `(quadsPerChunk-2)²` 个 quad 加过渡带三角形（每个三角形编码成
   `(i0,i1,i2,i2)` 退化 quad）。patch 顺序是 quad 周长 `a,b,d,c`。
-- 细分因子：TCS 用相机到边中点/ patch 中心的距离计算 outer/inner 因子，
-  半径外严格为 1；共享边的两个 patch 用同一对端点，因子逐位一致。TES 的
+- 细分因子：TCS 把 patch 边的两个端点投影到屏幕，按
+  `u_terrainTessTargetPixels` 目标像素长度计算 outer 因子，inner 取四条边的
+  最大值，再 clamp 到 `[1, u_terrainTessMax]`；`u_terrainTessRadiusM` 在
+  `0.8R..R` 平滑退回 1。这样近处按屏幕密度细分、远处不会继续按世界距离过采样。
+  共享边的两个 patch 用同一对端点，投影和因子逐位一致。TES 的
   `layout(quads, equal_spacing, cw)` 必须与管线固定的 `FrontFace::eClockwise`
   一致（写成 `ccw` 会让地形整体被背面剔除）。
 - 主位移：TES 用与 near-field detail **color/normal 完全相同的采样**——主导层
@@ -420,10 +423,11 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
 - 相关材质参数：`u_layerDisplacementScale`（主导层位移倍率，默认 1）、
   `detailHeightMap`、`u_detailAmplitudeM`、`u_detailNormalStrength`、
   `u_detailUvScale`（与 near-field detail 共用的 UV 倍率）、
-  `u_terrainTessRadiusM`、`u_terrainTessMax`（1..32）。这些参数只存在于 LOD0
+  `u_terrainTessRadiusM`、`u_terrainTessMax`（1..32）、
+  `u_terrainTessTargetPixels`（1..16，默认 4）。这些参数只存在于 LOD0
   的 detail MI；Landscape 层详情抽屉把逐层 `uvScale`/`uvRotation`/`displacementM`
   放在同一组，并在 TR 声明 `detailMaterialInstancePath` 时显示 detail MI 路径和
-  Tess Max / Radius / Detail Height / Detail UV / Disp Scale 输入，打开 detail MI
+  Tess Max / Tess Px / Radius / Detail Height / Detail UV / Disp Scale 输入，打开 detail MI
   后可直接编辑，基础 MI 不暴露这些字段。
 - 两个 MI 必须共享同一组 VT 纹理与参数：`RendererTerrainLoader` 会把基础 MI 的
   page table / atlas / 权重图纹理与 `u_pageTableSize`、`u_pageResolution`、

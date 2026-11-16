@@ -114,7 +114,9 @@ public:
         bool hasRenderScene,
         const std::function<void()>& refreshRenderScene,
         VL::CsmRuntime& csmRuntime,
-        uint32_t currentFrame);
+        uint32_t currentFrame,
+        uint32_t viewportWidth,
+        uint32_t viewportHeight);
     void UpdateGlobalUBOWithProjectionTransform(
         vk::CommandBuffer& commandBuffer,
         VL::RendererFrameResources& frameResources,
@@ -124,6 +126,8 @@ public:
         const std::function<void()>& refreshRenderScene,
         VL::CsmRuntime& csmRuntime,
         uint32_t currentFrame,
+        uint32_t viewportWidth,
+        uint32_t viewportHeight,
         float projectionScaleX,
         float projectionScaleY,
         float projectionOffsetX,

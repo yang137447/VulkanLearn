@@ -575,6 +575,10 @@
                                         <input id="terrain-material-tess-max" type="text" data-action="terrain-material-tess-max" value="" title="Detail MI u_terrainTessMax: maximum tessellation factor (1-32)"/>
                                     </div>
                                     <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Tess Px</span>
+                                        <input id="terrain-material-tess-pixels" type="text" data-action="terrain-material-tess-pixels" value="" title="Detail MI u_terrainTessTargetPixels: target screen-space edge length; larger values reduce distant tessellation"/>
+                                    </div>
+                                    <div class="terrain-details-row">
                                         <span class="terrain-details-label">Radius m</span>
                                         <input id="terrain-material-tess-radius" type="text" data-action="terrain-material-tess-radius" value="" title="Detail MI u_terrainTessRadiusM: camera radius where tessellation and displacement fade out"/>
                                     </div>
