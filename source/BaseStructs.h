@@ -128,6 +128,9 @@ struct alignas(16) UBOGlobal
     // xy = 场景逻辑渲染宽高（像素），zw = 1/宽、1/高；地形 TCS 用它把 patch
     // 边投影到屏幕空间，按目标像素数决定细分因子，避免远处过采样。
     Eigen::Vector4f viewportParams = Eigen::Vector4f::Zero();
+    // xyz = 玩家/角色世界位置，w = 脚下位移抑制半径（cm）。视觉细分位移
+    // 不能把角色脚埋进地形；物理仍使用宏高度场。
+    Eigen::Vector4f terrainFocusParams = Eigen::Vector4f::Zero();
 };
 
 static_assert(offsetof(SkyParametersGPU, sunDirectionIntensity) == 0, "SkyParametersGPU sunDirectionIntensity must match GLSL std140 layout");
@@ -154,6 +157,7 @@ static_assert(offsetof(UBOGlobal, fogParams1) == 1136, "UBOGlobal fogParams1 mus
 static_assert(offsetof(UBOGlobal, fogParams2) == 1152, "UBOGlobal fogParams2 must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, fogParams3) == 1168, "UBOGlobal fogParams3 must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, viewportParams) == 1184, "UBOGlobal viewportParams must match GLSL std140 layout");
+static_assert(offsetof(UBOGlobal, terrainFocusParams) == 1200, "UBOGlobal terrainFocusParams must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, sunDirectionIntensity) == 976, "UBOGlobal sunDirectionIntensity must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, sunColorAngularRadius) == 992, "UBOGlobal sunColorAngularRadius must match GLSL std140 layout");
 static_assert(offsetof(UBOGlobal, skyParameters) + offsetof(SkyParametersGPU, zenithColor) == 1008, "UBOGlobal zenithColor must match GLSL std140 layout");

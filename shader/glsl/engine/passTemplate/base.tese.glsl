@@ -86,7 +86,18 @@ void main()
     // 地表可能穿过相机近裁剪面或把相机包进背面剔除区域，看起来像“近处被裁剪”。
     const float nearGuardCm = 200.0;
     const float nearFade = smoothstep(0.0, nearGuardCm, cameraDistanceCm);
-    const float displacementFade = farFade * nearFade;
+    // 角色脚下抑制：物理仍踩在宏高度场上，视觉位移不能在脚边把地面抬高。
+    // xz 距离足够：角色站在地表，垂直分量对“脚边”判断没有帮助。
+    const float focusRadiusCm = max(uboVP.terrainFocusParams.w, 0.0);
+    float focusFade = 1.0;
+    if (focusRadiusCm > 1.0e-3)
+    {
+        const float focusDistanceCm = length(
+            worldPosition.xz - uboVP.terrainFocusParams.xz);
+        focusFade = smoothstep(
+            0.5 * focusRadiusCm, focusRadiusCm, focusDistanceCm);
+    }
+    const float displacementFade = farFade * nearFade * focusFade;
 
     // 与片元阶段共用同一份 top-4 解析；TES 没有可靠的隐式导数，因此
     // 所有层采样都走显式 LOD，并跳过 fragment 专用的 height-blend。
@@ -104,56 +115,70 @@ void main()
     ctx.texCoord1 = texCoord1;
     ctx.worldTangent = worldTangent;
 
-    if (displacementFade > 0.0 && abs(u_layerDisplacementScale) > 1.0e-4)
+    const float amplitudeCm = u_detailAmplitudeM * 100.0;
+    const bool layerDisplacementActive =
+        abs(u_layerDisplacementScale) > 1.0e-4;
+    const bool detailActive = abs(u_detailAmplitudeM) > 0.001;
+    if (displacementFade > 0.0 && (layerDisplacementActive || detailActive))
     {
         int ids[4];
         float weights[4];
         TerrainResolveTopLayers(ctx, false, false, ids, weights);
-        const float layerDisplacementCm =
-            TerrainBlendedLayerDisplacementMeters(ctx, ids, weights) *
-            u_layerDisplacementScale * 100.0;
-        worldPosition += worldNormal * layerDisplacementCm * displacementFade;
-    }
 
-    const float amplitudeCm = u_detailAmplitudeM * 100.0;
-    // detailHeightMap 只是可选叠加：UV 与颜色基础 tiling 对齐，默认
-    // amplitude 0 时完全不采样。
-    if (abs(u_detailAmplitudeM) > 0.001 && displacementFade > 0.0)
-    {
-        const float uvScale = max(u_uvScale * u_detailUvScale, 0.001);
-        const vec2 detailUv = texCoord * uvScale;
-        const float centerHeight =
-            TerrainDetailHeight(detailUv);
-        // 参数按米书写，World 单位是 cm；沿插值世界法线位移，保证斜坡上方向正确。
-        worldPosition += worldNormal *
-            ((centerHeight - 0.5) * amplitudeCm * displacementFade);
-
-        // 用 ±0.05 tile 的高度差在切线空间扰动法线；不依赖世界尺度，
-        // UV 已与颜色 tiling 对齐，因此细节方向与颜色纹理一致。
-        const float epsilonUv = 0.05;
-        const float heightLeft = TerrainDetailHeight(
-            detailUv - vec2(epsilonUv, 0.0));
-        const float heightRight = TerrainDetailHeight(
-            detailUv + vec2(epsilonUv, 0.0));
-        const float heightDown = TerrainDetailHeight(
-            detailUv - vec2(0.0, epsilonUv));
-        const float heightUp = TerrainDetailHeight(
-            detailUv + vec2(0.0, epsilonUv));
-        const float gradientU =
-            (heightRight - heightLeft) * u_detailNormalStrength;
-        const float gradientV =
-            (heightUp - heightDown) * u_detailNormalStrength;
-        const float normalWeight = displacementFade *
-            clamp(abs(u_detailAmplitudeM) * 4.0, 0.0, 1.0);
-        if (normalWeight > 0.0)
+        if (layerDisplacementActive)
         {
-            const vec3 baseNormal = normalize(worldNormal);
-            const vec3 tangent = normalize(worldTangent.xyz);
-            const vec3 bitangent = normalize(cross(baseNormal, tangent)) *
-                (worldTangent.w < 0.0 ? -1.0 : 1.0);
-            const vec3 detailNormal = normalize(
-                baseNormal - (tangent * gradientU + bitangent * gradientV));
-            worldNormal = normalize(mix(baseNormal, detailNormal, normalWeight));
+            const float layerDisplacementCm =
+                TerrainBlendedLayerDisplacementMeters(ctx, ids, weights) *
+                u_layerDisplacementScale * 100.0;
+            worldPosition +=
+                worldNormal * layerDisplacementCm * displacementFade;
+        }
+
+        // 主导层 displacementM=0 的水/海面保持宏高度场平整；不能叠加
+        // 全局 tiling 高度位移，否则角色脚会埋进视觉地形。
+        const float dominantDisplacementM =
+            TerrainDominantLayerDisplacementMeters(ids, weights);
+        const float detailSolidity = smoothstep(
+            0.004, 0.03, dominantDisplacementM);
+        if (detailActive && detailSolidity > 0.0)
+        {
+            const float detailFade = displacementFade * detailSolidity;
+            const float uvScale = max(u_uvScale * u_detailUvScale, 0.001);
+            const vec2 detailUv = texCoord * uvScale;
+            const float centerHeight =
+                TerrainDetailHeight(detailUv);
+            // 参数按米书写，World 单位是 cm；沿插值世界法线位移，保证斜坡上方向正确。
+            worldPosition += worldNormal *
+                ((centerHeight - 0.5) * amplitudeCm * detailFade);
+
+            // 用 ±0.05 tile 的高度差在切线空间扰动法线；不依赖世界尺度，
+            // UV 已与颜色 tiling 对齐，因此细节方向与颜色纹理一致。
+            const float epsilonUv = 0.05;
+            const float heightLeft = TerrainDetailHeight(
+                detailUv - vec2(epsilonUv, 0.0));
+            const float heightRight = TerrainDetailHeight(
+                detailUv + vec2(epsilonUv, 0.0));
+            const float heightDown = TerrainDetailHeight(
+                detailUv - vec2(0.0, epsilonUv));
+            const float heightUp = TerrainDetailHeight(
+                detailUv + vec2(0.0, epsilonUv));
+            const float gradientU =
+                (heightRight - heightLeft) * u_detailNormalStrength;
+            const float gradientV =
+                (heightUp - heightDown) * u_detailNormalStrength;
+            const float normalWeight = detailFade *
+                clamp(abs(u_detailAmplitudeM) * 4.0, 0.0, 1.0);
+            if (normalWeight > 0.0)
+            {
+                const vec3 baseNormal = normalize(worldNormal);
+                const vec3 tangent = normalize(worldTangent.xyz);
+                const vec3 bitangent = normalize(cross(baseNormal, tangent)) *
+                    (worldTangent.w < 0.0 ? -1.0 : 1.0);
+                const vec3 detailNormal = normalize(
+                    baseNormal - (tangent * gradientU + bitangent * gradientV));
+                worldNormal = normalize(
+                    mix(baseNormal, detailNormal, normalWeight));
+            }
         }
     }
 

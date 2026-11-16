@@ -416,10 +416,15 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   `texCoord * u_uvScale * u_detailUvScale` 采样，幅度 `u_detailAmplitudeM`
   （默认 0 = 关闭），法线用 ±0.05 tile 的 UV 梯度按 `u_detailNormalStrength`
   在切线空间扰动。默认占位纹理是 clamp 常量 0.5，开启幅度前必须绑定
-  `wrapMode: repeat` 的真实高度图。
-- 两种位移都乘 `u_terrainTessRadiusM` 的远距淡出与相机 2 m 内的近距淡出；
-  位移只影响视觉：物理仍使用宏高度场；阴影/局部阴影 pass 不生成 tesc/tese，
-  仍按未位移的宏网格投影，因此幅度应保持较小以避免阴影与几何不一致。
+  `wrapMode: repeat` 的真实高度图。该叠加按主导层 `displacementM` 做
+  `smoothstep(0.004, 0.03)` 掩码：River Water/Sea 等 `displacementM=0` 的
+  水面不叠加 tiling 高度，保持宏高度场平整；角色脚下另由
+  `terrainFocusParams` 抑制视觉位移。
+- 两种位移都乘 `u_terrainTessRadiusM` 的远距淡出、相机 2 m 内的近距淡出，
+  以及角色脚下 1.2 m 的水平抑制（`UBOGlobal.terrainFocusParams`；优先
+  `__blueprint/echo`，否则第一个蒙皮蓝图实例）。位移只影响视觉：物理仍使用
+  宏高度场；阴影/局部阴影 pass 不生成 tesc/tese，仍按未位移的宏网格投影，
+  因此幅度应保持较小以避免阴影与几何不一致。
 - 相关材质参数：`u_layerDisplacementScale`（主导层位移倍率，默认 1）、
   `detailHeightMap`、`u_detailAmplitudeM`、`u_detailNormalStrength`、
   `u_detailUvScale`（与 near-field detail 共用的 UV 倍率）、

@@ -244,6 +244,32 @@ void RenderFrameRecorder::UpdateGlobalUBOWithProjectionTransform(
         renderHeight,
         1.0f / renderWidth,
         1.0f / renderHeight);
+    // 视觉细分位移不能把角色脚埋进地形；优先 Echo 蓝图，否则取第一个
+    // 带蒙皮的蓝图实例作为脚下抑制中心。没有角色时 w=0，shader 不抑制。
+    const VL::RenderDrawPacket* focusDraw = nullptr;
+    for (const VL::RenderDrawPacket& draw : renderScene.drawPackets)
+    {
+        if (draw.sceneObjectIdentity.rfind("__blueprint/echo", 0) == 0)
+        {
+            focusDraw = &draw;
+            break;
+        }
+        if (draw.skinPose == nullptr ||
+            draw.sceneObjectIdentity.rfind("__blueprint/", 0) != 0)
+        {
+            continue;
+        }
+        if (focusDraw == nullptr)
+        {
+            focusDraw = &draw;
+        }
+    }
+    if (focusDraw != nullptr)
+    {
+        const Eigen::Vector3f focus = focusDraw->model.block<3, 1>(0, 3);
+        ubo.terrainFocusParams = Eigen::Vector4f(
+            focus.x(), focus.y(), focus.z(), 120.0f);
+    }
     const float cameraExposureScale = VL::ExposureScale(camera.exposure);
     const bool autoExposureEnabled =
         camera.exposure.mode == VL::ExposureMode::Auto;
