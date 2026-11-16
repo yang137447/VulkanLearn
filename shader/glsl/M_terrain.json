@@ -118,7 +118,7 @@
         },
         "u_detailUvScale": {
             "type": "float",
-            "default": 6.0,
+            "default": 12.0,
             "range": {
                 "min": 1.0,
                 "max": 32.0

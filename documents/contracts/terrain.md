@@ -424,7 +424,7 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   仍按未位移的宏网格投影。因此几何位移必须与碰撞高度场容差一致（见下条）。
 - 相关材质参数：`u_layerDisplacementScale`（主导层位移倍率，默认 1）、
   `detailHeightMap`、`u_detailAmplitudeCm`、`u_detailNormalStrength`、
-  `u_detailUvScale`（与 near-field detail 共用的 UV 倍率）、
+  `u_detailUvScale`（与 near-field detail 共用的 UV 倍率，默认 12）、
   `u_terrainTessRadiusM`、`u_terrainTessMax`（1..32）、
   `u_terrainTessTargetPixels`（1..16，默认 4）。这些参数只存在于 LOD0
   的 detail MI；Landscape 层详情抽屉把逐层 `uvScale`/`uvRotation`/`displacementM`
