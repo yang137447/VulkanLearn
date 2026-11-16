@@ -31,6 +31,7 @@
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include "physics/joltRegistration.h"
 #include "terrain/terrainCollision.h"
+#include "terrain/terrainDisplacementSampler.h"
 
 namespace VL
 {
@@ -154,6 +155,10 @@ struct ScriptPhysicsWorld::Impl
     // 逆序析构保证这一点。放置/替换只经由 SetTerrainCollisions。
     std::vector<TerrainCollisionBody> terrainBodies;
     std::map<JPH::BodyID, std::string> terrainIdentities;
+    // CPU 同源位移：脚 IK 查询视觉高度/法线；body 仍是宏高度 Jolt 碰撞。
+    std::shared_ptr<TerrainHeightTextureCache> terrainTextureCache;
+    std::map<std::string, std::shared_ptr<const TerrainDisplacementSampler>>
+        terrainSamplers;
     std::map<std::string, Body> bodies;
     std::map<JPH::BodyID, std::string> identities;
     JPH::Ref<ScriptCollisionGroupFilter> collisionGroups = new ScriptCollisionGroupFilter();
@@ -737,7 +742,38 @@ Animation::FootGroundHit ScriptPhysicsWorld::ProbeGround(const std::string& owne
     const Eigen::Vector3f from = origin * 0.01f, delta = displacement * 0.01f;
     const JPH::RRayCast ray({from.x(), from.y(), from.z()}, {delta.x(), delta.y(), delta.z()});
     JPH::RayCastResult hit;
-    if (!impl->world.GetNarrowPhaseQuery().CastRay(ray, hit, {}, {}, filter)) return result;
+    if (!impl->world.GetNarrowPhaseQuery().CastRay(ray, hit, {}, {}, filter))
+    {
+        // 视觉位移可能把地表推到宏高度 body 之上；垂直探针落空时用 CPU
+        // 同源采样器补一次，避免脚 IK 在坡顶/大位移处直接丢失支撑。
+        if (!impl->terrainSamplers.empty() &&
+            std::abs(displacement.x()) < 1.0e-3f &&
+            std::abs(displacement.z()) < 1.0e-3f &&
+            displacement.y() < 0.0f)
+        {
+            for (const auto& entry : impl->terrainSamplers)
+            {
+                const TerrainDisplacementSampler& sampler = *entry.second;
+                if (!sampler.ContainsWorldXz(origin.x(), origin.z()))
+                    continue;
+                const TerrainDisplacementSample sample =
+                    sampler.SampleWorld(origin.x(), origin.z());
+                if (!sample.valid || !sample.insideFootprint)
+                    continue;
+                const float fraction =
+                    (sample.heightCm - origin.y()) / displacement.y();
+                if (fraction < 0.0f || fraction > 1.0f)
+                    continue;
+                result.hit = true;
+                result.point = Eigen::Vector3f(
+                    origin.x(), sample.heightCm, origin.z());
+                result.normal = sample.normal;
+                result.supportIdentity = entry.first;
+                return result;
+            }
+        }
+        return result;
+    }
     std::string identity;
     if (!impl->TryIdentity(hit.mBodyID, identity)) return result;
     const auto support = impl->bodies.find(identity);
@@ -748,10 +784,40 @@ Animation::FootGroundHit ScriptPhysicsWorld::ProbeGround(const std::string& owne
     if (support != impl->bodies.end() && support->second.motion != "static") return result;
     JPH::BodyLockRead lock(impl->world.GetBodyLockInterface(), hit.mBodyID);
     const auto point = ray.GetPointOnRay(hit.mFraction);
-    const auto normal = lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, point);
+    Eigen::Vector3f pointCm =
+        Eigen::Vector3f(point.GetX(), point.GetY(), point.GetZ()) * 100;
+    Eigen::Vector3f normal = [&]()
+    {
+        const auto value =
+            lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, point);
+        return Eigen::Vector3f(value.GetX(), value.GetY(), value.GetZ());
+    }();
+    // 地形命中返回视觉高度/平滑法线：Jolt heightfield 只有宏高度，
+    // 不含 TES 的层位移与 detail。采样器覆盖点必须仍在探针线段内。
+    const auto terrainBody = impl->terrainIdentities.find(hit.mBodyID);
+    if (terrainBody != impl->terrainIdentities.end())
+    {
+        const auto sampler = impl->terrainSamplers.find(terrainBody->second);
+        if (sampler != impl->terrainSamplers.end())
+        {
+            const TerrainDisplacementSample visual =
+                sampler->second->SampleWorld(pointCm.x(), pointCm.z());
+            if (visual.valid && visual.insideFootprint)
+            {
+                const float fraction = std::abs(displacement.y()) > 1.0e-4f
+                    ? (visual.heightCm - origin.y()) / displacement.y()
+                    : 1.0f;
+                if (fraction >= -0.05f && fraction <= 1.05f)
+                {
+                    pointCm.y() = visual.heightCm;
+                    normal = visual.normal;
+                }
+            }
+        }
+    }
     result.hit = true;
-    result.point = Eigen::Vector3f(point.GetX(), point.GetY(), point.GetZ()) * 100;
-    result.normal = {normal.GetX(), normal.GetY(), normal.GetZ()};
+    result.point = pointCm;
+    result.normal = normal;
     result.supportIdentity = std::move(identity);
     return result;
 }
@@ -760,13 +826,17 @@ void ScriptPhysicsWorld::SetMeshGeometry(const std::map<std::string, std::vector
     impl->meshGeometry = triangles;
 }
 void ScriptPhysicsWorld::SetTerrainCollisions(
-    const std::vector<TerrainCollisionInstance>& instances)
+    const std::vector<TerrainCollisionInstance>& instances,
+    const std::filesystem::path& resourceRoot,
+    std::shared_ptr<TerrainHeightTextureCache> textureCache)
 {
     // 先完整创建新集合，再一次性替换：任一 terrain 创建失败时旧 body 仍然有效，
     // 不会留下半套地形或悬空句柄。TerrainCollisionBody 的析构在 Impl 里早于
     // PhysicsSystem，因此替换/Stop/World 换代都不会命中已销毁的 Jolt 世界。
     std::vector<TerrainCollisionBody> bodies;
     std::map<JPH::BodyID, std::string> identities;
+    std::map<std::string, std::shared_ptr<const TerrainDisplacementSampler>>
+        samplers;
     bodies.reserve(instances.size());
     for (const TerrainCollisionInstance& instance : instances)
     {
@@ -775,13 +845,33 @@ void ScriptPhysicsWorld::SetTerrainCollisions(
         identities.emplace(JPH::BodyID(body.GetBodyIdValue()), instance.placementId);
         bodies.push_back(std::move(body));
     }
+    std::shared_ptr<TerrainHeightTextureCache> cache = std::move(textureCache);
+    if (!resourceRoot.empty())
+    {
+        if (!cache)
+            cache = std::make_shared<TerrainHeightTextureCache>();
+        for (const TerrainCollisionInstance& instance : instances)
+        {
+            samplers.emplace(
+                instance.placementId,
+                CreateTerrainDisplacementSampler(
+                    resourceRoot, instance, *cache));
+        }
+    }
     impl->terrainBodies = std::move(bodies);
     impl->terrainIdentities = std::move(identities);
+    impl->terrainSamplers = std::move(samplers);
+    impl->terrainTextureCache = std::move(cache);
 }
 
 size_t ScriptPhysicsWorld::TerrainCollisionBodyCount() const
 {
     return impl->terrainBodies.size();
+}
+
+size_t ScriptPhysicsWorld::TerrainDisplacementSamplerCount() const
+{
+    return impl->terrainSamplers.size();
 }
 
 std::vector<std::string> ScriptPhysicsWorld::TerrainCollisionPlacementIds() const

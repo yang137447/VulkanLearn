@@ -15,6 +15,15 @@ struct TerrainTileCandidateList
     std::vector<uint8_t> layerIds;
 };
 
+// 单个权重 texel 的 top-4 烘焙结果（id 已是 World 全局层号）。
+// CPU 位移采样器与页烘焙共用同一条 SelectTop4/噪声/高度坡度路径，
+// 避免脚 IK 消费另一套权重近似。
+struct TerrainTop4Texel
+{
+    uint8_t ids[4] = {0, 0, 0, 0};
+    uint8_t weights[4] = {0, 0, 0, 0};
+};
+
 // Phase B 的 CPU 烘焙结果：每 texel 4 个全局 layer ID + 4 个 8-bit 权重。
 // ids/weights 都是 RGBA8，按行优先；tiles 保存每 tile 的候选层，未来直接喂给 VT。
 struct TerrainWeightMap
@@ -80,6 +89,17 @@ public:
         uint32_t pageResolution,
         uint32_t tileX,
         uint32_t tileZ);
+
+    // 只烘焙指定 texel 的 top-4，公式与 BuildPage 的 BakeTile 逐 texel 一致。
+    // resolution = tilesPerSide * pageResolution；texelX/Y 是整张权重图的绝对 texel。
+    // 调用方负责缓存 tile 的候选层列表。
+    static TerrainTop4Texel SampleTop4Texel(
+        const TerrainBuildPlan& plan,
+        uint32_t resolution,
+        const TerrainTileCandidateList& candidates,
+        uint32_t texelX,
+        uint32_t texelY,
+        const std::vector<uint8_t>& layerIdMap = {});
 
     static TerrainVirtualTexture BuildVirtualTexture(
         const TerrainBuildPlan& plan,

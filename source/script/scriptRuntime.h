@@ -17,6 +17,7 @@ class World;
 struct InputActionState;
 class DiagnosticsSubsystem;
 class ScriptPhysicsWorld;
+class TerrainHeightTextureCache;
 
 // 候选 World 独占托管实例上下文；RAII 只释放自己的句柄，不持有原生 World 指针。
 class ScriptWorldContext
@@ -147,6 +148,8 @@ private:
     };
     std::vector<PendingScriptLog> pendingDiagnostics;
     std::shared_ptr<ScriptPhysicsWorld> physics;
+    // 跨 Play 共享的 16-bit 地形高度纹理缓存（脚 IK 同源位移）。
+    std::shared_ptr<TerrainHeightTextureCache> terrainTextureCache;
     std::string resourceRoot, observedAssets, pendingAssets;
     float assetPollTime = 0;
 };

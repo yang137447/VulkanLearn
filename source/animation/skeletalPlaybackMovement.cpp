@@ -383,6 +383,7 @@ void SkeletalPlayback::SetFootPlacementEnabled(bool enabled)
     {
         footPlacement.emplace(asset->mesh);
         footPlacement->SetLockType(footLockType);
+        footPlacement->SetMaxPenetrationCm(footPlacementMaxPenetrationCm);
     }
     if (!footPlacement || footPlacement->State().enabled == enabled) return;
     footPlacement->SetEnabled(enabled);
@@ -398,6 +399,15 @@ void SkeletalPlayback::SetFootPlacementLockType(FootLockType type)
     footPlacement->SetLockType(type);
     footPlacementSource.reset();
     ResetFootPlacement("lock-mode");
+}
+
+void SkeletalPlayback::SetFootPlacementMaxPenetrationCm(float value)
+{
+    if (!std::isfinite(value))
+        return;
+    footPlacementMaxPenetrationCm = std::clamp(value, 0.0f, 60.0f);
+    if (footPlacement)
+        footPlacement->SetMaxPenetrationCm(footPlacementMaxPenetrationCm);
 }
 
 const FootPlacementState& SkeletalPlayback::FootPlacement() const

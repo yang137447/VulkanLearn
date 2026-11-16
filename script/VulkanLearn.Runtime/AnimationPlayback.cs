@@ -82,6 +82,7 @@ internal sealed record AnimationCommand(string Clip, bool Loop, float Rate, bool
     string SyncGroup = "", float SyncPhase = -1);
 internal sealed record SlopeWarpingCommand(bool Enabled, float Weight, float MaxSlopeDegrees,
     float PelvisHeightOffset, float FootCompensation, float ResponseSpeed, float MaxPelvisOffset);
+internal sealed record FootPlacementCommand(bool Enabled, string FootLock);
 internal sealed record PoseDriverCommand(bool Enabled, string Asset);
 internal sealed record PostProcessCommand(bool Enabled, string Asset);
 internal sealed record BonePhysicsCommand(bool Enabled, string Asset, bool Debug);
@@ -106,6 +107,8 @@ public sealed class AnimationPlayback
     internal SlopeWarpingState SlopeWarpingFeedback;
     internal SlopeWarpingCommand? PendingSlopeWarping;
     internal SlopeWarpingCommand? ActiveSlopeWarping;
+    internal FootPlacementCommand? PendingFootPlacement;
+    internal FootPlacementCommand? ActiveFootPlacement;
     internal string[] ClipIds = [];
     // clipId -> 曲线名（大小写不敏感）-> 键数据；只由 animation_catalog 的 assets 段填充。
     internal readonly Dictionary<string, Dictionary<string, AnimationCurve>> CurveData = new(StringComparer.Ordinal);
@@ -239,6 +242,20 @@ public sealed class AnimationPlayback
         if (ActiveSlopeWarping == next && SlopeWarpingFeedback.Enabled == next.Enabled) return;
         ActiveSlopeWarping = next;
         PendingSlopeWarping = next;
+    }
+    // 独立于 Motion Matching 的足部 IK 开关：Echo 的 clip 状态机不走 Match，
+    // 因此需要一条可每帧声明的后处理配置命令。原生只在视觉姿态阶段求解，
+    // 不改 Actor 胶囊位置。
+    public void SetFootPlacement(bool enabled, string footLock = "Auto")
+    {
+        CheckRequest();
+        if (footLock is not ("Auto" or "Ball" or "Ankle"))
+            throw new ArgumentException("Foot lock requires Auto, Ball or Ankle.", nameof(footLock));
+        var next = new FootPlacementCommand(enabled, footLock);
+        // 播放器重建后反馈回到 disabled；即使声明值未变也要补发一次。
+        if (ActiveFootPlacement == next && FootPlacementFeedback.Enabled == enabled) return;
+        ActiveFootPlacement = next;
+        PendingFootPlacement = next;
     }
     // 只播放 clip；warp 的 target/窗口完全由 Montage 资产声明，这里不再接受 warpTargets。
     public void Play(string clip, bool loop = true, float rate = 1, bool inPlace = true)
@@ -930,6 +947,14 @@ public static partial class NativeBridge
                     footCompensation = slope.FootCompensation,
                     responseSpeed = slope.ResponseSpeed, maxPelvisOffset = slope.MaxPelvisOffset });
                 mesh.Animation.PendingSlopeWarping = null;
+            }
+            // 足部 IK 是独立后处理；与 slope 一样跟随播放命令之后应用，
+            // 关闭时也显式提交，保证重建后的播放器不会继承旧状态。
+            if (mesh.Animation.PendingFootPlacement is { } footPlacement)
+            {
+                commands.Add(new { component = mesh.Id, mode = "configureFootPlacement",
+                    enabled = footPlacement.Enabled, footLock = footPlacement.FootLock });
+                mesh.Animation.PendingFootPlacement = null;
             }
             // PoseDriver 与 slope 同属后处理配置，跟随播放命令之后应用；
             // 关闭时也显式提交一次，确保播放器重建后不会继承旧的曲线输出。

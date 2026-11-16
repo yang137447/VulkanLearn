@@ -9,6 +9,7 @@
 #include "script/scriptPhysicsMeshGeometry.h"
 #include "script/scriptPropertySchema.h"
 #include "script/scriptCompleteDeclaration.h"
+#include "terrain/terrainDisplacementSampler.h"
 #include "core/logStore.h"
 #include "commonFunction.h"
 #include "particles/particleAsset.h"
@@ -332,6 +333,8 @@ void ScriptRuntimeSubsystem::ReportTerrainCollisionStatistics() const
     std::cout
         << "[TerrainCollision] bodies=" << physics->TerrainCollisionBodyCount()
         << " placements=" << placements.size()
+        << " displacementSamplers="
+        << physics->TerrainDisplacementSamplerCount()
         << std::endl;
     for (const std::string& placement : placements)
         std::cout << "[TerrainCollision] placement=" << placement << std::endl;
@@ -376,7 +379,13 @@ bool ScriptRuntimeSubsystem::Control(World& world, ScriptPlayState requested, st
                 physics->SetMeshGeometry(BuildScriptPhysicsMeshGeometry(world));
                 // Play 才创建地形静态体；编辑器预览不经过这里。创建失败会抛异常，
                 // 由外层 catch 回滚到 Editing，不留下半套物理世界。
-                physics->SetTerrainCollisions(world.GetTerrainCollisionInstances());
+                if (!terrainTextureCache)
+                    terrainTextureCache =
+                        std::make_shared<TerrainHeightTextureCache>();
+                physics->SetTerrainCollisions(
+                    world.GetTerrainCollisionInstances(),
+                    resourceRoot,
+                    terrainTextureCache);
                 Apply(world, response);
                   world.TickScriptAnimations(0);
                 StepPhysics(world, 0);

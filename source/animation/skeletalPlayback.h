@@ -169,6 +169,9 @@ public:
     // 显式启用时验证腿链；组件刚性正 uniform scale 在应用入口验证。
     void SetFootPlacementEnabled(bool enabled);
     void SetFootPlacementLockType(FootLockType type);
+    // 视觉地形位移允许鞋底先低于地表再恢复；默认 28 cm。
+    void SetFootPlacementMaxPenetrationCm(float value);
+    float FootPlacementMaxPenetrationCm() const { return footPlacementMaxPenetrationCm; }
     FootLockType FootPlacementLockType() const { return footLockType; }
     void ResetFootPlacement(const char* reason);
     void ApplyFootPlacement(const Eigen::Matrix4f& component, bool grounded,
@@ -389,6 +392,7 @@ private:
     std::string motionWarpState;
     std::optional<FootPlacementSolver> footPlacement;
     FootLockType footLockType = FootLockType::Auto;
+    float footPlacementMaxPenetrationCm = 28.0f;
     std::shared_ptr<const std::vector<Eigen::Matrix4f>> footPlacementSource;
     std::optional<SlopeWarpingSolver> slopeWarping;
     SlopeWarpingParameters slopeWarpingSettings;

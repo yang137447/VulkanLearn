@@ -386,7 +386,7 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
         // 继续应用，否则会丢掉播放状态；其余命令仍保持“同一 batch 每个组件一条”。
         const bool postProcessConfiguration = mode == "configureSlopeWarping" ||
             mode == "configurePoseDriver" || mode == "configurePostProcess" ||
-            mode == "configureBonePhysics";
+            mode == "configureBonePhysics" || mode == "configureFootPlacement";
         if (!player || (!postProcessConfiguration && candidates.count(player)))
             throw std::invalid_argument("Script.InvalidAnimationTarget");
         const auto existing = candidates.find(player);
@@ -424,6 +424,24 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
                 Animation::FootPlacementSolver::ValidateComponent(targetMesh->model);
             candidate.SetSlopeWarpingParameters(parameters);
             candidate.SetSlopeWarpingEnabled(request.at("enabled").get<bool>());
+        }
+        else if (mode == "configureFootPlacement")
+        {
+            if (!request.at("enabled").is_boolean())
+                throw std::invalid_argument("Script.InvalidFootPlacementRequest");
+            const std::string footLock =
+                request.value("footLock", std::string("Auto"));
+            if (footLock != "Auto" && footLock != "Ball" &&
+                footLock != "Ankle")
+                throw std::invalid_argument("Script.InvalidFootPlacementRequest");
+            const bool enabled = request.at("enabled").get<bool>();
+            if (enabled)
+                Animation::FootPlacementSolver::ValidateComponent(targetMesh->model);
+            candidate.SetFootPlacementEnabled(enabled);
+            candidate.SetFootPlacementLockType(
+                footLock == "Ankle" ? Animation::FootLockType::PivotAroundAnkle :
+                    footLock == "Ball" ? Animation::FootLockType::PivotAroundBall :
+                        Animation::FootLockType::Auto);
         }
         else if (mode == "configurePoseDriver")
         {

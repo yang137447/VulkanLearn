@@ -140,10 +140,45 @@ FootPlacementSolver::FootPlacementSolver(const SkeletonMesh& mesh)
         const Eigen::Vector3f upper = Position(mesh.joints[leg.thigh].restModel) - Position(calf);
         const Eigen::Vector3f lower = Position(foot) - Position(calf);
         const Eigen::Vector3f normal = upper.cross(lower);
-        if (upper.norm() < 1 || lower.norm() < 1 || normal.norm() < 0.001f)
-            throw std::invalid_argument("Foot placement requires nondegenerate rest legs with a defined knee plane");
+        if (upper.norm() < 1 || lower.norm() < 1)
+            throw std::invalid_argument("Foot placement requires nondegenerate rest legs");
         // 正向轴使膝角张开；左右腿骨架局部坐标不同，不能写死同一个 XYZ 轴。
-        leg.midAxis = (Rotation(calf).transpose() * normal.normalized()).normalized();
+        if (normal.norm() >= 0.001f)
+        {
+            leg.midAxis =
+                (Rotation(calf).transpose() * normal.normalized()).normalized();
+        }
+        else
+        {
+            // Echo 的绑定姿态是直腿：thigh→calf→foot 共线，膝平面在 rest
+            // 姿态下不存在。膝关节铰链在解剖上仍固定于 calf 局部空间，
+            // 因此选一个与腿轴垂直、且最接近模型 +X（角色右向）的局部轴。
+            // 这样 Solve 的 pole 回退会得到模型 -Z（角色前向），弯曲方向
+            // 与动画中实际膝盖一致，而不是拒绝整个骨架。
+            const Eigen::Vector3f legAxis =
+                (Position(mesh.joints[leg.foot].restModel) -
+                    Position(mesh.joints[leg.thigh].restModel)).normalized();
+            const Eigen::Matrix3f calfRotation = Rotation(calf);
+            const std::array<Eigen::Vector3f, 6> candidates{
+                Eigen::Vector3f::UnitX(), -Eigen::Vector3f::UnitX(),
+                Eigen::Vector3f::UnitY(), -Eigen::Vector3f::UnitY(),
+                Eigen::Vector3f::UnitZ(), -Eigen::Vector3f::UnitZ()};
+            float bestScore = -std::numeric_limits<float>::max();
+            Eigen::Vector3f bestAxis = Eigen::Vector3f::UnitZ();
+            for (const Eigen::Vector3f& candidate : candidates)
+            {
+                const Eigen::Vector3f world = calfRotation * candidate;
+                if (std::abs(world.dot(legAxis)) > 0.9f)
+                    continue;
+                const float score = world.dot(Eigen::Vector3f::UnitX());
+                if (score > bestScore)
+                {
+                    bestScore = score;
+                    bestAxis = candidate;
+                }
+            }
+            leg.midAxis = bestAxis.normalized();
+        }
     }
 }
 
@@ -162,6 +197,13 @@ void FootPlacementSolver::SetLockType(FootLockType value)
         value == FootLockType::PivotAroundBall ? "ball" : "ankle";
     // 支点语义变化后旧锚点不可复用，重新等待低速近地帧。
     Reset("lock-mode");
+}
+
+void FootPlacementSolver::SetMaxPenetrationCm(float value)
+{
+    if (!std::isfinite(value))
+        return;
+    maxPenetrationCm = std::clamp(value, 0.0f, 60.0f);
 }
 
 void FootPlacementSolver::Reset(const char* reason)
@@ -220,10 +262,12 @@ LocalPose FootPlacementSolver::Solve(const SkeletonMesh& mesh, const LocalPose& 
         foot.preHeel = Sole(preIkModels, component, leg.foot, leg.heelLocal);
         foot.postSole = foot.preSole;
         foot.postHeel = foot.preHeel;
-        foot.probeOrigin = foot.preSole + Eigen::Vector3f(0, 30, 0);
-        foot.probeDisplacement = {0, -70, 0};
-        foot.heelProbeOrigin = foot.preHeel + Eigen::Vector3f(0, 30, 0);
-        foot.heelProbeDisplacement = {0, -70, 0};
+        // 探针覆盖视觉位移：起点抬高 40 cm、向下 100 cm，仍能命中
+        // 宏高度上方的 TES 层位移/detail 表面。
+        foot.probeOrigin = foot.preSole + Eigen::Vector3f(0, 40, 0);
+        foot.probeDisplacement = {0, -100, 0};
+        foot.heelProbeOrigin = foot.preHeel + Eigen::Vector3f(0, 40, 0);
+        foot.heelProbeDisplacement = {0, -100, 0};
         const std::array<FootGroundHit, 2> hits{
             probe.ProbeGround(owner, foot.probeOrigin, foot.probeDisplacement),
             probe.ProbeGround(owner, foot.heelProbeOrigin, foot.heelProbeDisplacement)};
@@ -252,9 +296,16 @@ LocalPose FootPlacementSolver::Solve(const SkeletonMesh& mesh, const LocalPose& 
             continue;
         }
         anyGround = true;
+        // 正向间隙沿用源节点的 10 cm；负间隙（鞋底已进入视觉地表）按
+        // maxPenetrationCm 放宽。负间隙锁足时 anchor 落在视觉地表上，
+        // IK 会把脚抬回地面，形成“穿透恢复”而不是持续穿模。
+        const auto gapPlantable = [this](float gap)
+        {
+            return gap <= 10.0f && gap >= -maxPenetrationCm;
+        };
         const std::array<bool, 2> canPlant{
-            supported[0] && historyValid && speeds[0] <= 40 && std::abs(gaps[0]) <= 10,
-            supported[1] && historyValid && speeds[1] <= 40 && std::abs(gaps[1]) <= 10};
+            supported[0] && historyValid && speeds[0] <= 40 && gapPlantable(gaps[0]),
+            supported[1] && historyValid && speeds[1] <= 40 && gapPlantable(gaps[1])};
         foot.soleSpeed = speeds[0];
         foot.heelSpeed = speeds[1];
         foot.soleGap = gaps[0];
@@ -271,7 +322,8 @@ LocalPose FootPlacementSolver::Solve(const SkeletonMesh& mesh, const LocalPose& 
         const bool rollSwitch = autoMode && foot.planted && supported[0] && supported[1] &&
             !separatePlanes && canPlant[1 - pivot] && gaps[1 - pivot] + 1 < gaps[pivot];
         // 保留源节点“源动画低速且接近地面才锁”的意图；Auto 允许滚动切换，显式模式不摇摆。
-        if (foot.planted && (!supported[pivot] || speeds[pivot] > 80 || std::abs(gaps[pivot]) > 16 ||
+        if (foot.planted && (!supported[pivot] || speeds[pivot] > 80 ||
+            gaps[pivot] > 16.0f || gaps[pivot] < -maxPenetrationCm ||
             (references[pivot] - foot.anchor).norm() > 20 ||
             foot.supportIdentity != hits[pivot].supportIdentity || rollSwitch))
             foot.planted = false;
