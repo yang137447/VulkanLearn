@@ -858,13 +858,14 @@ Lambert + GGX、固定 key light 与 ambient。displacement 主路径是
 `terrainLayerPreview` 负责，UI 不触碰 Vulkan 或运行时数组。
 点击卡片只设置 Paint 目标并更新选中样式和底栏；Sculpt 模式下不会静默切换工具。
 双击层卡打开右侧 260px 详情抽屉（再次双击同一张卡或 Close 收起）。抽屉保留该层
-`uvScale`/`uvRotation`/`displacementM`——tiling 与置换高度在同一组；随后是材质 MI
-路径与全局 tiling。全局 tiling 与 `u_detailAmplitudeM`/`u_detailUvScale`/
+`uvScale`/`uvRotation`/`displacementM`——tiling 与置换高度在同一组；逐层
+`displacementM` 存米、输入框按厘米显示。随后是材质 MI 路径与全局 tiling。
+全局 tiling 与 `u_detailAmplitudeCm`/`u_detailUvScale`/
 `u_layerDisplacementScale` 相邻，Tess Max/Radius 单独留给细分本身。TR 声明
 `detailMaterialInstancePath` 时同时显示 LOD0 detail MI 与
-Tess Max / Tess Px / Radius / Detail Height / Detail UV / Disp Scale 输入。这些输入只在
+Tess Max / Tess Px / Radius / Detail Height(cm) / Detail UV / Disp Scale 输入。这些输入只在
 detail MI 文档打开时启用，并通过既有 `SetMaterialParameterOverride` 写入
-`u_terrainTessMax`、`u_terrainTessTargetPixels`、`u_terrainTessRadiusM`、`u_detailAmplitudeM`、
+`u_terrainTessMax`、`u_terrainTessTargetPixels`、`u_terrainTessRadiusM`、`u_detailAmplitudeCm`、
 `u_detailUvScale`、`u_layerDisplacementScale`；基础 MI 没有这些参数。
 搜索按名称、key、source set 过滤并显示可见/总数；无匹配时显示显式空消息。Grid/List
 各自按固定尺寸窗口挂载：Grid 卡宽 144px + 6px 间距 = 150px 单元格、行高

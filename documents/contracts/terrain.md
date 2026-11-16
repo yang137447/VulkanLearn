@@ -413,8 +413,8 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   TES 的层 ID/权重采样用显式 LOD0（非 fragment 阶段没有可靠隐式导数）；与
   fragment 的隐式 mip 在近场逐位一致，远处位移已淡出，不参与视觉对比。
 - 可选叠加：`detailHeightMap`（sampler2D，可平铺 16-bit）按
-  `texCoord * u_uvScale * u_detailUvScale` 采样，幅度 `u_detailAmplitudeM`
-  （默认 0 = 关闭），法线用 ±0.05 tile 的 UV 梯度按 `u_detailNormalStrength`
+  `texCoord * u_uvScale * u_detailUvScale` 采样，幅度 `u_detailAmplitudeCm`
+  （厘米，默认 0 = 关闭），法线用 ±0.05 tile 的 UV 梯度按 `u_detailNormalStrength`
   在切线空间扰动。默认占位纹理是 clamp 常量 0.5，开启幅度前必须绑定
   `wrapMode: repeat` 的真实高度图。该叠加按主导层 `displacementM` 做
   `smoothstep(0.004, 0.03)` 掩码：River Water/Sea 等 `displacementM=0` 的
@@ -426,13 +426,14 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   宏高度场；阴影/局部阴影 pass 不生成 tesc/tese，仍按未位移的宏网格投影，
   因此幅度应保持较小以避免阴影与几何不一致。
 - 相关材质参数：`u_layerDisplacementScale`（主导层位移倍率，默认 1）、
-  `detailHeightMap`、`u_detailAmplitudeM`、`u_detailNormalStrength`、
+  `detailHeightMap`、`u_detailAmplitudeCm`、`u_detailNormalStrength`、
   `u_detailUvScale`（与 near-field detail 共用的 UV 倍率）、
   `u_terrainTessRadiusM`、`u_terrainTessMax`（1..32）、
   `u_terrainTessTargetPixels`（1..16，默认 4）。这些参数只存在于 LOD0
   的 detail MI；Landscape 层详情抽屉把逐层 `uvScale`/`uvRotation`/`displacementM`
-  放在同一组，并在 TR 声明 `detailMaterialInstancePath` 时显示 detail MI 路径和
-  Tess Max / Tess Px / Radius / Detail Height / Detail UV / Disp Scale 输入，打开 detail MI
+  放在同一组（`displacementM` 存米、UI 按厘米显示），并在 TR 声明
+  `detailMaterialInstancePath` 时显示 detail MI 路径和
+  Tess Max / Tess Px / Radius / Detail Height(cm) / Detail UV / Disp Scale 输入，打开 detail MI
   后可直接编辑，基础 MI 不暴露这些字段。
 - 两个 MI 必须共享同一组 VT 纹理与参数：`RendererTerrainLoader` 会把基础 MI 的
   page table / atlas / 权重图纹理与 `u_pageTableSize`、`u_pageResolution`、

@@ -9159,7 +9159,7 @@ TEST_F(EditorUiTest, LandscapeDetailMaterialExposesTessellationControls)
     document->GetElementById("terrain-layer-card-0")->DispatchEvent("dblclick", {});
     Refresh();
     EXPECT_TRUE(document->GetElementById("terrain-layer-details")->IsClassSet("open"));
-    EXPECT_FLOAT_EQ(FieldNumber("terrain-layer-displacement"), 0.12f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-layer-displacement"), 12.0f);
 
     EXPECT_NE(document->GetElementById("terrain-detail-material-path")->GetInnerRML()
             .find("MI_terrain_tess.json"), std::string::npos);
@@ -9193,7 +9193,7 @@ TEST_F(EditorUiTest, LandscapeDetailMaterialExposesTessellationControls)
     addFloat("u_terrainTessMax", 24.0f);
     addFloat("u_terrainTessTargetPixels", 6.0f);
     addFloat("u_terrainTessRadiusM", 140.0f);
-    addFloat("u_detailAmplitudeM", 0.6f);
+    addFloat("u_detailAmplitudeCm", 60.0f);
     addFloat("u_detailUvScale", 5.0f);
     addFloat("u_layerDisplacementScale", 2.5f);
     panel->Build(snapshot);
@@ -9204,7 +9204,7 @@ TEST_F(EditorUiTest, LandscapeDetailMaterialExposesTessellationControls)
     EXPECT_FLOAT_EQ(FieldNumber("terrain-material-tess-max"), 24.0f);
     EXPECT_FLOAT_EQ(FieldNumber("terrain-material-tess-pixels"), 6.0f);
     EXPECT_FLOAT_EQ(FieldNumber("terrain-material-tess-radius"), 140.0f);
-    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-detail-height"), 0.6f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-detail-height"), 60.0f);
     EXPECT_FLOAT_EQ(FieldNumber("terrain-material-detail-uv"), 5.0f);
     EXPECT_FLOAT_EQ(FieldNumber("terrain-material-displacement-scale"), 2.5f);
 
@@ -9221,6 +9221,19 @@ TEST_F(EditorUiTest, LandscapeDetailMaterialExposesTessellationControls)
     EXPECT_EQ(payload.assetPath, asset.assetPath);
     EXPECT_EQ(payload.parameter, "u_terrainTessMax");
     EXPECT_FLOAT_EQ(std::get<float>(payload.value), 20.0f);
+
+    // 细节高度暴露给作者的是厘米；命令值不再做米转换。
+    sink.commands.clear();
+    SetValue("terrain-material-detail-height", "75");
+    panel->Build(snapshot);
+    ASSERT_FALSE(sink.commands.empty());
+    const auto& detailBatch = std::get<ExecuteEditorCommandBatchPayload>(
+        sink.commands.back().payload);
+    ASSERT_EQ(detailBatch.commands.size(), 1u);
+    const auto& detailPayload = std::get<SetMaterialParameterOverridePayload>(
+        detailBatch.commands[0].payload);
+    EXPECT_EQ(detailPayload.parameter, "u_detailAmplitudeCm");
+    EXPECT_FLOAT_EQ(std::get<float>(detailPayload.value), 75.0f);
 }
 
 TEST_F(EditorUiTest, LandscapeBrushLibraryAppliesPresetParameters)

@@ -201,7 +201,7 @@ void MaterialInstanceAssetEditorPanel::RefreshTerrainMaterialPanel()
         {"terrain-material-tess-max", "u_terrainTessMax"},
         {"terrain-material-tess-pixels", "u_terrainTessTargetPixels"},
         {"terrain-material-tess-radius", "u_terrainTessRadiusM"},
-        {"terrain-material-detail-height", "u_detailAmplitudeM"},
+        {"terrain-material-detail-height", "u_detailAmplitudeCm"},
         {"terrain-material-detail-uv", "u_detailUvScale"},
         {"terrain-material-displacement-scale", "u_layerDisplacementScale"},
     };
@@ -269,7 +269,7 @@ void MaterialInstanceAssetEditorPanel::RefreshTerrainLayerDetails()
     SetMarkup("terrain-layer-details-source", Text(TerrainLayerSourceLabel(layer.sourceSet)));
     SetControlValue("terrain-layer-uv-scale", Number(layer.uvScale));
     SetControlValue("terrain-layer-uv-rotation", Number(layer.uvRotation));
-    SetControlValue("terrain-layer-displacement", Number(layer.displacementM));
+    SetControlValue("terrain-layer-displacement", Number(layer.displacementM * 100.0f));
     SetMarkup("terrain-layer-height",
         Text(TerrainNumber(layer.heightMin) + " - " + TerrainNumber(layer.heightMax)));
     SetMarkup("terrain-layer-slope",

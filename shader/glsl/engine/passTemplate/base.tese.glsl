@@ -115,10 +115,10 @@ void main()
     ctx.texCoord1 = texCoord1;
     ctx.worldTangent = worldTangent;
 
-    const float amplitudeCm = u_detailAmplitudeM * 100.0;
+    const float amplitudeCm = u_detailAmplitudeCm;
     const bool layerDisplacementActive =
         abs(u_layerDisplacementScale) > 1.0e-4;
-    const bool detailActive = abs(u_detailAmplitudeM) > 0.001;
+    const bool detailActive = abs(u_detailAmplitudeCm) > 0.1;
     if (displacementFade > 0.0 && (layerDisplacementActive || detailActive))
     {
         int ids[4];
@@ -167,7 +167,7 @@ void main()
             const float gradientV =
                 (heightUp - heightDown) * u_detailNormalStrength;
             const float normalWeight = detailFade *
-                clamp(abs(u_detailAmplitudeM) * 4.0, 0.0, 1.0);
+                clamp(abs(u_detailAmplitudeCm) * 0.04, 0.0, 1.0);
             if (normalWeight > 0.0)
             {
                 const vec3 baseNormal = normalize(worldNormal);

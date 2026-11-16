@@ -152,14 +152,14 @@
             },
             "description": "near-field detail albedo and normal blend strength"
         },
-        "u_detailAmplitudeM": {
+        "u_detailAmplitudeCm": {
             "type": "float",
             "default": 0.0,
             "range": {
                 "min": 0.0,
-                "max": 10.0
+                "max": 1000.0
             },
-            "description": "可选叠加细节的峰峰值（米），默认 0 = 关闭；主位移来自 layerHeight"
+            "description": "可选叠加细节的峰峰值（厘米），默认 0 = 关闭；主位移来自 layerHeight"
         },
         "u_detailNormalStrength": {
             "type": "float",
