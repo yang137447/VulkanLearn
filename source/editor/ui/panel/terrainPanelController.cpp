@@ -268,6 +268,7 @@ void MaterialInstanceAssetEditorPanel::RefreshTerrainLayerDetails()
     SetMarkup("terrain-layer-details-source", Text(TerrainLayerSourceLabel(layer.sourceSet)));
     SetControlValue("terrain-layer-uv-scale", Number(layer.uvScale));
     SetControlValue("terrain-layer-uv-rotation", Number(layer.uvRotation));
+    SetControlValue("terrain-layer-displacement", Number(layer.displacementM));
     SetMarkup("terrain-layer-height",
         Text(TerrainNumber(layer.heightMin) + " - " + TerrainNumber(layer.heightMax)));
     SetMarkup("terrain-layer-slope",

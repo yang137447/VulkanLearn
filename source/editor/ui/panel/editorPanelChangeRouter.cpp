@@ -163,7 +163,8 @@ void HandlePanelChange(MaterialInstanceAssetEditorPanel& panel, Rml::Element& el
             return;
         }
     }
-    if (action == "terrain-layer-uv-scale" || action == "terrain-layer-uv-rotation")
+    if (action == "terrain-layer-uv-scale" || action == "terrain-layer-uv-rotation" ||
+        action == "terrain-layer-displacement")
     {
         const EditorSceneActorSnapshot* actor = panel.TerrainMaterialActor();
         if (actor == nullptr || actor->terrainPlan == nullptr) return;
@@ -171,11 +172,14 @@ void HandlePanelChange(MaterialInstanceAssetEditorPanel& panel, Rml::Element& el
         if (panel.terrainPaintLayer >= layers.size()) return;
         float value = 0.0f;
         if (!ParseNumber(ControlValue(element), value) ||
-            (action == "terrain-layer-uv-scale" && value <= 0.0f))
+            (action == "terrain-layer-uv-scale" && value <= 0.0f) ||
+            (action == "terrain-layer-displacement" && value < 0.0f))
         {
             panel.localStatus = action == "terrain-layer-uv-scale"
                 ? "Layer UV scale must be a positive finite number."
-                : "Layer UV rotation must be a finite number.";
+                : action == "terrain-layer-displacement"
+                    ? "Layer displacement must be a non-negative finite number."
+                    : "Layer UV rotation must be a finite number.";
             return;
         }
         const std::string path = panel.TerrainAssetPath();
@@ -187,7 +191,11 @@ void HandlePanelChange(MaterialInstanceAssetEditorPanel& panel, Rml::Element& el
             return;
         }
         EditorAssetFieldChange change;
-        change.field = action == "terrain-layer-uv-scale" ? "uvScale" : "uvRotation";
+        change.field = action == "terrain-layer-uv-scale"
+            ? "uvScale"
+            : action == "terrain-layer-displacement"
+                ? "displacementM"
+                : "uvRotation";
         change.layerIndex = panel.terrainPaintLayer;
         change.expectedLayerName = layers[panel.terrainPaintLayer].name;
         change.value = static_cast<double>(value);
@@ -197,7 +205,7 @@ void HandlePanelChange(MaterialInstanceAssetEditorPanel& panel, Rml::Element& el
         command.payload = ModifyAssetDocumentPayload{path, {std::move(change)}};
         panel.Submit(std::move(command));
         panel.localStatus =
-            "Layer tiling updated in the TR draft. Save TR, then reload the scene.";
+            "Layer material updated in the TR draft. Save TR, then reload the scene.";
         return;
     }
     if (action == "terrain-layer-search")

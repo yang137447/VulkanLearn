@@ -421,9 +421,10 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   `detailHeightMap`、`u_detailAmplitudeM`、`u_detailNormalStrength`、
   `u_detailUvScale`（与 near-field detail 共用的 UV 倍率）、
   `u_terrainTessRadiusM`、`u_terrainTessMax`（1..32）。这些参数只存在于 LOD0
-  的 detail MI；Landscape 层详情抽屉在 TR 声明 `detailMaterialInstancePath` 时
-  显示 detail MI 路径和 Tess Max / Radius / Detail Height / Detail UV /
-  Disp Scale 输入，打开 detail MI 后可直接编辑，基础 MI 不暴露这些字段。
+  的 detail MI；Landscape 层详情抽屉把逐层 `uvScale`/`uvRotation`/`displacementM`
+  放在同一组，并在 TR 声明 `detailMaterialInstancePath` 时显示 detail MI 路径和
+  Tess Max / Radius / Detail Height / Detail UV / Disp Scale 输入，打开 detail MI
+  后可直接编辑，基础 MI 不暴露这些字段。
 - 两个 MI 必须共享同一组 VT 纹理与参数：`RendererTerrainLoader` 会把基础 MI 的
   page table / atlas / 权重图纹理与 `u_pageTableSize`、`u_pageResolution`、
   `u_layerForceMip` 等 M_terrain 实际声明的参数同步到 detail MI，并把两者都

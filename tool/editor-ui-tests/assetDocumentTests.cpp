@@ -1406,9 +1406,14 @@ TEST_F(AssetDocumentTest, TerrainAssetCapabilitiesPublishTypedFieldsAndLayerIden
     ASSERT_EQ(capabilities["layers"].size(), 2);
     EXPECT_EQ(capabilities["layers"][1]["expectedLayerName"], "Rock");
     bool hasNoise = false;
+    bool hasDisplacement = false;
     for (const auto& field : capabilities["layers"][1]["fields"])
+    {
         hasNoise = hasNoise || field["field"] == "noise";
+        hasDisplacement = hasDisplacement || field["field"] == "displacementM";
+    }
     EXPECT_TRUE(hasNoise);
+    EXPECT_TRUE(hasDisplacement);
     EXPECT_EQ(result["payload"]["document"]["layers"][1]["name"], "Rock");
     EXPECT_FALSE(result["payload"]["heightmapPreviewPath"].get<std::string>().empty());
 }
@@ -1419,10 +1424,12 @@ TEST_F(AssetDocumentTest, TerrainLayerChangesCarryIdentityAndOnlyTouchTheNamedLa
     Get("terrain", "TR_test.json");
     const auto result = Modify("terrain", "TR_test.json", 1, Json::array({
         {{"field", "noise"}, {"layerIndex", 1}, {"expectedLayerName", "Rock"}, {"value", 0.25}},
-        {{"field", "uvScale"}, {"layerIndex", 1}, {"expectedLayerName", "Rock"}, {"value", 3.0}}}));
+        {{"field", "uvScale"}, {"layerIndex", 1}, {"expectedLayerName", "Rock"}, {"value", 3.0}},
+        {{"field", "displacementM"}, {"layerIndex", 1}, {"expectedLayerName", "Rock"}, {"value", 0.12}}}));
     ASSERT_EQ(result["status"], "succeeded") << result;
     EXPECT_EQ(result["payload"]["document"]["layers"][1]["noise"], 0.25);
     EXPECT_EQ(result["payload"]["document"]["layers"][1]["uvScale"], 3.0);
+    EXPECT_EQ(result["payload"]["document"]["layers"][1]["displacementM"], 0.12);
     EXPECT_FALSE(result["payload"]["document"]["layers"][0].contains("noise"));
     EXPECT_EQ(Modify("terrain", "TR_test.json", 2, Json::array({
         {{"field", "noise"}, {"layerIndex", 1}, {"expectedLayerName", "Grass"}, {"value", 0.1}}}))["status"],

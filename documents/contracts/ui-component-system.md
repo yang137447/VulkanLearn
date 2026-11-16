@@ -858,7 +858,9 @@ Lambert + GGX、固定 key light 与 ambient。displacement 主路径是
 `terrainLayerPreview` 负责，UI 不触碰 Vulkan 或运行时数组。
 点击卡片只设置 Paint 目标并更新选中样式和底栏；Sculpt 模式下不会静默切换工具。
 双击层卡打开右侧 260px 详情抽屉（再次双击同一张卡或 Close 收起）。抽屉保留该层
-`uvScale`/`uvRotation`、材质 MI 路径与全局 tiling；TR 声明
+`uvScale`/`uvRotation`/`displacementM`——tiling 与置换高度在同一组；随后是材质 MI
+路径与全局 tiling。全局 tiling 与 `u_detailAmplitudeM`/`u_detailUvScale`/
+`u_layerDisplacementScale` 相邻，Tess Max/Radius 单独留给细分本身。TR 声明
 `detailMaterialInstancePath` 时同时显示 LOD0 detail MI 与
 Tess Max / Radius / Detail Height / Detail UV / Disp Scale 五组输入。这些输入只在
 detail MI 文档打开时启用，并通过既有 `SetMaterialParameterOverride` 写入

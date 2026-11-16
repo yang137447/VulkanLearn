@@ -9149,6 +9149,7 @@ TEST_F(EditorUiTest, LandscapeDetailMaterialExposesTessellationControls)
         "Maps/SC_test/Materials/MI_terrain.json";
     terrainPlan->desc.detailMaterialInstancePath =
         "Maps/SC_test/Materials/MI_terrain_tess.json";
+    terrainPlan->desc.layers[0].displacementM = 0.12f;
     terrain.terrainPlan = std::move(terrainPlan);
     SelectSceneActorForSculpt(std::move(terrain));
     Click("#viewport-tool-landscape");
@@ -9158,6 +9159,7 @@ TEST_F(EditorUiTest, LandscapeDetailMaterialExposesTessellationControls)
     document->GetElementById("terrain-layer-card-0")->DispatchEvent("dblclick", {});
     Refresh();
     EXPECT_TRUE(document->GetElementById("terrain-layer-details")->IsClassSet("open"));
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-layer-displacement"), 0.12f);
 
     EXPECT_NE(document->GetElementById("terrain-detail-material-path")->GetInnerRML()
             .find("MI_terrain_tess.json"), std::string::npos);

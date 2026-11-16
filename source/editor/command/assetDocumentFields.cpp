@@ -425,6 +425,7 @@ const Field fields[] = {
     {K::Terrain, "layer", "noise", ValueKind::Number, true},
     {K::Terrain, "layer", "uvScale", ValueKind::Number, true},
     {K::Terrain, "layer", "uvRotation", ValueKind::Number, true, "degrees"},
+    {K::Terrain, "layer", "displacementM", ValueKind::Number, true, "m"},
     {K::Terrain, "layer", "sourceResolution", ValueKind::Integer, true},
     {K::Terrain, "layer", "avgColor", ValueKind::Vector3, true, "linear_rgb"},
     {K::Terrain, "layer", "sourceSet", ValueKind::Integer, true},
