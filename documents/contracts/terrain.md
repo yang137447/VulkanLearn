@@ -1,8 +1,9 @@
 # Terrain Runtime
 
 > 状态：**当前契约**。本文件只描述 `source/` 与场景/TR 资产现在的行为；地形
-> 专用低分辨率兜底页/时序淡入、运行时异步 GPU 上传与 Play 中的实时碰撞重建
+> 专用低分辨率兜底页/时序淡入与运行时异步 GPU 上传
 > 不在当前能力内。运行时几何 LOD、异步 CPU chunk 构建 + GT 上传/卸载、
+> Play 中的近场 patch 流式碰撞（0.5 m 宏高度）已接入；
 > 层页 force-mip/avgColor 混合与相机前向预取已接入；
 > 编辑器侧已有 TR 资产页、Landscape Sculpt/Paint 会话、高度图写回与 Paint 快照保存，
 > 边界见“编辑器地形编辑”。
@@ -723,9 +724,10 @@ World 中摆放多次，只要对象名不同。
 - 当前地形只支持 realtime 渲染；offline-only 渲染遇到 terrain 直接失败。
 - 地形碰撞已接入 World/Play：`WorldBuilder` 为每个 terrain placement 保留 plan+TRS，
   脚本 Play 在既有 `ScriptPhysicsWorld` 里创建静态 heightfield；编辑器/普通预览
-  不创建物理世界。当前仍是整张地形一个 body；Sculpt 提交会更新高度图与分层
-  覆盖页，碰撞仍只在下一次 Play 重建，Play 中不做实时 body 重建。编辑器已有
-  TR 资产页、layered Sculpt/Paint 与高度图写回；分块碰撞仍未实现。
+  不创建物理世界。宏地形仍是整张地形一个 body；角色周围另有 64 m/0.5 m
+  的近场 patch（worker 构建、GT 领取）和角色专用碰撞过滤。Sculpt 提交会更新
+  高度图与分层覆盖页，碰撞仍只在下一次 Play 重建，Play 中不做 Sculpt 后的
+  实时 body 重建。编辑器已有 TR 资产页、layered Sculpt/Paint 与高度图写回。
 - page manager/GPU page 资源由 world-local `TerrainStreamingState` 管理；chunk 资源 key
   （`TerrainChunkResourceKey`）包含 `placementId`、TR 路径、高度图路径、size、
   heightScale/offset、grid/chunk 参数、`lod`/`lodStep` 与 chunk 坐标。同一 TR 的两处
@@ -1400,9 +1402,9 @@ P3/P3.1/L1/L2/L3/L4a/L4b/L4c/L4e **没有**实现：低分辨率 fallback 页（
 `avgColor` 混合与细一级 mip 预取，没有降采样兜底页）、视锥/地形 tile 级预取、
 硬预算淘汰（只要可见 working set 大于预算就持续超预算，capacity 只约束非可见页）、
 同一 TR 多摆放的层页内容去重、不同 `sourceSet` 的多组源纹理、
-Play 中实时碰撞重建。地形碰撞的 heightfield 模块已接入
-World/Play（见下节），但仍是整张地形一个 body；Sculpt 的碰撞更新只在下次 Play
-生效。
+Play 中 Sculpt 后的实时碰撞重建。地形碰撞的 heightfield 模块已接入
+World/Play（见下节）：宏 body + 角色周围近场 patch；Sculpt 的碰撞更新仍只在
+下次 Play 生效。
 CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtEpoch` 内同步执行；
 每帧 8 页是数量预算，不是时间预算，重载/快速移动时单帧仍可能出现烘焙耗时峰值。
 
@@ -1426,8 +1428,19 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   `CreateTerrainCollisionBody(world, plan, placement, settings)` 只是先构建
   代理再委托，因此 Step 1 仍与旧宏高度路径逐样本等价。
 - `ScriptPhysicsWorld` 在 `SetTerrainCollisions` 中为每个 placement 保留
-  `TerrainCollisionProxy`，供后续 patch streamer 使用；当前仍只有一个
-  宏高度 body，没有近场 patch 或双碰撞过滤。
+  `TerrainCollisionProxy`，并为 Play 创建一个
+  `TerrainCollisionPatchStreamer`。宏 body 使用 collision group 14；
+  近场 patch body 使用 group 15，只与角色 body 碰撞（其他脚本 body 在创建时
+  清掉 group 15 位）。
+- `TerrainCollisionPatchStreamer` 在角色周围 64 m、0.5 m 间距采样宏碰撞代理，
+  生成 130² 样本的 patch；worker 构建，GT 在 `Step` 的 body 同步后领取 ready
+  结果并创建/替换 Jolt body。patch 中心按 32 m 单元吸附，角色移动跨单元时
+  重建；离开代理范围或 patch 不完整落在代理内时卸载 patch，角色回退宏 body。
+- patch 边缘 6 m 向宏高度 blend；A 口径下唯一高度源就是宏代理，因此当前 blend
+  是恒等，tiling `layerHeight`/detail/TES 细分不进入碰撞或脚 IK。
+- 角色在 patch 内时，`ScriptPhysicsWorld` 把角色 collision mask 从 group 14
+  切到 group 15；退出后恢复。这样同一时刻只有宏或 patch 一套地形碰撞，
+  不会双碰撞。`ProbeGround`/`Raycast` 的 terrain identity 同时覆盖 patch body。
 
 - 入口：`CreateTerrainCollisionBody(JPH::PhysicsSystem&, const TerrainBuildPlan&,
   const TerrainCollisionPlacement&, const TerrainCollisionSettings&)`，或
@@ -1484,11 +1497,13 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
 - 查询身份：`ScriptPhysicsWorld::Raycast` / `ProbeGround` 命中地形时返回
   placementId（Raycast 额外带 `terrain=true`），不伪装成蓝图 id。接触/触发
   列表仍只发布脚本实体对。
-- 碰撞分组：地形 body 使用 group `0`、subgroup 全开，脚本默认的
-  `collisionLayer/collisionMask` 能查询和碰撞它；`QueryBodyFilter` 对
-  Jolt 的 `cInvalidGroup/cInvalidSubGroup` 按全放行处理，避免移位越界。
+- 碰撞分组：宏地形 body 使用 group `14`、patch 使用 group `15`，subgroup 全开；
+  两者都在默认 16 位 `collisionMask` 内，现有脚本 mask 无需改写。
+  `QueryBodyFilter` 对 Jolt 的 `cInvalidGroup/cInvalidSubGroup` 按全放行处理，
+  避免移位越界。
 - 可观测：Console `terraincollision stats` 只在手动输入时打印 Play 中的
-  terrain body 数、碰撞代理数（`proxies`）与 placement 数；
+  terrain body 数、碰撞代理数（`proxies`）、近场 patch 数（`patches`）与
+  placement 数；
   非 Play 输出 “No physics world”。
 - 构建：Jolt 已从 C# hosting 的 `if()` 中移出，是核心 CPU 依赖
   （`script/CMakeLists.txt` 无条件 FetchContent，锁定同一 commit）；
@@ -1510,6 +1525,10 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   对齐后的 66² 样本网格、`placement.scale` 后的世界 X/Z 跨度与 Y 高度、
   保守 AABB、非法输入拒绝，以及代理 body 与 plan/placement 便捷入口的
   raycast 一致性。
+- 近场 patch：`terrain_tests --gtest_filter=TerrainCollisionPatch.*:TerrainCollisionPatchStreamer.*`
+  覆盖 64 m/0.5 m patch 的 130² 样本、宏高度采样、边缘外拒绝、非法设置，
+  以及 worker 构建、跨 32 m 单元替换、离开代理后卸载；`script_tests --gtest_filter=ScriptTerrainCollision.CharacterUsesNearPatchAndFallsBackOnTeleport`
+  覆盖角色 patch 激活、ProbeGround 命中和传送回退。
 - CPU LOD/边界缝合：`terrain_tests` 钉住 LOD0 的顶点/索引与索引顺序（无额外几何）、
   LOD1..3 的格子数、边界环顶点数与过渡带三角形数、基础顶点在 LOD0 同名网格点的
   位置/UV（线性坡面下法线也一致）、边界环落在 chunk 边界线上且不超出 AABB、过渡带三角形与内部网格

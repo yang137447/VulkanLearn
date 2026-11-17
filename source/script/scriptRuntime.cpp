@@ -332,6 +332,7 @@ void ScriptRuntimeSubsystem::ReportTerrainCollisionStatistics() const
     std::cout
         << "[TerrainCollision] bodies=" << physics->TerrainCollisionBodyCount()
         << " proxies=" << physics->TerrainCollisionProxyCount()
+        << " patches=" << physics->TerrainCollisionPatchCount()
         << " placements=" << placements.size()
         << std::endl;
     for (const std::string& placement : placements)

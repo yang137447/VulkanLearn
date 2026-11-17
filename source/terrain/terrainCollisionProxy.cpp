@@ -111,6 +111,62 @@ bool TerrainCollisionProxy::IsValid() const
     return true;
 }
 
+Eigen::Vector2f TerrainCollisionProxy::WorldToLocalXz(
+    float worldX,
+    float worldZ) const
+{
+    const Eigen::Vector3f delta(
+        worldX - placement.position.x(),
+        0.0f,
+        worldZ - placement.position.z());
+    const Eigen::Vector3f local =
+        PlacementRotationMatrix(placement.rotation).transpose() * delta;
+    return Eigen::Vector2f(local.x(), local.z());
+}
+
+bool TerrainCollisionProxy::ContainsLocalXz(
+    float localX,
+    float localZ) const
+{
+    return std::abs(localX) <= sizeXCm * 0.5f + 1.0f &&
+        std::abs(localZ) <= sizeZCm * 0.5f + 1.0f;
+}
+
+bool TerrainCollisionProxy::ContainsWorldXz(
+    float worldX,
+    float worldZ) const
+{
+    const Eigen::Vector2f local = WorldToLocalXz(worldX, worldZ);
+    return ContainsLocalXz(local.x(), local.y());
+}
+
+float TerrainCollisionProxy::SampleHeightCmLocal(
+    float localX,
+    float localZ) const
+{
+    if (!IsValid())
+        return 0.0f;
+    const float u = std::clamp(localX / sizeXCm + 0.5f, 0.0f, 1.0f);
+    const float v = std::clamp(localZ / sizeZCm + 0.5f, 0.0f, 1.0f);
+    const float gridX = u * static_cast<float>(sampleCount - 1);
+    const float gridZ = v * static_cast<float>(sampleCount - 1);
+    const uint32_t x0 = std::min(
+        static_cast<uint32_t>(gridX), sampleCount - 1);
+    const uint32_t z0 = std::min(
+        static_cast<uint32_t>(gridZ), sampleCount - 1);
+    const uint32_t x1 = std::min(x0 + 1, sampleCount - 1);
+    const uint32_t z1 = std::min(z0 + 1, sampleCount - 1);
+    const float fx = gridX - static_cast<float>(x0);
+    const float fz = gridZ - static_cast<float>(z0);
+    const auto at = [this](uint32_t x, uint32_t z)
+    {
+        return heightCm[static_cast<size_t>(z) * sampleCount + x];
+    };
+    const float top = at(x0, z0) + (at(x1, z0) - at(x0, z0)) * fx;
+    const float bottom = at(x0, z1) + (at(x1, z1) - at(x0, z1)) * fx;
+    return top + (bottom - top) * fz;
+}
+
 std::shared_ptr<const TerrainCollisionProxy> BuildTerrainCollisionProxy(
     const TerrainBuildPlan& plan,
     const TerrainCollisionPlacement& placement,

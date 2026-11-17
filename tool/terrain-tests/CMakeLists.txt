@@ -19,11 +19,14 @@ terrainLayerRegistryTests.cpp
     terrainCollisionTests.cpp
     terrainCollisionInstanceTests.cpp
     terrainCollisionProxyTests.cpp
+    terrainCollisionPatchTests.cpp
     terrainChunkResidencyTests.cpp
     vegetationAssetTests.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainAssetLoader.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollision.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollisionPatch.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollisionProxy.cpp
+    ${PROJECT_SOURCE_DIR}/source/engine/terrainCollisionPatchStreamer.cpp
     ${PROJECT_SOURCE_DIR}/source/world/loading/terrainCollisionInstances.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainFeedback.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerFeedback.cpp
@@ -76,6 +79,7 @@ target_link_libraries(terrain_tests
         vl_hair_assets
         vl_fracture_core
         vl_animation_assets
+        Threads::Threads
 )
 
 vulkanlearn_add_gtest(terrain_tests)

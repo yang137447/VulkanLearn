@@ -34,6 +34,7 @@ public:
     void SetTerrainCollisions(const std::vector<TerrainCollisionInstance>& instances);
     size_t TerrainCollisionBodyCount() const;
     size_t TerrainCollisionProxyCount() const;
+    size_t TerrainCollisionPatchCount() const;
     std::vector<std::string> TerrainCollisionPlacementIds() const;
 private:
     void StepInternal(nlohmann::json& states, const nlohmann::json& declarations, float dt, int substeps);

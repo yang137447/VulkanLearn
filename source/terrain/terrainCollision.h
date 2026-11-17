@@ -13,6 +13,7 @@
 namespace JPH
 {
 class PhysicsSystem;
+class GroupFilter;
 }
 
 namespace VL
@@ -32,6 +33,10 @@ struct TerrainCollisionSettings
     // 调用方 PhysicsSystem 实际注册的 object layer 数量；用于在创建前拒绝越界层。
     // 默认 2 与 TerrainCollisionWorld / ScriptPhysicsWorld 的静态+移动两层一致。
     uint32_t objectLayerCount = 2;
+    // CollisionGroup 的 group/subgroup 过滤。Patch 使用独立 group 以便
+    // 角色在 patch 内时排除宏 body；默认 0/null 保持旧行为。
+    uint32_t collisionGroup = 0;
+    JPH::GroupFilter* groupFilter = nullptr;
 };
 
 // 地形静态 body 的 RAII 句柄。析构时从创建它的 PhysicsSystem 移除并销毁 body。

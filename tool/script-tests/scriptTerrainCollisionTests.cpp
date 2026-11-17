@@ -1,6 +1,8 @@
 #include <algorithm>
 #include <cmath>
+#include <chrono>
 #include <memory>
+#include <thread>
 #include <vector>
 
 #include <gtest/gtest.h>
@@ -66,7 +68,7 @@ Json StaticProbeState()
 {
     return {
         {"id", "probe"},
-        {"position", {1000.0, 6000.0, -2000.0}},
+        {"position", {1000.0, 6000.0, 0.0}},
         {"rotation", {0.0, 0.0, 0.0}},
         {"scale", {1.0, 1.0, 1.0}}};
 }
@@ -83,6 +85,32 @@ Json StaticProbeDeclarations()
                 {"shape", "box"},
                 {"motion", "static"},
                 {"halfExtents", {50.0, 50.0, 50.0}}}}}}};
+}
+
+Json CharacterState(const Eigen::Vector3f& position)
+{
+    return {
+        {"id", "player"},
+        {"position", {position.x(), position.y(), position.z()}},
+        {"rotation", {0.0, 0.0, 0.0}},
+        {"scale", {1.0, 1.0, 1.0}}};
+}
+
+Json CharacterDeclarations()
+{
+    Json declaration = {
+        {"id", "player"},
+        {"position", {1000.0, 6000.0, 0.0}},
+        {"rotation", {0.0, 0.0, 0.0}},
+        {"scale", {1.0, 1.0, 1.0}},
+        {"physics", {
+            {"shape", "capsule"},
+            {"motion", "character"},
+            {"radius", 30.0},
+            {"halfHeight", 60.0},
+            {"collisionLayer", 0},
+            {"collisionMask", 65535}}}};
+    return {{"player", declaration}};
 }
 
 } // namespace
@@ -170,4 +198,39 @@ TEST(ScriptTerrainCollision, PlainWorldDoesNotCreateAPhysicsWorld)
     EXPECT_FALSE(runtime.HasPhysicsWorld());
     runtime.SynchronizeWorld(nullptr);
     EXPECT_FALSE(runtime.HasPhysicsWorld());
+}
+
+TEST(ScriptTerrainCollision, CharacterUsesNearPatchAndFallsBackOnTeleport)
+{
+    VL::ScriptPhysicsWorld physics;
+    physics.SetTerrainCollisions({
+        Instance("terrain|Patch", Eigen::Vector3f(0.0f, 3000.0f, 0.0f))});
+    Json states = Json::array({CharacterState(Eigen::Vector3f(1000.0f, 6000.0f, 0.0f))});
+    const Json declarations = CharacterDeclarations();
+
+    for (int attempt = 0; attempt < 2000 && physics.TerrainCollisionPatchCount() == 0;
+         ++attempt)
+    {
+        physics.Step(states, declarations, 0.0f);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    ASSERT_EQ(physics.TerrainCollisionPatchCount(), 1u);
+
+    const VL::Animation::FootGroundHit hit = physics.ProbeGround(
+        "player",
+        Eigen::Vector3f(1000.0f, 6000.0f, 0.0f),
+        Eigen::Vector3f(0.0f, -3000.0f, 0.0f));
+    ASSERT_TRUE(hit.hit);
+    EXPECT_NEAR(hit.point.y(), 3500.0f, 1.0f);
+    EXPECT_EQ(hit.supportIdentity, "terrain|Patch");
+
+    // 离开代理范围：patch body 被卸载，角色回到宏高度。
+    states[0]["position"] = {100000.0, 6000.0, 0.0};
+    for (int attempt = 0; attempt < 2000 && physics.TerrainCollisionPatchCount() != 0;
+         ++attempt)
+    {
+        physics.Step(states, declarations, 0.0f);
+        std::this_thread::sleep_for(std::chrono::milliseconds(1));
+    }
+    EXPECT_EQ(physics.TerrainCollisionPatchCount(), 0u);
 }

@@ -43,6 +43,14 @@ struct TerrainCollisionProxy
     Eigen::Vector3f boundsMaxCm = Eigen::Vector3f::Zero();
 
     bool IsValid() const;
+
+    // 世界 XZ -> 代理局部 XZ（只去掉 placement 旋转/平移；X/Z 缩放已烘焙进
+    // sizeXCm/sizeZCm 和 heightCm）。
+    Eigen::Vector2f WorldToLocalXz(float worldX, float worldZ) const;
+    bool ContainsLocalXz(float localX, float localZ) const;
+    bool ContainsWorldXz(float worldX, float worldZ) const;
+    // 代理网格的 bilinear 高度（cm）。局部坐标是 [-size/2, +size/2]。
+    float SampleHeightCmLocal(float localX, float localZ) const;
 };
 
 // 从已验证的 TerrainBuildPlan 采样碰撞代理。输入非法抛 std::invalid_argument；
