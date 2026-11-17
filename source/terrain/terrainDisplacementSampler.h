@@ -31,7 +31,7 @@ public:
         std::vector<float> texels;
     };
 
-    // buildMips=false 只保留 mip0（detailHeightMap 的 TES 采样就是 LOD0）。
+    // buildMips=false 只保留 mip0。
     // flipY 与纹理资产 JSON 的 flipY 一致；LDR 路径默认 true。
     static std::shared_ptr<const TerrainHeightTexture> FromHostImage(
         const HostImage& image,
@@ -76,9 +76,7 @@ struct TerrainDisplacementMaterialParams
     // 与 M_terrain schema 默认值一致；detail MI 缺参数时沿用基础 MI 的值。
     float uvScale = 64.0f;
     float detailUvScale = 12.0f;
-    float detailAmplitudeCm = 0.0f;
     float layerDisplacementScale = 1.0f;
-    float detailNormalStrength = 1.0f;
     float tessRadiusM = 60.0f;
     // 0 = 每 tile page atlas 的 top-4；1 = 连续 layerWeightMaps。
     // Stage 1 只支持 0；1 在位移开启时明确拒绝，避免静默近似。
@@ -93,7 +91,6 @@ struct TerrainDisplacementSourceDesc
     TerrainCollisionPlacement placement;
     TerrainDisplacementMaterialParams material;
     std::vector<std::shared_ptr<const TerrainHeightTexture>> layerHeights;
-    std::shared_ptr<const TerrainHeightTexture> detailHeight;
 };
 
 struct TerrainDisplacementSample
@@ -108,7 +105,6 @@ struct TerrainDisplacementSample
     std::array<uint8_t, 4> layerIds = {0, 0, 0, 0};
     std::array<float, 4> layerWeights = {1.0f, 0.0f, 0.0f, 0.0f};
     float layerDisplacementCm = 0.0f;
-    float detailDisplacementCm = 0.0f;
 };
 
 // 同源位移采样器：复刻 base.tese.glsl 的几何公式，作为脚 IK / parity 的
@@ -119,8 +115,6 @@ struct TerrainDisplacementSample
 // - 权重：ids[0] 主导层；权重来自每 tile page atlas 的 top-4 texel 双线性
 // - 层位移：layerHeight LOD2 + repeat + 资产 flipY；幅度 = displacementM *
 //   u_layerDisplacementScale，沿插值世界法线
-// - detail：detailHeightMap LOD0 + repeat + flipY=false；主导层
-//   displacementM 用 smoothstep(0.004, 0.03) 掩码水面
 class TerrainDisplacementSampler
 {
 public:
@@ -135,7 +129,7 @@ public:
         float extraNormalDisplacementCm = 0.0f) const;
     bool ContainsWorldXz(float worldX, float worldZ) const;
 
-    // 视觉高度（cm），包含层位移与 detail；不应用相机 near/far fade。
+    // 视觉高度（cm），包含层位移；不应用相机 near/far fade。
     // 斜坡上按固定 XZ 迭代 1..2 次反解 UV，因为位移沿世界法线会改变 XZ。
     float SampleHeightCm(float worldX, float worldZ) const;
     // 位移表面的平滑几何法线（世界空间，20 cm 中心差分）。
@@ -183,7 +177,6 @@ private:
         float u,
         float v,
         uint32_t mip) const;
-    float SampleDetailHeight(float u, float v) const;
     float MacroHeightCm(float u, float v) const;
     Eigen::Vector3f MacroNormalWorld(float u, float v) const;
     float EvaluateDisplacementCm(
@@ -192,8 +185,7 @@ private:
         const std::array<uint8_t, 4>& ids,
         const std::array<float, 4>& weights,
         Eigen::Vector3f& outNormalWorld,
-        float& outLayerDisplacementCm,
-        float& outDetailDisplacementCm) const;
+        float& outLayerDisplacementCm) const;
 
     TerrainDisplacementSourceDesc source;
     Eigen::Matrix3f rotation = Eigen::Matrix3f::Identity();
@@ -207,7 +199,7 @@ private:
     mutable std::vector<uint8_t> tileCacheValid;
 };
 
-// 从资源根解析 detail/base MI、layerHeight/detailHeightMap 纹理资产，
+// 从资源根解析 detail/base MI、layerHeight 纹理资产，
 // 建立一个 placement 的采样器。失败抛异常；调用方应在 Play 的
 // 事务边界内调用，避免留下半套物理/采样状态。
 std::shared_ptr<const TerrainDisplacementSampler>

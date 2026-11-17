@@ -130,7 +130,6 @@ void HandlePanelChange(MaterialInstanceAssetEditorPanel& panel, Rml::Element& el
             {"terrain-material-tess-max", "u_terrainTessMax", 1.0f, 32.0f},
             {"terrain-material-tess-pixels", "u_terrainTessTargetPixels", 1.0f, 16.0f},
             {"terrain-material-tess-radius", "u_terrainTessRadiusM", 0.0f, 500.0f},
-            {"terrain-material-detail-height", "u_detailAmplitudeCm", 0.0f, 1000.0f},
             {"terrain-material-detail-uv", "u_detailUvScale", 1.0f, 32.0f},
             {"terrain-material-displacement-scale", "u_layerDisplacementScale", 0.0f, 8.0f},
         };

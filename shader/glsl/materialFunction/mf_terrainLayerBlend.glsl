@@ -272,17 +272,6 @@ float TerrainBlendedLayerDisplacementMeters(
     return (height - 0.5) * layerDisplacementM;
 }
 
-// 主导层的 displacementM（米）。water/sea 层通常声明 0：它们保持宏高度场
-// 的平整表面，不能再叠加全局 tiling 高度位移，否则角色脚会埋进视觉地形。
-float TerrainDominantLayerDisplacementMeters(
-    in int ids[4],
-    in float weights[4])
-{
-    if (weights[0] <= 1.0e-5)
-        return 0.0;
-    return TerrainLayerCatalogRowLod0(ids[0], 3).w;
-}
-
 #if !VL_TERRAIN_TES_STAGE
 MaterialInputs EvaluateMFTerrainInputs(in MaterialFunctionContext context)
 {

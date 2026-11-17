@@ -109,21 +109,17 @@ std::shared_ptr<const VL::TerrainHeightTexture> MakeTexture(
 VL::TerrainDisplacementSourceDesc MakeSource(
     VL::TerrainBuildPlan plan,
     std::vector<std::shared_ptr<const VL::TerrainHeightTexture>> layerHeights,
-    std::shared_ptr<const VL::TerrainHeightTexture> detailHeight,
     float uvScale,
     float detailUvScale,
-    float layerDisplacementScale,
-    float detailAmplitudeCm)
+    float layerDisplacementScale)
 {
     VL::TerrainDisplacementSourceDesc source;
     source.plan = std::move(plan);
     source.material.uvScale = uvScale;
     source.material.detailUvScale = detailUvScale;
     source.material.layerDisplacementScale = layerDisplacementScale;
-    source.material.detailAmplitudeCm = detailAmplitudeCm;
     source.material.weightMapMode = 0;
     source.layerHeights = std::move(layerHeights);
-    source.detailHeight = std::move(detailHeight);
     return source;
 }
 
@@ -157,12 +153,6 @@ float RepeatBilinear(
     const float top = at(x0, y0) + (at(x0 + 1, y0) - at(x0, y0)) * fx;
     const float bottom = at(x0, y0 + 1) + (at(x0 + 1, y0 + 1) - at(x0, y0 + 1)) * fx;
     return top + (bottom - top) * fy;
-}
-
-float SmoothStep(float edge0, float edge1, float value)
-{
-    const float t = std::clamp((value - edge0) / (edge1 - edge0), 0.0f, 1.0f);
-    return t * t * (3.0f - 2.0f * t);
 }
 
 struct PageSample
@@ -409,7 +399,7 @@ TEST(TerrainDisplacementSampler, SampleTop4MatchesBakedPageTexels)
         MakeTexture(32, 32, [](float u, float v) { return 0.5f + 0.25f * v; }),
         MakeTexture(32, 32, [](float u, float v) { return 0.5f; })};
     const VL::TerrainDisplacementSampler sampler(MakeSource(
-        plan, layerHeights, nullptr, 4.0f, 2.0f, 0.5f, 0.0f));
+        plan, layerHeights, 4.0f, 2.0f, 0.5f));
 
     const uint32_t tileX = 1;
     const uint32_t tileZ = 0;
@@ -444,7 +434,7 @@ TEST(TerrainDisplacementSampler, SampleTop4MatchesBakedPageTexels)
     EXPECT_LE(maximumWeightError, 1.0e-3f);
 }
 
-TEST(TerrainDisplacementSampler, LayerAndDetailDisplacementMatchTesFormula)
+TEST(TerrainDisplacementSampler, LayerDisplacementMatchesTesFormula)
 {
     const float heightScale = 8000.0f;
     const HostImage heightmap = MakeHeightImage(
@@ -467,25 +457,15 @@ TEST(TerrainDisplacementSampler, LayerAndDetailDisplacementMatchTesFormula)
             return 0.5f + 0.3f * std::sin(2.0f * Pi * u * 3.0f) *
                 std::cos(2.0f * Pi * v * 2.0f);
         });
-    const auto detailHeight = MakeTexture(
-        32,
-        32,
-        [](float u, float v)
-        {
-            return 0.5f + 0.4f * std::cos(2.0f * Pi * (u + v) * 5.0f);
-        });
     const float uvScale = 3.0f;
     const float detailUvScale = 5.0f;
     const float layerDisplacementScale = 0.5f;
-    const float detailAmplitudeCm = 20.0f;
     const VL::TerrainDisplacementSampler sampler(MakeSource(
         plan,
         {layerHeight},
-        detailHeight,
         uvScale,
         detailUvScale,
-        layerDisplacementScale,
-        detailAmplitudeCm));
+        layerDisplacementScale));
 
     double squaredError = 0.0;
     float maximumError = 0.0f;
@@ -518,14 +498,8 @@ TEST(TerrainDisplacementSampler, LayerAndDetailDisplacementMatchTesFormula)
                 layerHeight->Mip(2), u * layerUv, v * layerUv);
             const float referenceLayer = (layerValue - 0.5f) * 0.6f *
                 layerDisplacementScale * 100.0f;
-            const float detailUv = uvScale * detailUvScale;
-            const float detailValue = RepeatBilinear(
-                detailHeight->Mip(0), u * detailUv, v * detailUv);
-            const float solidity = SmoothStep(0.004f, 0.03f, 0.6f);
-            const float referenceDetail = (detailValue - 0.5f) *
-                detailAmplitudeCm * solidity;
             const float referenceHeight =
-                macroAt(u, v) + normal.y() * (referenceLayer + referenceDetail);
+                macroAt(u, v) + normal.y() * referenceLayer;
             const float error = std::abs(sample.heightCm - referenceHeight);
             maximumError = std::max(maximumError, error);
             squaredError += static_cast<double>(error) * error;
@@ -543,8 +517,8 @@ TEST(TerrainDisplacementSampler, LayerAndDetailDisplacementMatchTesFormula)
 TEST(TerrainDisplacementSampler, WaterLayerKeepsMacroSurfaceFlat)
 {
     const float heightScale = 10000.0f;
-    // 海平面：归一化高度 0.75 以上全部是 water；detail 幅度很大也不能
-    // 让水面出现 tiling 起伏。
+    // 海平面：归一化高度 0.75 以上全部是 water；displacementM=0 必须
+    // 保持宏高度平整。
     const HostImage heightmap = MakeHeightImage(
         65,
         65,
@@ -556,10 +530,8 @@ TEST(TerrainDisplacementSampler, WaterLayerKeepsMacroSurfaceFlat)
     const auto layerHeights = std::vector<std::shared_ptr<const VL::TerrainHeightTexture>>{
         MakeTexture(32, 32, [](float u, float v) { return 0.9f; }),
         MakeTexture(32, 32, [](float u, float v) { return 0.1f; })};
-    const auto detail = MakeTexture(
-        32, 32, [](float u, float v) { return 0.95f; }, false);
     const VL::TerrainDisplacementSampler sampler(MakeSource(
-        plan, layerHeights, detail, 8.0f, 4.0f, 1.0f, 40.0f));
+        plan, layerHeights, 8.0f, 4.0f, 1.0f));
 
     std::array<uint8_t, 4> ids{};
     std::array<float, 4> weights{};
@@ -567,7 +539,6 @@ TEST(TerrainDisplacementSampler, WaterLayerKeepsMacroSurfaceFlat)
     ASSERT_EQ(ids[0], 0u);
     const VL::TerrainDisplacementSample sample = sampler.SampleAtUv(0.31f, 0.67f);
     EXPECT_NEAR(sample.layerDisplacementCm, 0.0f, 1.0e-5f);
-    EXPECT_NEAR(sample.detailDisplacementCm, 0.0f, 1.0e-5f);
     EXPECT_NEAR(
         sample.heightCm,
         VL::TerrainHeightmap::SampleHeightCm(
@@ -594,7 +565,7 @@ TEST(TerrainDisplacementSampler, SampleWorldSolvesNormalDisplacedXz)
                 std::sin(2.0f * Pi * v * 3.0f);
         });
     const VL::TerrainDisplacementSampler sampler(MakeSource(
-        plan, {layerHeight}, nullptr, 6.0f, 3.0f, 1.0f, 0.0f));
+        plan, {layerHeight}, 6.0f, 3.0f, 1.0f));
 
     float maximumXzError = 0.0f;
     for (int y = 20; y <= 80; y += 12)
@@ -634,7 +605,7 @@ TEST(TerrainDisplacementSampler, SmoothNormalFollowsSlopeDirection)
         {MakeLayer("slope", 0.0f, 1.0f, 0.0f)},
         10000.0f);
     const VL::TerrainDisplacementSampler sampler(MakeSource(
-        plan, {}, nullptr, 8.0f, 2.0f, 1.0f, 0.0f));
+        plan, {}, 8.0f, 2.0f, 1.0f));
     const Eigen::Vector3f normal = sampler.SampleNormal(0.0f, 0.0f, 20.0f);
     EXPECT_LT(normal.x(), -0.1f);
     EXPECT_NEAR(normal.z(), 0.0f, 0.05f);

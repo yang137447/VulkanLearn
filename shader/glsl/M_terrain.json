@@ -152,24 +152,6 @@
             },
             "description": "near-field detail albedo and normal blend strength"
         },
-        "u_detailAmplitudeCm": {
-            "type": "float",
-            "default": 0.0,
-            "range": {
-                "min": 0.0,
-                "max": 1000.0
-            },
-            "description": "可选叠加细节的峰峰值（厘米），默认 0 = 关闭；主位移来自 layerHeight"
-        },
-        "u_detailNormalStrength": {
-            "type": "float",
-            "default": 1.0,
-            "range": {
-                "min": 0.0,
-                "max": 8.0
-            },
-            "description": "tiling 高度图扰动法线的强度；0 = 只位移不改法线"
-        },
         "u_terrainTessRadiusM": {
             "type": "float",
             "default": 60.0,
@@ -177,7 +159,7 @@
                 "min": 0.0,
                 "max": 500.0
             },
-            "description": "camera radius in metres where tessellation and detail displacement fade to the undivided mesh"
+            "description": "camera radius in metres where tessellation displacement fades to the undivided mesh"
         },
         "u_terrainTessMax": {
             "type": "float",
@@ -395,10 +377,6 @@
         "layerHeight": {
             "type": "sampler2DArray",
             "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
-        },
-        "detailHeightMap": {
-            "type": "sampler2D",
-            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
         },
         "globalColour": {
             "type": "sampler2D",

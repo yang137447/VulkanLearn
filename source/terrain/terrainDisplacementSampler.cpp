@@ -84,7 +84,6 @@ std::filesystem::path ResolveAsset(
 struct MaterialInstanceTextures
 {
     std::string layerHeight;
-    std::string detailHeightMap;
 };
 
 MaterialInstanceTextures ReadMaterialInstanceTextures(
@@ -106,15 +105,6 @@ MaterialInstanceTextures ReadMaterialInstanceTextures(
                 "Terrain layerHeight texture must be a string: " +
                 path.string());
         textures.layerHeight = source.at("layerHeight").get<std::string>();
-    }
-    if (source.contains("detailHeightMap"))
-    {
-        if (!source.at("detailHeightMap").is_string())
-            throw std::runtime_error(
-                "Terrain detailHeightMap texture must be a string: " +
-                path.string());
-        textures.detailHeightMap =
-            source.at("detailHeightMap").get<std::string>();
     }
     return textures;
 }
@@ -156,24 +146,6 @@ std::shared_ptr<const TerrainHeightTexture> LoadTextureArraySlice(
         arrayJson.at("sources")[slice].get<std::string>();
     const bool flipY = arrayJson.value("flipY", true);
     return cache.Load(ResolveAsset(resourceRoot, source), flipY, true);
-}
-
-std::shared_ptr<const TerrainHeightTexture> LoadDetailHeight(
-    const std::filesystem::path& resourceRoot,
-    const std::string& assetPath,
-    TerrainHeightTextureCache& cache)
-{
-    const std::filesystem::path path =
-        ResolveAsset(resourceRoot, assetPath);
-    const nlohmann::json json = ReadJsonFile(path);
-    if (!json.contains("source") || !json.at("source").is_string())
-        throw std::runtime_error(
-            "Terrain detailHeightMap has no source: " + assetPath);
-    const std::string source = json.at("source").get<std::string>();
-    // TES samples detailHeightMap with explicit LOD0; building a CPU mip chain
-    // would only waste memory.
-    const bool flipY = json.value("flipY", true);
-    return cache.Load(ResolveAsset(resourceRoot, source), flipY, false);
 }
 
 Eigen::Matrix3f PlacementRotationMatrix(const Eigen::Vector3f& degrees)
@@ -587,25 +559,16 @@ float TerrainDisplacementSampler::SampleLayerHeight(
     return source.layerHeights[layer]->Sample(u, v, mip);
 }
 
-float TerrainDisplacementSampler::SampleDetailHeight(float u, float v) const
-{
-    if (!source.detailHeight)
-        return 0.5f;
-    return source.detailHeight->Sample(u, v, 0);
-}
-
 float TerrainDisplacementSampler::EvaluateDisplacementCm(
     float u,
     float v,
     const std::array<uint8_t, 4>& ids,
     const std::array<float, 4>& weights,
     Eigen::Vector3f& outNormalWorld,
-    float& outLayerDisplacementCm,
-    float& outDetailDisplacementCm) const
+    float& outLayerDisplacementCm) const
 {
     outNormalWorld = MacroNormalWorld(u, v);
     outLayerDisplacementCm = 0.0f;
-    outDetailDisplacementCm = 0.0f;
     if (weights[0] <= 1.0e-5f)
         return 0.0f;
     const TerrainDisplacementMaterialParams& material = source.material;
@@ -615,35 +578,18 @@ float TerrainDisplacementSampler::EvaluateDisplacementCm(
     const TerrainLayerDesc& layerDesc = source.plan.desc.layers[layer];
     const bool layerActive =
         std::abs(material.layerDisplacementScale) > 1.0e-4f;
-    const bool detailActive =
-        std::abs(material.detailAmplitudeCm) > 0.1f;
-    if (!layerActive && !detailActive)
+    if (!layerActive)
         return 0.0f;
 
-    if (layerActive)
-    {
-        // TES 的主导层位移 UV 不做 rotation：texCoord * u_uvScale *
-        // layerUvScale * u_detailUvScale。
-        const float uvScale =
-            material.uvScale * layerDesc.uvScale * material.detailUvScale;
-        const float height = SampleLayerHeight(
-            layer, u * uvScale, v * uvScale, 2);
-        outLayerDisplacementCm = (height - 0.5f) *
-            layerDesc.displacementM * material.layerDisplacementScale * 100.0f;
-    }
-
-    // 水/海层 displacementM=0：detail tiling 高度必须保持宏高度平整。
-    const float dominantDisplacementM = layerDesc.displacementM;
-    const float detailSolidity =
-        SmoothStep(0.004f, 0.03f, dominantDisplacementM);
-    if (detailActive && detailSolidity > 0.0f)
-    {
-        const float uvScale = material.uvScale * material.detailUvScale;
-        const float height = SampleDetailHeight(u * uvScale, v * uvScale);
-        outDetailDisplacementCm =
-            (height - 0.5f) * material.detailAmplitudeCm * detailSolidity;
-    }
-    return outLayerDisplacementCm + outDetailDisplacementCm;
+    // TES 的主导层位移 UV 不做 rotation：texCoord * u_uvScale *
+    // layerUvScale * u_detailUvScale。
+    const float uvScale =
+        material.uvScale * layerDesc.uvScale * material.detailUvScale;
+    const float height = SampleLayerHeight(
+        layer, u * uvScale, v * uvScale, 2);
+    outLayerDisplacementCm = (height - 0.5f) *
+        layerDesc.displacementM * material.layerDisplacementScale * 100.0f;
+    return outLayerDisplacementCm;
 }
 
 TerrainDisplacementSample TerrainDisplacementSampler::SampleAtUv(
@@ -667,8 +613,7 @@ TerrainDisplacementSample TerrainDisplacementSampler::SampleAtUv(
         sample.layerIds,
         sample.layerWeights,
         normal,
-        sample.layerDisplacementCm,
-        sample.detailDisplacementCm);
+        sample.layerDisplacementCm);
     const Eigen::Vector3f baseWorld = UvToWorld(
         clampedU, clampedV, macroHeight);
     sample.worldPosition = baseWorld + normal * displacement * fade;
@@ -795,16 +740,10 @@ CreateTerrainDisplacementSampler(
             parameters, "u_uvScale", material.uvScale);
         material.detailUvScale = ReadFloatParameter(
             parameters, "u_detailUvScale", material.detailUvScale);
-        material.detailAmplitudeCm = ReadFloatParameter(
-            parameters, "u_detailAmplitudeCm", material.detailAmplitudeCm);
         material.layerDisplacementScale = ReadFloatParameter(
             parameters,
             "u_layerDisplacementScale",
             material.layerDisplacementScale);
-        material.detailNormalStrength = ReadFloatParameter(
-            parameters,
-            "u_detailNormalStrength",
-            material.detailNormalStrength);
         material.tessRadiusM = ReadFloatParameter(
             parameters, "u_terrainTessRadiusM", material.tessRadiusM);
         material.weightMapMode = static_cast<int>(std::lround(
@@ -827,24 +766,16 @@ CreateTerrainDisplacementSampler(
             parameters, "u_uvScale", material.uvScale);
         material.detailUvScale = ReadFloatParameter(
             parameters, "u_detailUvScale", material.detailUvScale);
-        material.detailAmplitudeCm = ReadFloatParameter(
-            parameters, "u_detailAmplitudeCm", material.detailAmplitudeCm);
         material.layerDisplacementScale = ReadFloatParameter(
             parameters,
             "u_layerDisplacementScale",
             material.layerDisplacementScale);
-        material.detailNormalStrength = ReadFloatParameter(
-            parameters,
-            "u_detailNormalStrength",
-            material.detailNormalStrength);
         material.tessRadiusM = ReadFloatParameter(
             parameters, "u_terrainTessRadiusM", material.tessRadiusM);
         const MaterialInstanceTextures detailTextures =
             ReadMaterialInstanceTextures(detailJson, detailPath);
         if (!detailTextures.layerHeight.empty())
             textures.layerHeight = detailTextures.layerHeight;
-        if (!detailTextures.detailHeightMap.empty())
-            textures.detailHeightMap = detailTextures.detailHeightMap;
     }
 
     const bool hasLayerDisplacement =
@@ -856,10 +787,7 @@ CreateTerrainDisplacementSampler(
             {
                 return std::abs(layer.displacementM) > 1.0e-6f;
             });
-    const bool hasDetailDisplacement =
-        std::abs(material.detailAmplitudeCm) > 0.1f;
-    if (material.weightMapMode == 1 &&
-        (hasLayerDisplacement || hasDetailDisplacement))
+    if (material.weightMapMode == 1 && hasLayerDisplacement)
     {
         throw std::runtime_error(
             "Terrain CPU displacement sampling does not support "
@@ -888,11 +816,6 @@ CreateTerrainDisplacementSampler(
                 textureCache,
                 desc.layers.size()));
         }
-    }
-    if (!textures.detailHeightMap.empty())
-    {
-        source.detailHeight = LoadDetailHeight(
-            resourceRoot, textures.detailHeightMap, textureCache);
     }
     return std::make_shared<const TerrainDisplacementSampler>(
         std::move(source));

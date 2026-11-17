@@ -201,7 +201,6 @@ void MaterialInstanceAssetEditorPanel::RefreshTerrainMaterialPanel()
         {"terrain-material-tess-max", "u_terrainTessMax"},
         {"terrain-material-tess-pixels", "u_terrainTessTargetPixels"},
         {"terrain-material-tess-radius", "u_terrainTessRadiusM"},
-        {"terrain-material-detail-height", "u_detailAmplitudeCm"},
         {"terrain-material-detail-uv", "u_detailUvScale"},
         {"terrain-material-displacement-scale", "u_layerDisplacementScale"},
     };

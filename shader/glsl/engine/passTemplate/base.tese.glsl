@@ -1,11 +1,11 @@
 #ifndef VL_PASS_TEMPLATE_BASE_TESE_GLSL
 #define VL_PASS_TEMPLATE_BASE_TESE_GLSL
 
-// 文件职责：地形材质的 Tessellation Evaluation 模板。主位移来自 top-4 材质层
-// layerHeight，detailHeightMap 只做可选的 terrain-UV 叠加；输出接口严格对应 base.vert。
-// File responsibility: Terrain material tessellation-evaluation template. Primary
-// displacement comes from the top-4 material-layer height maps; detailHeightMap is only
-// an optional terrain-UV overlay; its outputs mirror base.vert exactly.
+// 文件职责：地形材质的 Tessellation Evaluation 模板。位移来自主导层
+// layerHeight；输出接口严格对应 base.vert。
+// File responsibility: Terrain material tessellation-evaluation template.
+// Displacement comes from the dominant material-layer height map; its outputs
+// mirror base.vert exactly.
 
 #include "../../common/commonUbo.glsl"
 #include "../materialContext.glsl"
@@ -20,12 +20,6 @@ layout(location = 0) in MaterialVaryings v2fIn[];
 // 与 base.vert 的 `layout(location = 0) out MaterialVaryings v2f;` 完全一致，
 // 这样 base.frag 不需要知道是否经过细分。
 layout(location = 0) out MaterialVaryings v2f;
-
-float TerrainDetailHeight(vec2 detailUv)
-{
-    // 细分阶段没有片元导数，显式 LOD 0 同时避免驱动对隐式 LOD 的分歧。
-    return textureLod(detailHeightMap, detailUv, 0.0).r;
-}
 
 void main()
 {
@@ -104,71 +98,19 @@ void main()
     ctx.texCoord1 = texCoord1;
     ctx.worldTangent = worldTangent;
 
-    const float amplitudeCm = u_detailAmplitudeCm;
     const bool layerDisplacementActive =
         abs(u_layerDisplacementScale) > 1.0e-4;
-    const bool detailActive = abs(u_detailAmplitudeCm) > 0.1;
-    if (displacementFade > 0.0 && (layerDisplacementActive || detailActive))
+    if (displacementFade > 0.0 && layerDisplacementActive)
     {
         int ids[4];
         float weights[4];
         TerrainResolveTopLayers(ctx, false, false, ids, weights);
 
-        if (layerDisplacementActive)
-        {
-            const float layerDisplacementCm =
-                TerrainBlendedLayerDisplacementMeters(ctx, ids, weights) *
-                u_layerDisplacementScale * 100.0;
-            worldPosition +=
-                worldNormal * layerDisplacementCm * displacementFade;
-        }
-
-        // 主导层 displacementM=0 的水/海面保持宏高度场平整；不能叠加
-        // 全局 tiling 高度位移，否则角色脚会埋进视觉地形。
-        const float dominantDisplacementM =
-            TerrainDominantLayerDisplacementMeters(ids, weights);
-        const float detailSolidity = smoothstep(
-            0.004, 0.03, dominantDisplacementM);
-        if (detailActive && detailSolidity > 0.0)
-        {
-            const float detailFade = displacementFade * detailSolidity;
-            const float uvScale = max(u_uvScale * u_detailUvScale, 0.001);
-            const vec2 detailUv = texCoord * uvScale;
-            const float centerHeight =
-                TerrainDetailHeight(detailUv);
-            // 参数按米书写，World 单位是 cm；沿插值世界法线位移，保证斜坡上方向正确。
-            worldPosition += worldNormal *
-                ((centerHeight - 0.5) * amplitudeCm * detailFade);
-
-            // 用 ±0.05 tile 的高度差在切线空间扰动法线；不依赖世界尺度，
-            // UV 已与颜色 tiling 对齐，因此细节方向与颜色纹理一致。
-            const float epsilonUv = 0.05;
-            const float heightLeft = TerrainDetailHeight(
-                detailUv - vec2(epsilonUv, 0.0));
-            const float heightRight = TerrainDetailHeight(
-                detailUv + vec2(epsilonUv, 0.0));
-            const float heightDown = TerrainDetailHeight(
-                detailUv - vec2(0.0, epsilonUv));
-            const float heightUp = TerrainDetailHeight(
-                detailUv + vec2(0.0, epsilonUv));
-            const float gradientU =
-                (heightRight - heightLeft) * u_detailNormalStrength;
-            const float gradientV =
-                (heightUp - heightDown) * u_detailNormalStrength;
-            const float normalWeight = detailFade *
-                clamp(abs(u_detailAmplitudeCm) * 0.04, 0.0, 1.0);
-            if (normalWeight > 0.0)
-            {
-                const vec3 baseNormal = normalize(worldNormal);
-                const vec3 tangent = normalize(worldTangent.xyz);
-                const vec3 bitangent = normalize(cross(baseNormal, tangent)) *
-                    (worldTangent.w < 0.0 ? -1.0 : 1.0);
-                const vec3 detailNormal = normalize(
-                    baseNormal - (tangent * gradientU + bitangent * gradientV));
-                worldNormal = normalize(
-                    mix(baseNormal, detailNormal, normalWeight));
-            }
-        }
+        const float layerDisplacementCm =
+            TerrainBlendedLayerDisplacementMeters(ctx, ids, weights) *
+            u_layerDisplacementScale * 100.0;
+        worldPosition +=
+            worldNormal * layerDisplacementCm * displacementFade;
     }
 
     const vec4 clipPosition =

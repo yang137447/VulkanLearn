@@ -412,25 +412,17 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   位移在细分密度下 GPU 成本过高，不作为运行时路径。
   TES 的层 ID/权重采样用显式 LOD0（非 fragment 阶段没有可靠隐式导数）；与
   fragment 的隐式 mip 在近场逐位一致，远处位移已淡出，不参与视觉对比。
-- 可选叠加：`detailHeightMap`（sampler2D，可平铺 16-bit）按
-  `texCoord * u_uvScale * u_detailUvScale` 采样，幅度 `u_detailAmplitudeCm`
-  （厘米，默认 0 = 关闭），法线用 ±0.05 tile 的 UV 梯度按 `u_detailNormalStrength`
-  在切线空间扰动。默认占位纹理是 clamp 常量 0.5，开启幅度前必须绑定
-  `wrapMode: repeat` 的真实高度图。该叠加按主导层 `displacementM` 做
-  `smoothstep(0.004, 0.03)` 掩码：River Water/Sea 等 `displacementM=0` 的
-  水面不叠加 tiling 高度，保持宏高度场平整。
-- 两种位移都乘 `u_terrainTessRadiusM` 的远距淡出与相机 2 m 内的近距淡出。
+- 主位移乘 `u_terrainTessRadiusM` 的远距淡出与相机 2 m 内的近距淡出。
   位移只影响视觉：物理仍使用宏高度场；阴影/局部阴影 pass 不生成 tesc/tese，
   仍按未位移的宏网格投影。因此几何位移必须与碰撞高度场容差一致（见下条）。
 - 相关材质参数：`u_layerDisplacementScale`（主导层位移倍率，默认 1）、
-  `detailHeightMap`、`u_detailAmplitudeCm`、`u_detailNormalStrength`、
   `u_detailUvScale`（与 near-field detail 共用的 UV 倍率，默认 12）、
   `u_terrainTessRadiusM`、`u_terrainTessMax`（1..32）、
   `u_terrainTessTargetPixels`（1..16，默认 4）。这些参数只存在于 LOD0
   的 detail MI；Landscape 层详情抽屉把逐层 `uvScale`/`uvRotation`/`displacementM`
   放在同一组（`displacementM` 存米、UI 按厘米显示），并在 TR 声明
   `detailMaterialInstancePath` 时显示 detail MI 路径和
-  Tess Max / Tess Px / Radius / Detail Height(cm) / Detail UV / Disp Scale 输入，打开 detail MI
+  Tess Max / Tess Px / Radius / Detail UV / Disp Scale 输入，打开 detail MI
   后可直接编辑，基础 MI 不暴露这些字段。
 - 碰撞契约：Jolt heightfield 仍来自 TR 高度图（默认 `gridResolution+1` 采样），
   不包含 tiling 高度位移。render-only 几何位移应控制在鞋子/脚 IK 能吸收的
@@ -463,19 +455,15 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   `layerHeight` 显式 mip2 + repeat + 资产 `flipY`，
   幅度 `(h-0.5) * displacementM * u_layerDisplacementScale`；
   沿宏高度插值世界法线位移。
-- detail：`detailHeightMap` 显式 mip0 + repeat + 资产 `flipY`，
-  幅度 `(h-0.5) * u_detailAmplitudeCm`；按主导层 `displacementM` 的
-  `smoothstep(0.004, 0.03)` 掩码，水面保持宏高度平整。
 - 世界 XZ 查询：位移沿法线会改变 XZ，采样器用固定 XZ 迭代 1..2 次反解 UV；
-  法线由位移后高度的 20 cm 中心差分给出（平滑几何法线），不叠 shader 的
-  detail normal perturbation。
+  法线由位移后高度的 20 cm 中心差分给出（平滑几何法线）。
 - 相机 fade：`TerrainDisplacementFade` 保留 TES 的 far/near fade 供 parity；
   脚 IK 的接地查询**不应用** fade（否则角色附近会被 2 m nearFade 压平）。
   nearFade 的相机气泡风险仍未解决，单独审计。
 - 资产解析：`CreateTerrainDisplacementSampler(resourceRoot, instance, cache)`
   读取基础 MI 与可选 detail MI（detail 优先），`u_uvScale` 基础值可被 detail
   覆盖，`u_terrainWeightMapMode` 来自基础 MI；`layerHeight` 必须是
-  `textureArray`，层数不少于 TR 层数；`detailHeightMap` 必须是单图。
+  `textureArray`，层数不少于 TR 层数。
   16-bit 高度按绝对路径 + flipY + mip 需求缓存在
   `TerrainHeightTextureCache`，由 `ScriptRuntimeSubsystem` 跨 Play 持有。
 - 当前限制：`u_terrainWeightMapMode=1` 且位移开启时明确失败（连续
@@ -1543,7 +1531,8 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
 - CPU 同源位移：`terrain_tests --gtest_filter=TerrainDisplacementSampler.*`
   覆盖 16-bit PNG 原生解码（0x8000/0x8001 不截断）、资产 flipY、
   `SampleTop4` 与 `BuildPage` texel 双线性一致（id ≤1、weight ≤1e-3）、
-  TES 层位移+detail 公式 parity（RMS/max，224 个 UV）、水面 detail 掩码、
+  主导层层位移公式 parity（RMS/max，224 个 UV）、水面 `displacementM=0`
+  保持宏高度、
   世界 XZ 固定点迭代（max XZ 误差 <0.1 cm）与斜坡平滑法线方向。
   `script_tests --gtest_filter=ScriptTerrainCollision.ProbeGround*` 覆盖
   地形命中返回视觉高度（宏高度 +20 cm / -20 cm）、MI

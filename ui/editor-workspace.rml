@@ -555,10 +555,6 @@
                                         <input id="terrain-material-uv-scale" type="text" data-action="terrain-material-uv-scale" value="" title="Material instance u_uvScale; multiplied by each layer's own uvScale"/>
                                     </div>
                                     <div class="terrain-details-row">
-                                        <span class="terrain-details-label">Detail cm</span>
-                                        <input id="terrain-material-detail-height" type="text" data-action="terrain-material-detail-height" value="" title="Detail MI u_detailAmplitudeCm: tiling height-map displacement peak-to-peak in centimetres (0 = off)"/>
-                                    </div>
-                                    <div class="terrain-details-row">
                                         <span class="terrain-details-label">Detail UV</span>
                                         <input id="terrain-material-detail-uv" type="text" data-action="terrain-material-detail-uv" value="" title="Detail MI u_detailUvScale: near-field detail tiling multiplier"/>
                                     </div>
