@@ -155,6 +155,10 @@ struct ScriptPhysicsWorld::Impl
     // 逆序析构保证这一点。放置/替换只经由 SetTerrainCollisions。
     std::vector<TerrainCollisionBody> terrainBodies;
     std::map<JPH::BodyID, std::string> terrainIdentities;
+    // 碰撞代理只保存采样后的宏高度；Step 2 的 patch streamer 将在这里
+    // 追加/替换近场代理，而不触碰渲染 plan。
+    std::map<std::string, std::shared_ptr<const TerrainCollisionProxy>>
+        terrainProxies;
     // CPU 同源位移：脚 IK 查询视觉高度/法线；body 仍是宏高度 Jolt 碰撞。
     std::shared_ptr<TerrainHeightTextureCache> terrainTextureCache;
     std::map<std::string, std::shared_ptr<const TerrainDisplacementSampler>>
@@ -191,6 +195,7 @@ struct ScriptPhysicsWorld::Impl
         // 让所有 TerrainCollisionBody::Reset 都发生在 PhysicsSystem 仍存活时。
         terrainBodies.clear();
         terrainIdentities.clear();
+        terrainProxies.clear();
         for (auto& joint : joints) world.RemoveConstraint(joint.second.constraint);
         joints.clear();
         for (auto& body : bodies) Remove(body.second);
@@ -835,14 +840,18 @@ void ScriptPhysicsWorld::SetTerrainCollisions(
     // PhysicsSystem，因此替换/Stop/World 换代都不会命中已销毁的 Jolt 世界。
     std::vector<TerrainCollisionBody> bodies;
     std::map<JPH::BodyID, std::string> identities;
+    std::map<std::string, std::shared_ptr<const TerrainCollisionProxy>> proxies;
     std::map<std::string, std::shared_ptr<const TerrainDisplacementSampler>>
         samplers;
     bodies.reserve(instances.size());
     for (const TerrainCollisionInstance& instance : instances)
     {
+        std::shared_ptr<const TerrainCollisionProxy> proxy =
+            BuildTerrainCollisionProxy(instance.plan, instance.placement);
         TerrainCollisionBody body = CreateTerrainCollisionBody(
-            impl->world, instance.plan, instance.placement);
+            impl->world, *proxy);
         identities.emplace(JPH::BodyID(body.GetBodyIdValue()), instance.placementId);
+        proxies.emplace(instance.placementId, std::move(proxy));
         bodies.push_back(std::move(body));
     }
     std::shared_ptr<TerrainHeightTextureCache> cache = std::move(textureCache);
@@ -860,6 +869,7 @@ void ScriptPhysicsWorld::SetTerrainCollisions(
     }
     impl->terrainBodies = std::move(bodies);
     impl->terrainIdentities = std::move(identities);
+    impl->terrainProxies = std::move(proxies);
     impl->terrainSamplers = std::move(samplers);
     impl->terrainTextureCache = std::move(cache);
 }
@@ -867,6 +877,11 @@ void ScriptPhysicsWorld::SetTerrainCollisions(
 size_t ScriptPhysicsWorld::TerrainCollisionBodyCount() const
 {
     return impl->terrainBodies.size();
+}
+
+size_t ScriptPhysicsWorld::TerrainCollisionProxyCount() const
+{
+    return impl->terrainProxies.size();
 }
 
 size_t ScriptPhysicsWorld::TerrainDisplacementSamplerCount() const

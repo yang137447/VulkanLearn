@@ -19,10 +19,12 @@ terrainLayerRegistryTests.cpp
     terrainDisplacementSamplerTests.cpp
     terrainCollisionTests.cpp
     terrainCollisionInstanceTests.cpp
+    terrainCollisionProxyTests.cpp
     terrainChunkResidencyTests.cpp
     vegetationAssetTests.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainAssetLoader.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollision.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollisionProxy.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainDisplacementSampler.cpp
     ${PROJECT_SOURCE_DIR}/source/world/loading/terrainCollisionInstances.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainFeedback.cpp

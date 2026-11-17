@@ -8,6 +8,7 @@
 #include <Jolt/Physics/Body/BodyID.h>
 
 #include "terrain/terrainCollisionTypes.h"
+#include "terrain/terrainCollisionProxy.h"
 
 namespace JPH
 {
@@ -21,6 +22,7 @@ struct TerrainCollisionSettings
 {
     // 每边高度样本数；0 表示跟随 TR.gridResolution + 1（与渲染网格同分辨率），
     // 再向上取整到 Jolt heightfield blockSize 的倍数。允许区间 [4, 4096]。
+    // 仅 plan/placement 便捷入口使用；代理入口已经固定了采样网格。
     uint32_t sampleCount = 0;
     // Jolt 高度压缩位数；16 位在块内 min/max 上量化，块内误差约为高度范围/65536。
     uint32_t bitsPerSample = 16;
@@ -67,6 +69,10 @@ private:
         const TerrainBuildPlan&,
         const TerrainCollisionPlacement&,
         const TerrainCollisionSettings&);
+    friend TerrainCollisionBody CreateTerrainCollisionBody(
+        JPH::PhysicsSystem&,
+        const TerrainCollisionProxy&,
+        const TerrainCollisionSettings&);
 };
 
 // 用 TR 高度图在既有 Jolt PhysicsSystem 里创建一个静态 heightfield body。
@@ -77,6 +83,13 @@ TerrainCollisionBody CreateTerrainCollisionBody(
     JPH::PhysicsSystem& world,
     const TerrainBuildPlan& plan,
     const TerrainCollisionPlacement& placement = {},
+    const TerrainCollisionSettings& settings = {});
+
+// 从已构建的碰撞代理创建静态 body。代理入口不再读取 TR 层表/材质/LOD；
+// settings.sampleCount 会被忽略，bitsPerSample/objectLayer 仍然生效。
+TerrainCollisionBody CreateTerrainCollisionBody(
+    JPH::PhysicsSystem& world,
+    const TerrainCollisionProxy& proxy,
     const TerrainCollisionSettings& settings = {});
 
 // 独立测试/离线夹具：拥有唯一一个 Jolt PhysicsSystem（与 ScriptPhysicsWorld 的

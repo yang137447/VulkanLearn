@@ -1453,8 +1453,27 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
 静态 Jolt `HeightFieldShape` body，加入**调用方已有的** `JPH::PhysicsSystem`；
 它不创建第二套物理世界，也不改动渲染路径。
 
+### 碰撞代理
+
+`source/terrain/terrainCollisionProxy.*` 是碰撞专用的高度场代理：
+
+- `TerrainCollisionProxy` 只保存 `placementId`、placement、采样网格、世界 X/Z
+  跨度、世界 Y 高度样本（cm）和保守 AABB；不持有 TR 层表、材质实例、渲染
+  LOD 或纹理。
+- `BuildTerrainCollisionProxy(plan, placement, sampleCount)` 从宏高度图按默认
+  `gridResolution+1`（对齐到 Jolt `blockSize(2)`）采样；`heightCm` 已乘
+  `placement.scale.y`，世界 X/Z 跨度已乘 `placement.scale.x/z`。
+- `CreateTerrainCollisionBody(world, proxy)` 是 body 的实际构建入口；
+  `CreateTerrainCollisionBody(world, plan, placement, settings)` 只是先构建
+  代理再委托，因此 Step 1 仍与旧宏高度路径逐样本等价。
+- `ScriptPhysicsWorld` 在 `SetTerrainCollisions` 中为每个 placement 保留
+  `TerrainCollisionProxy`，供后续 patch streamer 使用；当前仍只有一个
+  宏高度 body，没有近场 patch 或双碰撞过滤。
+
 - 入口：`CreateTerrainCollisionBody(JPH::PhysicsSystem&, const TerrainBuildPlan&,
-  const TerrainCollisionPlacement&, const TerrainCollisionSettings&)`。
+  const TerrainCollisionPlacement&, const TerrainCollisionSettings&)`，或
+  `CreateTerrainCollisionBody(JPH::PhysicsSystem&, const TerrainCollisionProxy&,
+  const TerrainCollisionSettings&)`。代理入口忽略 `settings.sampleCount`。
   `TerrainCollisionPlacement.position` 单位 cm，`rotation` 单位度，顺序
   `Y*X*Z`（与 `CommonFunction::RotationToQuat` 一致），`scale` 无量纲；
   模块内部统一乘 `0.01` 进入 Jolt 米制。
@@ -1510,8 +1529,8 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   `collisionLayer/collisionMask` 能查询和碰撞它；`QueryBodyFilter` 对
   Jolt 的 `cInvalidGroup/cInvalidSubGroup` 按全放行处理，避免移位越界。
 - 可观测：Console `terraincollision stats` 只在手动输入时打印 Play 中的
-  terrain body 数、placement 数与 CPU 位移采样器数（`displacementSamplers`）；
-  非 Play 输出 “No physics world”。
+  terrain body 数、碰撞代理数（`proxies`）、placement 数与 CPU 位移采样器数
+  （`displacementSamplers`）；非 Play 输出 “No physics world”。
 - 构建：Jolt 已从 C# hosting 的 `if()` 中移出，是核心 CPU 依赖
   （`script/CMakeLists.txt` 无条件 FetchContent，锁定同一 commit）；
   `main` 与 `terrain_tests` 都链接 `Jolt`。
@@ -1528,6 +1547,10 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   覆盖 WorldBuilder 生成的实例、`SetTerrainCollisions` 替换/清空、
   Raycast/ProbeGround 命中 heightfield 并与 `SampleHeightCm` 比较、普通 World
   不创建物理世界。当前 worktree 未开 C#，没有完整 Play 冒烟。
+- 碰撞代理：`terrain_tests --gtest_filter=TerrainCollisionProxy.*` 覆盖
+  对齐后的 66² 样本网格、`placement.scale` 后的世界 X/Z 跨度与 Y 高度、
+  保守 AABB、非法输入拒绝，以及代理 body 与 plan/placement 便捷入口的
+  raycast 一致性。
 - CPU 同源位移：`terrain_tests --gtest_filter=TerrainDisplacementSampler.*`
   覆盖 16-bit PNG 原生解码（0x8000/0x8001 不截断）、资产 flipY、
   `SampleTop4` 与 `BuildPage` texel 双线性一致（id ≤1、weight ≤1e-3）、

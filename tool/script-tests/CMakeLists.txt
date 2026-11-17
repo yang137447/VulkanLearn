@@ -42,6 +42,7 @@ add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scr
     "${PROJECT_SOURCE_DIR}/source/script/scriptBuildService.cpp"
     "${PROJECT_SOURCE_DIR}/source/script/scriptPhysics.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainCollision.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainCollisionProxy.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainDisplacementSampler.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmap.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainWeightMap.cpp"

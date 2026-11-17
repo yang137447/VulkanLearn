@@ -43,6 +43,7 @@ public:
         const std::filesystem::path& resourceRoot = {},
         std::shared_ptr<TerrainHeightTextureCache> textureCache = {});
     size_t TerrainCollisionBodyCount() const;
+    size_t TerrainCollisionProxyCount() const;
     std::vector<std::string> TerrainCollisionPlacementIds() const;
     size_t TerrainDisplacementSamplerCount() const;
 private:
