@@ -1947,6 +1947,14 @@ taper，并从最终高度场的 MFD 汇流面积生成河网 mask：
 
 ## 2026-11-05 Pegasus 4×4 PCG tile 场景
 
+> **2026-11-17 本地资产状态：**
+> `Generated/HoudiniPegasusIsland/` 已从本地资源 worktree 删除，
+> `config/config.json` 默认场景已改为
+> `Maps/SC_fracture_playground/SC_fracture_playground.json`。
+> `Generated/BlenderPegasusGN*` 的 `SC_terrain_pegasus_4x4.json` 变体**暂时保留**，
+> 仅作历史对照，不作为当前验收/出货路径，也不进入默认启动。
+> 下面 HoudiniPegasusIsland 的实测数字只保留为历史证据，不再可复现。
+
 新增 `build_pegasus_tiled.py` / `split_pegasus_tiles.py` /
 `assemble_pegasus_tiles.py`，把 4km 全局场切成 16 个 1km tile：
 
@@ -2118,7 +2126,8 @@ taper，并从最终高度场的 MFD 汇流面积生成河网 mask：
 > **2026-11-10 退役：** 本节测的是 `_ref4km`（`HFErodeExamples.hip` 放大到
 > 4 km 的示例，不是飞马岛）。`Generated/HoudiniPegasus4km/` 及
 > `SC_houdini_pegasus_4km_top/ground/veryclose` 已删除，下面只保留为历史证据；
-> 当前资产是 `Generated/HoudiniPegasusIsland/`。
+> `Generated/HoudiniPegasusIsland/` 也已在 2026-11-17 移除；当前不再有 Houdini
+> Pegasus 默认资产。
 
 GN 复刻停止（`anisotropy` 1.03 vs Houdini 1.28），4 km 地形改为直接消费
 Houdini 导出。决定与数据映射见
@@ -2147,12 +2156,13 @@ Houdini 导出。决定与数据映射见
 - 截图：`artifacts/houdini_ingest/houdini_far.png`、
   `houdini_top.png`；层语义检查 `artifacts/houdini_ingest/houdini_layers.png`。
 
-`config/config.json` 现在指向
+2026-11-17 之前 `config/config.json` 指向
 `Generated/HoudiniPegasusIsland/SC_terrain_pegasus_4x4.json`（20 objects，
-含独立水面 `SeaSurface`）。下方 4 km 的驻留/帧率数字是在已退役的
-`HoudiniPegasus4km` 参考资产上测的，只作为历史证据，不代表当前资产。
-GN 资产 `Generated/BlenderPegasusGN_v1_rhythm_river/` 保留为对照，
-不再作为出货路径。
+含独立水面 `SeaSurface`）；该目录已删除，默认场景改为
+`Maps/SC_fracture_playground/SC_fracture_playground.json`。下方 4 km 的驻留/帧率
+数字是在已退役的 `HoudiniPegasus4km` 参考资产上测的，只作为历史证据，
+不代表当前资产。GN 资产 `Generated/BlenderPegasusGN*` 暂时保留为对照，
+不再作为出货路径，也不进入默认启动。
 
 ### 构建类型对帧率的影响（2026-11-09 实测）
 
