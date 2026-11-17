@@ -1,7 +1,6 @@
 #include "terrain/terrainWeightMap.h"
 
 #include <algorithm>
-#include <array>
 #include <cmath>
 #include <cstring>
 #include <stdexcept>
@@ -581,58 +580,6 @@ TerrainTileCandidateList TerrainWeightMapBuilder::BuildPageCandidates(
         tilesPerSide,
         tileX,
         tileZ);
-}
-
-TerrainTop4Texel TerrainWeightMapBuilder::SampleTop4Texel(
-    const TerrainBuildPlan& plan,
-    uint32_t resolution,
-    const TerrainTileCandidateList& candidates,
-    uint32_t texelX,
-    uint32_t texelY,
-    const std::vector<uint8_t>& layerIdMap)
-{
-    if (!plan.heightmap || plan.desc.layers.empty() || plan.desc.layers.size() > 256)
-        throw std::runtime_error("Terrain texel sampling requires a heightmap and 1..256 layers");
-    if (resolution == 0 || texelX >= resolution || texelY >= resolution)
-        throw std::runtime_error("Terrain texel sampling is outside the weight map");
-    if (candidates.layerIds.empty())
-        throw std::runtime_error("Terrain texel sampling requires at least one candidate layer");
-
-    const float u = (static_cast<float>(texelX) + 0.5f) /
-        static_cast<float>(resolution);
-    const float v = (static_cast<float>(texelY) + 0.5f) /
-        static_cast<float>(resolution);
-    const SampleState state = SampleAt(plan, u, v, resolution);
-    const TerrainHeightmap::MeshUvTransform heightUvTransform =
-        TerrainHeightmap::MeshUvTransformFor(plan.desc, *plan.heightmap);
-
-    std::array<float, 256> weights{};
-    size_t weightCount = 0;
-    for (uint8_t layerId : candidates.layerIds)
-    {
-        float weight = LayerWeight(plan.desc.layers[layerId], layerId, state);
-        if (plan.layerPaint)
-        {
-            const Eigen::Vector2f paintUv = heightUvTransform.Apply(u, v);
-            weight = plan.layerPaint->Blend(
-                layerId, paintUv.x(), paintUv.y(), weight);
-        }
-        weights[weightCount++] = std::max(0.0f, weight);
-    }
-
-    TerrainTop4Texel result;
-    SelectTop4(
-        weights.data(),
-        weightCount,
-        candidates.layerIds,
-        result.ids,
-        result.weights);
-    for (uint32_t slot = 0; slot < TopLayerCount; ++slot)
-    {
-        result.ids[slot] = GlobalLayerId(
-            layerIdMap, result.ids[slot], plan.desc.layers.size());
-    }
-    return result;
 }
 
 TerrainVirtualTexture TerrainWeightMapBuilder::BuildVirtualTexture(

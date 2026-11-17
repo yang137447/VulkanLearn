@@ -16,7 +16,6 @@ add_executable(terrain_tests
     terrainLayerStreamingQualityTests.cpp
 terrainLayerRegistryTests.cpp
     terrainWeightMapBindingTests.cpp
-    terrainDisplacementSamplerTests.cpp
     terrainCollisionTests.cpp
     terrainCollisionInstanceTests.cpp
     terrainCollisionProxyTests.cpp
@@ -25,7 +24,6 @@ terrainLayerRegistryTests.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainAssetLoader.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollision.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCollisionProxy.cpp
-    ${PROJECT_SOURCE_DIR}/source/terrain/terrainDisplacementSampler.cpp
     ${PROJECT_SOURCE_DIR}/source/world/loading/terrainCollisionInstances.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainFeedback.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerFeedback.cpp

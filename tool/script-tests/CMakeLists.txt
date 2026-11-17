@@ -43,15 +43,9 @@ add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scr
     "${PROJECT_SOURCE_DIR}/source/script/scriptPhysics.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainCollision.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainCollisionProxy.cpp"
-    "${PROJECT_SOURCE_DIR}/source/terrain/terrainDisplacementSampler.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmap.cpp"
-    "${PROJECT_SOURCE_DIR}/source/terrain/terrainWeightMap.cpp"
-    "${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerPaint.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/loading/terrainCollisionInstances.cpp"
     "${PROJECT_SOURCE_DIR}/source/resource/image/hostImage.cpp"
-    "${PROJECT_SOURCE_DIR}/source/resource/image/textureIO.cpp"
-    "${PROJECT_SOURCE_DIR}/source/resource/image/ddsTexture.cpp"
-    "${PROJECT_SOURCE_DIR}/source/resource/image/ktx2Texture.cpp"
     "${PROJECT_SOURCE_DIR}/source/physics/joltRegistration.cpp"
     "${PROJECT_SOURCE_DIR}/source/physics/bonePhysics.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/world.cpp"
@@ -75,7 +69,7 @@ if(MINGW)
     set_source_files_properties(scriptAnimationTests.cpp scriptRuntimeTests.cpp
         PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
-target_link_libraries(script_tests PRIVATE vl_script_host vl_animation_assets vl_debug_draw assimp Eigen3 Json Vulkan::Vulkan vl_offline_core BLAKE3::blake3 Jolt stb_image OpenEXR::OpenEXR)
+target_link_libraries(script_tests PRIVATE vl_script_host vl_animation_assets vl_debug_draw assimp Eigen3 Json Vulkan::Vulkan vl_offline_core BLAKE3::blake3 Jolt)
 if(TARGET vl_gameplay)
     add_custom_target(vl_script_fixtures
         COMMAND "${VULKANLEARN_DOTNET_EXECUTABLE}" build

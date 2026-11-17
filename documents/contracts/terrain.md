@@ -436,47 +436,6 @@ Paint 模式下工具栏的同一按钮显示为 `Save Paint`，把当前会话�
   `VL_TERRAIN_TESSELLATION=1`（无论是否配置 detail MI），否则 renderer 加载期
   直接失败；`lodLevels==1` 的地形没有粗 LOD，基础 MI 开启该宏等同于 LOD0 细分。
 
-### CPU 同源位移采样（脚 IK 真值）
-
-`source/terrain/terrainDisplacementSampler.*` 在 CPU 复刻 TES 的**几何**公式，
-作为脚 IK / 接触查询/parity 的唯一真值。它不访问 Vulkan、渲染线程或帧快照，
-只消费已解码的 TR 高度图、MI 参数与 16-bit 层高度资产：
-
-- 宏高度：`TerrainHeightmap::SampleHeightCm`，mesh UV 经 `MeshUvTransformFor`
-  映射到高度图；与渲染网格的顶点采样逐点一致。
-- 权重：`u_terrainWeightMapMode=0` 的每 tile page atlas top-4。采样器按
-  `TerrainPageManager` 相同的 `TerrainWeightMapBuilder::BuildPageCandidates`
-  取候选层，再用 `TerrainWeightMapBuilder::SampleTop4Texel` 烘焙 texel；
-  该函数与 `BuildPage`/`BakeTile` 共用高度/坡度、noise、layer paint 和
-  `SelectTop4`。权重页是 linear，CPU 用 texel 级双线性 + 半 texel 内缩匹配；
-  `layerIds` 页是 nearest，CPU 必须取最近 texel，不能插值出中间的层号。
-- 主位移：主导层 `ids[0]`（不是 top-4 加权），UV
-  `texCoord * u_uvScale * layerUvScale * u_detailUvScale`（不旋转），
-  `layerHeight` 显式 mip2 + repeat + 资产 `flipY`，
-  幅度 `(h-0.5) * displacementM * u_layerDisplacementScale`；
-  沿宏高度插值世界法线位移。
-- 世界 XZ 查询：位移沿法线会改变 XZ，采样器用固定 XZ 迭代 1..2 次反解 UV；
-  法线由位移后高度的 20 cm 中心差分给出（平滑几何法线）。
-- 相机 fade：`TerrainDisplacementFade` 保留 TES 的 far/near fade 供 parity；
-  脚 IK 的接地查询**不应用** fade（否则角色附近会被 2 m nearFade 压平）。
-  nearFade 的相机气泡风险仍未解决，单独审计。
-- 资产解析：`CreateTerrainDisplacementSampler(resourceRoot, instance, cache)`
-  读取基础 MI 与可选 detail MI（detail 优先），`u_uvScale` 基础值可被 detail
-  覆盖，`u_terrainWeightMapMode` 来自基础 MI；`layerHeight` 必须是
-  `textureArray`，层数不少于 TR 层数。
-  16-bit 高度按绝对路径 + flipY + mip 需求缓存在
-  `TerrainHeightTextureCache`，由 `ScriptRuntimeSubsystem` 跨 Play 持有。
-- 当前限制：`u_terrainWeightMapMode=1` 且位移开启时明确失败（连续
-  `layerWeightMaps` 的 CPU 路径留待后续）；`layerHeight` slice 使用 TR 局部层
-  下标，依赖当前单 sourceSet / globalId==local 的资产；不支持相机 fade 的
-  接地语义；不替代 Jolt 碰撞。
-
-Play 时 `ScriptPhysicsWorld::SetTerrainCollisions(instances, resourceRoot, cache)`
-先按原逻辑创建宏高度 Jolt body，再为每个 placement 建立采样器；任一采样器
-失败时整次替换回滚，旧 body/采样器保持有效。`ProbeGround` 命中地形 body 时
-把结果从 Jolt 宏高度改写为采样器的视觉高度/平滑法线；垂直探针落空时还会用
-采样器补一次（视觉表面在探针线段内才接受）。`Raycast` 仍是 Jolt 宏高度语义。
-
 ### 几何 chunk 驻留与运行时 streaming
 
 加载期仍按窗口预生成一批 (chunk, LOD) 作为首帧基线；之后的相机移动由
@@ -1529,8 +1488,8 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   `collisionLayer/collisionMask` 能查询和碰撞它；`QueryBodyFilter` 对
   Jolt 的 `cInvalidGroup/cInvalidSubGroup` 按全放行处理，避免移位越界。
 - 可观测：Console `terraincollision stats` 只在手动输入时打印 Play 中的
-  terrain body 数、碰撞代理数（`proxies`）、placement 数与 CPU 位移采样器数
-  （`displacementSamplers`）；非 Play 输出 “No physics world”。
+  terrain body 数、碰撞代理数（`proxies`）与 placement 数；
+  非 Play 输出 “No physics world”。
 - 构建：Jolt 已从 C# hosting 的 `if()` 中移出，是核心 CPU 依赖
   （`script/CMakeLists.txt` 无条件 FetchContent，锁定同一 commit）；
   `main` 与 `terrain_tests` 都链接 `Jolt`。
@@ -1551,16 +1510,6 @@ CPU 页面烘焙（`TerrainWeightMapBuilder::BuildPage`）仍在 `RequestPageAtE
   对齐后的 66² 样本网格、`placement.scale` 后的世界 X/Z 跨度与 Y 高度、
   保守 AABB、非法输入拒绝，以及代理 body 与 plan/placement 便捷入口的
   raycast 一致性。
-- CPU 同源位移：`terrain_tests --gtest_filter=TerrainDisplacementSampler.*`
-  覆盖 16-bit PNG 原生解码（0x8000/0x8001 不截断）、资产 flipY、
-  `SampleTop4` 与 `BuildPage` texel 双线性一致（id ≤1、weight ≤1e-3）、
-  主导层层位移公式 parity（RMS/max，224 个 UV）、水面 `displacementM=0`
-  保持宏高度、
-  世界 XZ 固定点迭代（max XZ 误差 <0.1 cm）与斜坡平滑法线方向。
-  `script_tests --gtest_filter=ScriptTerrainCollision.ProbeGround*` 覆盖
-  地形命中返回视觉高度（宏高度 +20 cm / -20 cm）、MI
-  `u_layerDisplacementScale` 失效回宏高度、`ProbeGround` 的视觉高度/法线
-  与 support identity。
 - CPU LOD/边界缝合：`terrain_tests` 钉住 LOD0 的顶点/索引与索引顺序（无额外几何）、
   LOD1..3 的格子数、边界环顶点数与过渡带三角形数、基础顶点在 LOD0 同名网格点的
   位置/UV（线性坡面下法线也一致）、边界环落在 chunk 边界线上且不超出 AABB、过渡带三角形与内部网格

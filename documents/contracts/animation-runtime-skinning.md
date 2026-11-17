@@ -171,13 +171,14 @@ MM 临时观察和实际关节历史只读取这份姿态。
 
 进入锁定要求历史有效、该参考点 pre-IK 世界水平速度不超过 40 cm/s、
 到平面距离不超过 10 cm **且**不低于 `-maxPenetrationCm`（默认 28 cm）。
-正向 10 cm 阈值保持源节点语义；负间隙放宽是视觉位移地形的要求：
-TES 层高度/detail 可以把地表推到宏高度之上，鞋底先进入地表时仍允许锁足，
-`anchor` 落在视觉地表上、由 IK 把脚抬回地面形成穿透恢复。超过 80 cm/s、
+正向 10 cm 阈值保持源节点语义；负间隙放宽用于吸收碰撞代理/采样误差：
+鞋底先进入碰撞表面时仍允许锁足，`anchor` 落在碰撞表面上、由 IK 把脚抬回
+地面形成穿透恢复。超过 80 cm/s、
 正向 16 cm、负向 `maxPenetrationCm`、锚点偏差 20 cm 或支撑身份改变时释放。
 `SkeletalPlayback::SetFootPlacementMaxPenetrationCm` 可在 0..60 cm 内调整该预算。
-地形命中时 `ScriptPhysicsWorld::ProbeGround` 返回 `TerrainDisplacementSampler`
-的视觉高度与平滑几何法线；Jolt heightfield 只作为宏高度命中载体。
+地形命中时 `ScriptPhysicsWorld::ProbeGround` 返回 Jolt heightfield（后续为
+0.5 m 宏高度 patch）的高度与表面法线；TES 的 `layerHeight`/detail 只参与
+渲染，不进入脚 IK 或物理碰撞。
 两点共面且都可锁时取更贴近地面的参考点，1 cm 内保留原支点；
 另一参考点低 1 cm 以上时切换支点，跟随 heel→ball 滚动。
 踏面不共面时只取更高/可锁的踏面作单支点，不把台阶连成虚构斜坡；
