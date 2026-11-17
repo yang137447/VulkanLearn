@@ -1,6 +1,7 @@
 #include <chrono>
 #include <cmath>
 #include <functional>
+#include <iostream>
 #include <memory>
 #include <stdexcept>
 #include <thread>
@@ -124,6 +125,21 @@ TEST(TerrainCollisionPatch, BuildsMacroHeightPatchAtHalfMetreSpacing)
     EXPECT_NEAR(patch->proxy.boundsMaxCm.x(), 3200.0f, 0.01f);
     EXPECT_NEAR(patch->proxy.boundsMinCm.y(), 500.0f, 0.01f);
     EXPECT_NEAR(patch->proxy.boundsMaxCm.y(), 500.0f, 0.01f);
+
+    const auto start = std::chrono::steady_clock::now();
+    for (int repeat = 0; repeat < 10; ++repeat)
+    {
+        const auto rebuilt = VL::BuildTerrainCollisionPatch(
+            *macro,
+            Eigen::Vector2f::Zero(),
+            VL::TerrainCollisionPatchBuildSettings{});
+        ASSERT_NE(rebuilt, nullptr);
+    }
+    const double elapsedMs =
+        std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - start).count() / 10.0;
+    std::cout << "[TerrainCollisionPatch] buildMs=" << elapsedMs
+              << " samples=" << patch->proxy.sampleCount << std::endl;
 }
 
 TEST(TerrainCollisionPatch, RejectsPatchOutsideMacroProxy)

@@ -144,7 +144,11 @@ float TerrainCollisionProxy::SampleHeightCmLocal(
     float localX,
     float localZ) const
 {
-    if (!IsValid())
+    // 热路径：调用方已经验证过代理；这里只做廉价的布局检查，不能每个样本
+    // 再遍历整张高度图（patch 构建会变成 O(n^4)）。
+    if (sampleCount < 2 ||
+        heightCm.size() !=
+            static_cast<size_t>(sampleCount) * sampleCount)
         return 0.0f;
     const float u = std::clamp(localX / sizeXCm + 0.5f, 0.0f, 1.0f);
     const float v = std::clamp(localZ / sizeZCm + 0.5f, 0.0f, 1.0f);
