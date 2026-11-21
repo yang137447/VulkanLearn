@@ -497,3 +497,27 @@ manifest `e6e00918…103489`）与两份同版本最终包上执行。P0 冻结�
 P0、53 机位双权重画质/收敛、启动与内存已经实测成立；**正式性能、连续移动、
 P1/P2 负例、P4 完成矩阵、lit/TES 视觉门禁、readonly 取证与旧路径清退仍未关闭**。
 整 P1–P5 继续 pending，不因本轮 53 机位或 Editor 27 步执行而宣告完成。
+
+### 追加：P1/P2 负例、只读离线 Game 与性能时钟口径（同日）
+
+- **文件级负例直接运行**（`tool/validation/terrain/direct_negative_cases.py`，私有安装副本）：
+  - `input_corrupt` → `VT production input integrity mismatch`，exit1，无 World commit；
+  - `v1_reject` → `Unsupported VT manifest version/layout/filter`，exit1，无 commit；
+  - `legacy_switch_reject`（TR `residentPages`）→ `unknown field: residentPages`，exit1，无 commit；
+  - `root_corrupt` → `[TerrainVT] root payload unavailable; queued GPU regeneration`，
+    World commit 成功，rootOnly 3271→2680→658→99→0，2.23 s 后 interactive；
+  - `closure` → 16 surface 完整闭包加载，exit0。
+  证据：`final-delivery/direct-cases/*/result.json` 与 `runtime.log`。
+- **console fault**：`rvtfault statusNonzero/submitFail/budgetReject` 均只记录为 queued/busy，
+  未出现真实消费（`RVT_FAULT_CONTROL` 无 consumed，`RVT_PRODUCTION_RAW` 全 status=0）。
+  因此 production_failure/over_budget 仍是未闭合项，不能用 queued 行当负例通过。
+- **只读离线 Game**（`tool/validation/terrain/readonly_offline_game.py`）：
+  NTFS 继承 WRITE deny + 新建/改写探测均被拒；Game exit0、World commit、clean teardown、
+  包 626 文件逐字节不变；shader 60 hits/0 misses/0 compiled；文件轨迹 15,342 条、
+  footer `incomplete=false`、0 条 sourceauthor/project 读取。
+  证据：`final-delivery/offline-game/receipt.json`、`file-trace.jsonl`（SHA256 `9f0f2c3b…`）。
+- **性能口径修正**：只锁 SM 时钟时显存仍在 405/810 ⇄ 9501 MHz 成块切换，造成 pass 时间双峰；
+  先前记为“实现回归”的 p99 12.589/9.060 **撤回**。SM+显存锁 1800/9501 MHz 后同一包/路线
+  实测 steady GPU p99 2.936 ms、geometry+TES p99 2.253 ms、p50 1.832 ms，均优于冻结门槛；
+  启动 19.55 s、private 5.50 GB、WDDM 4.65 GB 通过。CPU p99 该 run 因 host audit 检出编译活动
+  而无效，需静默窗口重跑。详见 `final-delivery/s5-formal-performance-record.md`。

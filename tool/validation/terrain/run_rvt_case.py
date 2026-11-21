@@ -61,7 +61,10 @@ def fault_target(package, case):
                     if all(row[field] == root[field] for field in ("surfaceId", "mip", "x", "y")))
         return reference_path(manifest.parent, document["package"]), "corrupt-root", page["offset"]
     if case == "input_corrupt":
-        source = document["production"]["surfaces"][0]["inputs"]["layerAlbedo"]
+        # V1 发布把输入写成 {layerName: objectId} 字典；V2 发布写成 objectId 数组。
+        # 两种真实 schema 都要能定位到一个实际生产输入对象，不能按旧字段名直接下标。
+        inputs = document["production"]["surfaces"][0]["inputs"]
+        source = inputs.get("layerAlbedo") if isinstance(inputs, dict) else inputs[0]
         entry = next(row for row in document["production"]["objects"] if row["objectId"] == source)
         return reference_path(manifest.parent, entry["path"]), "corrupt-production-input", 0
     return None
