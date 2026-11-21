@@ -90,6 +90,48 @@ Jolt 5.6.0 CPU 库（提交
 不卸载 CLR；Gameplay 可手动重载或通过编辑器编译后重载，桥接/API 改动仍需重启。
 Stop 只重建实例，Gameplay 静态字段在程序集换代后重置。
 
+### 沙箱/工作区外的 worktree（环境约束）
+
+dotnet/MSBuild 进程在 Codex Windows 沙箱里**只能写工作区根目录**。仓库约定
+worktree 放在 `D:\YYBWorkSpace\GitHub\VulkanLearn-worktrees`，它在工作区根
+（`D:\YYBWorkSpace\GitHub\VulkanLearn`）之外，所以 `vl_gameplay` 会在
+`Directory.CreateTempSubdirectory` 上抛 `UnauthorizedAccessException`，
+或写 `obj/`/输出 DLL 时被拒（`csc : error CS2012`）。
+
+现象与判据：
+
+- `MSBUILD : error MSB1025 ... Access to the path '...\Temp\MSBuildTemp*.xxx' is denied`
+- 同一份 `dotnet build` 把 `TEMP`、`--output`、`BaseIntermediateOutputPath`
+  指向工作区根内的目录就能成功——说明是写入范围而不是 SDK 或项目问题。
+
+通用修法：把托管构建的临时/中间/输出目录重定向到一个可写根。
+`script/CMakeLists.txt` 提供缓存变量 `VULKANLEARN_SCRIPT_BUILD_ROOT`
+（默认空 = 保持原有 in-tree 布局）。设置后 `vl_gameplay` 会用
+`cmake -E env TEMP/TMP=<root>/tmp`、`BaseIntermediateOutputPath=<root>/obj/`、
+`--artifacts-path=<root>/tmp/artifacts`、`--output=<root>/bin` 执行，
+再把结果 `copy_directory` 回 `bin/managed`——CMake 自己能写回 worktree，
+只有 dotnet/MSBuild 需要可写根。
+
+配置入口（任意分支/worktree 通用，自动用 `git worktree list` 找到主 checkout）：
+
+```powershell
+powershell -NoProfile -File tool\script-build\configure-csharp-build.ps1 -BuildDir build-csharp
+cmake --build build-csharp --target main_editor main_game vl_gameplay -j 4
+```
+
+脚本默认把根放在 `<主 checkout>/artifacts/script-build/<topic>`，并接受
+`-BuildRoot` / `VULKANLEARN_SCRIPT_BUILD_ROOT` 覆盖。也可以手动传：
+
+```powershell
+cmake -S . -B build-csharp -G "MinGW Makefiles" `
+  -DVULKANLEARN_ENABLE_CSHARP_BLUEPRINTS=ON `
+  -DVULKANLEARN_DOTNET_EXECUTABLE=<sdk>/dotnet.exe `
+  -DVULKANLEARN_SCRIPT_BUILD_ROOT=<writable-root>
+```
+
+把 worktree 目录本身加入 Codex 工作区也能解决（沙箱写入范围随之扩大），
+但在多 worktree/CI 场景下，`VULKANLEARN_SCRIPT_BUILD_ROOT` 是可复现的做法。
+
 ### 引擎与用户源码归属
 
 引擎仓库的 `script/VulkanLearn.Runtime/` 拥有常驻桥接、Blueprint/Component 基类与公共 API；
