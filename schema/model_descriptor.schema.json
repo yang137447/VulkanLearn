@@ -23,6 +23,50 @@
             "exclusiveMinimum": 0,
             "description": "tressfx 局部空间半径，使用作者坐标单位；不自动换轴或换算单位。"
         },
+        "simulationGuideCount": {
+            "type": "integer",
+            "minimum": 0,
+            "maximum": 4294967295,
+            "description": "模拟 guide 数量预算；0 使用全部源 guide。"
+        },
+        "groups": {
+            "type": "array",
+            "items": {
+                "type": "object",
+                "properties": {
+                    "name": {"type": "string", "minLength": 1},
+                    "guideRanges": {
+                        "type": "array",
+                        "items": {
+                            "type": "array",
+                            "minItems": 2,
+                            "maxItems": 2,
+                            "items": {"type": "integer", "minimum": 0, "maximum": 4294967295}
+                        }
+                    },
+                    "simulationOverrides": {
+                        "allOf": [
+                            {"$ref": "tressfx_behavior.schema.json#/$defs/tressfxSimulationValues"},
+                            {
+                                "type": "object",
+                                "properties": {
+                                    "damping": true,
+                                    "bendStiffness": true,
+                                    "globalShapeStiffness": true,
+                                    "globalShapeEffectiveRange": true,
+                                    "vspCoefficient": true,
+                                    "vspAccelThresholdMax": true,
+                                    "solverProfile": true
+                                },
+                                "additionalProperties": false
+                            }
+                        ]
+                    }
+                },
+                "required": ["name", "guideRanges"],
+                "additionalProperties": false
+            }
+        },
         "simulationDefaults": {"$ref": "tressfx_behavior.schema.json#/$defs/tressfxSimulationValues"},
         "simulation": false,
         "collision": false,
@@ -130,6 +174,54 @@
         "materialSlots"
     ],
     "allOf": [
+        {
+            "if": {
+                "properties": {
+                    "simulationDefaults": {
+                        "properties": {"solver": {"enum": ["cosseratXpbdV1", "cosseratImplicitV3"]}},
+                        "required": ["solver"]
+                    }
+                },
+                "required": ["simulationDefaults"]
+            },
+            "then": {
+                "properties": {
+                    "simulationDefaults": {"required": ["backend"]},
+                    "groups": {
+                        "items": {
+                            "properties": {
+                                "simulationOverrides": {
+                                    "properties": {
+                                        "damping": false,
+                                        "bendStiffness": false,
+                                        "globalShapeStiffness": false,
+                                        "globalShapeEffectiveRange": false,
+                                        "vspCoefficient": false,
+                                        "vspAccelThresholdMax": false
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        },
+        {
+            "if": {
+                "properties": {
+                    "simulationDefaults": {"required": ["solverProfile"]}
+                },
+                "required": ["simulationDefaults"]
+            },
+            "then": {
+                "properties": {
+                    "simulationDefaults": {
+                        "required": ["solver"],
+                        "properties": {"solver": {"enum": ["cosseratXpbdV1", "cosseratImplicitV3"]}}
+                    }
+                }
+            }
+        },
         {
             "if": {"required": ["skinning"]},
             "then": {"properties": {"type": {"const": "mesh"}}}

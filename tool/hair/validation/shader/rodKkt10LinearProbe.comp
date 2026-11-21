@@ -1,0 +1,28 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "rodV3Kkt10.glsl"
+
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0, std430) readonly buffer Inputs
+{
+    float values[];
+} inputData;
+layout(set = 0, binding = 1, std430) buffer Outputs
+{
+    float values[];
+} outputData;
+
+void main()
+{
+    RodKkt10Matrix matrix;
+    RodKkt10Vector right;
+    for (uint entry = 0u; entry < 100u; ++entry)
+        matrix.values[entry] = inputData.values[entry];
+    for (uint entry = 0u; entry < 10u; ++entry)
+        right.values[entry] = inputData.values[100u + entry];
+    RodKkt10Vector direction;
+    bool success = RodKkt10PivotSolve(matrix, right, direction);
+    outputData.values[10] = success ? 0.0 : 1.0;
+    for (uint entry = 0u; entry < 10u; ++entry)
+        outputData.values[entry] = success ? direction.values[entry] : 0.0;
+}

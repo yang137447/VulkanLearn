@@ -41,6 +41,11 @@
   新场景目标值。同一帧同时把原始 `wind` 目标交给 `WindResponseProfileSet`，每条 profile 的
   首帧也直接采用目标值。
 - 渲染器资源加载跳过 `wind` 对象（不产生 GPU 资源）；编辑器对象类型白名单接受 `wind`。
+- 普通 Console `wind get` / `wind strength <cm/s>` 通过 `CommandBus` 在 GT
+  读取或覆盖已有风对象的目标强度。没有作者风对象会明确拒绝；覆盖不改变方向、
+  gust、既有缓动或 World generation，不写场景文件、不重载 World、不复位发丝。
+  执行 receipt 的字段和时钟语义见
+  [场景风命令](debug-runtime-commands.md#scene-wind)。
 
 ## 植被消费（SpeedTree）
 

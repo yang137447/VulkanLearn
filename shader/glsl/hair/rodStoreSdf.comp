@@ -1,0 +1,21 @@
+#version 450
+#include "rodCommon.glsl"
+#include "tressfxSdfCommon.glsl"
+#include "rodSdfHistory.glsl"
+
+layout(local_size_x = 64) in;
+
+void main()
+{
+    uint cell = gl_GlobalInvocationID.x;
+    if (cell < sdf.dims.w)
+        sdfHistory.cells[cell] = sdfGrid.cells[cell];
+    if (cell == 0u)
+    {
+        sdfHistory.originCell = sdf.originCell;
+        sdfHistory.dims = sdf.dims;
+        sdfHistory.range = sdf.range;
+        sdfHistory.worldToHair = rod.worldToHair;
+        sdfHistory.timing = vec4(rod.timing.x, 0, 0, 1);
+    }
+}

@@ -11,13 +11,17 @@
 
 #include "animation/skinPose.h"
 #include "hair/tressfxSourceSchedule.h"
+#include "hair/tressfxBehavior.h"
 #include "pipeline/computePipeline.h"
 #include "pipeline/pipelineFactory.h"
 #include "renderableObject.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/backend/resolvedRenderScene.h"
+#include "render/resource/resourceRetireQueue.h"
 
 #include "hair/hairSimulationPassInternal.h"
+#include "hair/rodGpuRuntime.h"
+#include "hair/rodGpuRecording.h"
 
 namespace VL::Hair
 {
@@ -28,7 +32,11 @@ HairSimulationPass::~HairSimulationPass()
     // World/graph 重建退休后的兜底收尾：退休队列保证 GPU 已完成，残留 slot
     // 可以在不额外 WaitIdle 的情况下安全写出。
     FinishTraceInternal(false);
+    FinishSnapshot(false);
     ResetDescriptorCache();
+    rodObjects.clear();
+    for (auto& pipeline : rodPipelines)
+        pipeline.reset();
     for (std::shared_ptr<ComputePipeline>& pipeline : pipelines)
         pipeline.reset();
     skinningPipeline.reset();
@@ -47,6 +55,12 @@ void HairSimulationPass::Initialize(PipelineFactory& factory,
             PassDefinitions[pass].shaderName, &artifact);
     }
     skinningPipeline = factory.CreateComputePipelineCandidate("hair/tressfxSkinning");
+    rodPipelines[0] = factory.CreateComputePipelineCandidate("hair/rodSolve");
+    rodPipelines[1] = factory.CreateComputePipelineCandidate("hair/rodSolveSdf");
+    rodPipelines[2] = factory.CreateComputePipelineCandidate("hair/rodFollow");
+    rodPipelines[3] = factory.CreateComputePipelineCandidate("hair/rodStoreSdf");
+    rodPipelines[4] = factory.CreateComputePipelineCandidate("hair/rodV3ImplicitCrCompensated");
+    rodPipelines[5] = factory.CreateComputePipelineCandidate("hair/rodV3Follow");
     initialized = true;
 }
 
@@ -56,6 +70,18 @@ void HairSimulationPass::BeginTrace(const HairTraceRequest& request)
     {
         std::cerr << "[TressFX] Hair trace rejected: simulation pass is not initialized"
                   << std::endl;
+        return;
+    }
+    if (request.guideStride == HairSnapshotCurrentOnlyStride)
+    {
+        if (!snapshot.path.empty() || request.path.empty() ||
+            (request.frames != 1 && request.frames != 2))
+        {
+            std::cerr << "[HairSnapshot] rejected: one pending nonempty one-shot request required" << std::endl;
+            return;
+        }
+        snapshot.path = request.path;
+        snapshot.remainingCaptures = request.frames;
         return;
     }
     if (trace.active)
@@ -81,6 +107,7 @@ void HairSimulationPass::BeginTrace(const HairTraceRequest& request)
 void HairSimulationPass::FinishTrace(bool waitForGpu)
 {
     FinishTraceInternal(waitForGpu);
+    FinishSnapshot(waitForGpu);
 }
 
 void HairSimulationPass::RequestReset(std::string objectName)
@@ -104,6 +131,8 @@ bool HairSimulationPass::HasWork(const VL::ResolvedRenderScene& scene,
 {
     if (!initialized || !pipelines[0])
         return false;
+    if (!snapshot.path.empty())
+        return true;
 
     const SimulationOwnerMap owners = CollectSimulationOwners(scene, renderScene);
     for (const ResolvedMaterialGroup& materialGroup : scene.materialGroups)
@@ -137,6 +166,8 @@ bool HairSimulationPass::HasWork(const VL::ResolvedRenderScene& scene,
                 }
                 if (!object || !object->UsesGpuGuideSimulation())
                     continue;
+                if (IsRodSimulationSolver(object->GetTressfxSimulationConfig().solver))
+                    return true;
                 const auto cached = objectDescriptors.find(object.get());
                 TressfxSimulationOwner owner = cached == objectDescriptors.end()
                     ? TressfxSimulationOwner{} : cached->second.simulationOwner;
@@ -184,6 +215,19 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     // frameSlot 直接索引 params UBO；调用方必须传 frame-in-flight 槽（0..1）。
     if (frameSlot >= GuideSimulationParamBufferCount)
         throw std::out_of_range("TressFX guide simulation frame slot is out of range");
+    FlushSnapshot(frameSlot);
+    for (auto iterator = rodObjects.begin(); iterator != rodObjects.end();)
+    {
+        if (iterator->second->owner.expired())
+        {
+            auto& retireQueue = VL::ResourceRetireQueue::GetInstance();
+            retireQueue.RetireShared("RodGpuState", iterator->second->world,
+                retireQueue.GetLastSubmittedEpoch(), iterator->second);
+            iterator = rodObjects.erase(iterator);
+        }
+        else
+            ++iterator;
+    }
 
     // 与 solver 共用同一帧入口和图形读取 barrier，但不消费模拟时钟/历史/trace。
     RecordSkinning(commandBuffer, scene, renderScene, frameSlot);
@@ -391,6 +435,27 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             continue;
         }
         const TressfxSimulationConfig& config = object.GetTressfxSimulationConfig();
+        if (IsRodSimulationSolver(config.solver))
+        {
+            RecordRod(commandBuffer, dispatch.object, renderScene,
+                dispatch.drawPacketIndex, frameSlot, anyDispatch);
+            if (trace.active && !trace.finishing && trace.object == &object)
+            {
+                const auto& rodObject = *rodObjects.at(&object);
+                traceInfo.frameIndex = renderScene.frameIndex;
+                traceInfo.worldGeneration = renderScene.worldGeneration;
+                traceInfo.substeps = static_cast<uint32_t>(
+                    static_cast<const RodGpuParams*>(rodObject.params[frameSlot].mapped)->counts[1]);
+                traceInfo.timeStep = static_cast<float>(RodGpuStepSeconds);
+                traceInfo.resetReason = static_cast<const RodGpuParams*>(
+                    rodObject.params[frameSlot].mapped)->flags[0] != 0 ?
+                        rodObject.lastResetReason : 0;
+                traceInfo.dispatchCount = 1u + (object.HasTressfxFollowBinding() ? 1u : 0u);
+                traceInfo.hairModel = renderScene.drawPackets[dispatch.drawPacketIndex].model;
+                captureTrace = true;
+            }
+            continue;
+        }
 
         // 根点骨骼矩阵来自同一帧的 RenderScene 冻结快照。只按场景对象身份匹配，
         // 不复制播放器或骨架状态；pose 缺失时保留上一帧矩阵并只报告一次。
@@ -671,6 +736,9 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     // compute→transfer / transfer→compute barrier，见 RecordTraceCopies。
     if (captureTrace)
         RecordTraceCopies(commandBuffer, frameSlot, traceInfo);
+    if (!snapshot.path.empty() && !snapshot.pending && !dispatches.empty())
+        RecordSnapshot(commandBuffer, dispatches.front().object, renderScene,
+            dispatches.front().drawPacketIndex, frameSlot);
     if (anyDispatch)
         RecordPostDispatchBarrier(commandBuffer);
 }

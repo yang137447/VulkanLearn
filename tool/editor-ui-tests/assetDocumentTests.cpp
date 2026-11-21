@@ -197,6 +197,38 @@ TEST_F(AssetDocumentTest, TressfxSimulationFieldsRoundTripThroughStandardModify)
     EXPECT_DOUBLE_EQ(Read("TF_test.json")["simulationDefaults"]["damping"].get<double>(), 0.02);
 }
 
+TEST_F(AssetDocumentTest, VersionedRodProfileRoundTripsAndRejectsRawModify)
+{
+    auto hair = Read("SM_test.json");
+    hair["type"] = "tressfx";
+    hair["modelDataPath"] = "guides.tfx";
+    hair["strandRadius"] = 0.035;
+    hair["simulationDefaults"] = {{"backend", "gpu"}};
+    Write("TF_rod.json", hair);
+    std::ofstream(root / "guides.tfx") << "Document-only source";
+    ASSERT_EQ(Get("tressfx", "TF_rod.json")["status"], "succeeded");
+    const auto modified = Modify("tressfx", "TF_rod.json", 1, Json::array({
+        {{"field", "simulationDefaults.solver"}, {"value", "cosseratXpbdV1"}},
+        {{"field", "simulationDefaults.solverProfile"}, {"value", "effectiveBundleV1"}},
+    }));
+    ASSERT_EQ(modified["status"], "succeeded") << modified;
+    const auto projected = modified["payload"]["document"]["simulationDefaults"];
+    EXPECT_EQ(projected["solver"], "cosseratXpbdV1");
+    EXPECT_EQ(projected["solverProfile"], "effectiveBundleV1");
+    ASSERT_EQ(Run(Request("tressfx.save", "TF_rod.json", 2))["status"], "succeeded");
+    const auto saved = Read("TF_rod.json");
+    EXPECT_EQ(saved["simulationDefaults"]["solverProfile"], "effectiveBundleV1");
+    EXPECT_FALSE(saved["simulationDefaults"].contains("bendStiffness"));
+    for (const auto& change : {
+             Json{{"field", "simulationDefaults.bendStiffness"}, {"value", 0.8}},
+             Json{{"field", "simulationDefaults.solverProfile"}, {"value", "balanced"}},
+             Json{{"field", "simulationDefaults.solver"}, {"value", "rod"}}})
+        EXPECT_EQ(Modify("tressfx", "TF_rod.json", 3, Json::array({change}))["status"],
+            "rejected");
+    EXPECT_EQ(Read("TF_rod.json"), saved);
+    EXPECT_EQ(Run(Request("tressfx.reload", "TF_rod.json", 3))["status"], "succeeded");
+}
+
 TEST_F(AssetDocumentTest, TressfxAuthorProjectionPreservesReadOnlySimulationGate)
 {
     std::ofstream(root / "guides.tfx") << "Document-only source";
@@ -241,6 +273,33 @@ TEST_F(AssetDocumentTest, TressfxAuthorProjectionPreservesReadOnlySimulationGate
         EXPECT_EQ(VL::EditorUi::TressfxGpuSimulationDefaults(modified["payload"]["document"]),
             cases[index].second);
     }
+}
+
+TEST_F(AssetDocumentTest, ImplicitV3ProfileSavesWithIndependentSolverIdentity)
+{
+    auto hair = Read("SM_test.json");
+    hair["type"] = "tressfx";
+    hair["modelDataPath"] = "guides.tfx";
+    hair["strandRadius"] = 0.035;
+    hair["simulationDefaults"] = {{"backend", "gpu"}};
+    Write("TF_implicit.json", hair);
+    std::ofstream(root / "guides.tfx") << "Document-only source";
+    ASSERT_EQ(Get("tressfx", "TF_implicit.json")["status"], "succeeded");
+    const auto modified = Modify("tressfx", "TF_implicit.json", 1, Json::array({
+        {{"field", "simulationDefaults.solver"}, {"value", "cosseratImplicitV3"}},
+        {{"field", "simulationDefaults.solverProfile"}, {"value", "effectiveBundleV1"}}
+    }));
+    ASSERT_EQ(modified["status"], "succeeded") << modified;
+    EXPECT_EQ(modified["payload"]["document"]["simulationDefaults"]["solver"], "cosseratImplicitV3");
+    ASSERT_EQ(Run(Request("tressfx.save", "TF_implicit.json", 2))["status"], "succeeded");
+    const auto saved = Read("TF_implicit.json");
+    EXPECT_EQ(saved["simulationDefaults"]["solver"], "cosseratImplicitV3");
+    EXPECT_FALSE(saved["simulationDefaults"].contains("bendStiffness"));
+    EXPECT_EQ(Modify("tressfx", "TF_implicit.json", 3, Json::array({
+        {{"field", "simulationDefaults.bendStiffness"}, {"value", 0.2}}
+    }))["status"], "rejected");
+    EXPECT_EQ(Read("TF_implicit.json"), saved);
+    EXPECT_EQ(Run(Request("tressfx.reload", "TF_implicit.json", 3))["status"], "succeeded");
 }
 
 TEST_F(AssetDocumentTest, LegacySmTressfxDocumentsRequireExplicitTfMigration)
@@ -568,6 +627,46 @@ TEST_F(AssetDocumentTest, TressfxPlacementProxyReferencesAreValidatedOutsideTheA
     EXPECT_NE(Run(Request("blueprint.validate", "BP_test.json"))["status"], "succeeded");
     std::ofstream(root / "missing.obj") << "Proxy references are not imported during validation";
     EXPECT_EQ(Run(Request("blueprint.validate", "BP_test.json"))["status"], "succeeded");
+}
+
+TEST_F(AssetDocumentTest, ImplicitV3BlueprintProfileOverrideSavesSparsely)
+{
+    auto hair = Read("SM_test.json");
+    hair["type"] = "tressfx";
+    hair["modelDataPath"] = "guides.tfx";
+    hair["strandRadius"] = 0.035;
+    hair["simulationDefaults"] = {{"enabled", true}, {"backend", "gpu"},
+        {"solver", "cosseratImplicitV3"}, {"solverProfile", "effectiveBundleV1"}};
+    Write("TF_implicit.json", hair);
+    std::ofstream(root / "guides.tfx") << "Document-only source";
+    auto blueprint = BlueprintAsset();
+    auto components = Json::array({
+        {{"id", "body"}, {"type", "mesh"}, {"modelPath", "SM_test.json"}},
+        {{"id", "hair"}, {"type", "tressfx"}, {"parent", "body"},
+            {"modelPath", "TF_implicit.json"}, {"rootBone", "Head_M"}}});
+    blueprint["components"] = components;
+    Write("BP_implicit.json", blueprint);
+    ASSERT_EQ(Get("blueprint", "BP_implicit.json")["status"], "succeeded");
+    components[1]["simulation"] = {{"mode", "on"},
+        {"overrides", {{"solverProfile", "effectiveBundleV1"}}}};
+    const auto modified = Modify("blueprint", "BP_implicit.json", 1,
+        Json::array({{{"field", "components"}, {"value", components}}}));
+    ASSERT_EQ(modified["status"], "succeeded") << modified;
+    const auto saved = Run(Request("blueprint.save", "BP_implicit.json",
+        modified["documentRevision"].get<uint64_t>()));
+    ASSERT_EQ(saved["status"], "succeeded") << saved;
+    const auto reloaded = Run(Request("blueprint.reload", "BP_implicit.json",
+        saved["documentRevision"].get<uint64_t>()));
+    ASSERT_EQ(reloaded["status"], "succeeded") << reloaded;
+    EXPECT_EQ(Read("BP_implicit.json")["components"][1]["simulation"],
+        components[1]["simulation"]);
+    EXPECT_EQ(Read("TF_implicit.json"), hair);
+    const auto revision = reloaded["documentRevision"].get<uint64_t>();
+    components[1]["simulation"]["overrides"] = {
+        {"solver", "cosseratImplicitV3"}, {"bendStiffness", 0.4}};
+    EXPECT_EQ(Modify("blueprint", "BP_implicit.json", revision,
+        Json::array({{{"field", "components"}, {"value", components}}}))["status"], "rejected");
+    EXPECT_EQ(Read("TF_implicit.json"), hair);
 }
 
 TEST_F(AssetDocumentTest, BlueprintCommandsRoundTripAndSaveThroughOneDocumentOwner)

@@ -1,0 +1,535 @@
+#pragma once
+
+#include <fstream>
+#include <iomanip>
+#include <cstdlib>
+#include <nlohmann/json.hpp>
+
+#include "hair/rod/rodTypes.h"
+#include "hair/rod/rodProgressiveSupport.h"
+#include "hair/rod/rodSectionInertia.h"
+#include "shaderReflect.h"
+#include "mesh/loader/common/meshAssetLoader.h"
+
+namespace VL::Hair
+{
+void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
+    const std::shared_ptr<RenderableObject>& object,
+    const VL::RenderScene& renderScene, size_t drawPacketIndex,
+    uint32_t frameSlot, bool& anyDispatch)
+{
+    if (object->GetTressfxPointsPerGuide() != 32)
+        throw std::runtime_error("CosseratXpbdV1 GPU requires exactly 32 points per guide");
+    const auto& solverConfig = object->GetTressfxSimulationConfig();
+    const uint32_t algorithmVersion = TressfxSolverAlgorithmVersion(solverConfig.solver);
+    const bool progressive = solverConfig.solver == TressfxSimulationSolver::CosseratImplicitV3;
+    const uint32_t profileMathVersion = TressfxSupportProfileMathVersion(solverConfig.solver);
+    const uint32_t kineticMathVersion = progressive ? Rod::SectionInertiaKineticMathVersion : 1;
+    const uint32_t numericEncodingVersion = progressive ? 3 : 1;
+    if (progressive && (!solverConfig.capsules.empty() || object->HasTressfxSdfCollision()))
+        throw std::runtime_error(
+            "cosseratImplicitV3 contact active set is not yet implemented; author a collision-free numerical probe");
+    ObjectDescriptors& tressfx = EnsureObjectDescriptors(*object);
+    if (tressfx.simulationOwner.HasConflict())
+        return;
+    const auto& draw = renderScene.drawPackets[drawPacketIndex];
+    if (!RodGpuIsRigid(draw.model))
+        throw std::runtime_error("CosseratXpbdV1 requires a rigid hair placement");
+    const auto& skinning = object->GetTressfxSkinningBinding();
+    const auto* source = FindSkinningSourceDraw(skinning, renderScene);
+    const bool hasPose = HasRootSkinPose(source, skinning.jointIndex);
+    if (hasPose)
+        UpdateTressfxFrameContext(tressfx.frameContext, draw.model, source->model,
+            *source->skinPose, skinning.jointIndex, source->simulationDeltaSeconds);
+    else if (skinning.enabled)
+        tressfx.history.ObserveMissingPose();
+    RodGpuPose pose;
+    pose.root = draw.model * tressfx.frameContext.skinningMatrix;
+    for (const auto& joint : tressfx.frameContext.jointMatrices)
+        pose.palette.push_back(draw.model * joint);
+    if (!RodGpuIsRigid(pose.root))
+        throw std::runtime_error("CosseratXpbdV1 root transform must be rigid");
+    auto found = rodObjects.find(object.get());
+    if (found == rodObjects.end())
+    {
+        auto candidate = std::make_shared<RodGpuObject>();
+        candidate->owner = object;
+        candidate->backend = backend;
+        candidate->current = object->GetTressfxPositionInfo().buffer;
+        candidate->guides = object->GetTressfxSimulationGuideCount();
+        candidate->algorithmVersion = algorithmVersion;
+        candidate->profileMathVersion = profileMathVersion;
+        candidate->kineticMathVersion = kineticMathVersion;
+        candidate->numericEncodingVersion = numericEncodingVersion;
+        const auto& section = object->GetImported()->modelResource.sections[object->GetImportedSectionIndex()];
+        const uint32_t firstGuide = section.tressfxSimulationGuideIndices.empty() ? 0u :
+            section.tressfxSimulationGuideIndices.front();
+        candidate->fixedWorldOrigin = (pose.root *
+            section.vertices[firstGuide * 32u * 2u].position.homogeneous()).head<3>() * .01f;
+        candidate->paletteCapacity = static_cast<uint32_t>(
+            std::max<size_t>(1, pose.palette.size()));
+        candidate->state.Create(*backend, static_cast<vk::DeviceSize>(candidate->guides) *
+            RodGpuGuideVec4Count * 16, false, "RodWorldState: " + object->GetName());
+        if (progressive)
+        {
+            candidate->references.Create(*backend, static_cast<vk::DeviceSize>(candidate->guides) *
+                RodGpuReferenceVec4Count * 16, false, "RodFixedWorldRestReferences");
+            candidate->frameDeltas.Create(*backend, static_cast<vk::DeviceSize>(candidate->guides) *
+                31 * 16, false, "RodMaterialFrameDeltas");
+            candidate->lowParts.Create(*backend, static_cast<vk::DeviceSize>(candidate->guides) *
+                63 * 16, false, "RodCompensatedPositionAndMaterialDelta");
+            candidate->failureMatrix.Create(*backend, 932 * 16, false, "RodFailureMatrix");
+            candidate->failureCandidate.Create(*backend, 416 * 16, false, "RodFailureCandidate");
+            if (const char* capture = std::getenv("VL_ROD_CAPTURE_SOURCE_GUIDE"))
+            {
+                const uint32_t sourceGuide = static_cast<uint32_t>(std::stoul(capture));
+                const auto& selected = section.tressfxSimulationGuideIndices;
+                const auto position = std::find(selected.begin(), selected.end(), sourceGuide);
+                if (position != selected.end())
+                    candidate->captureFailureSlot = static_cast<uint32_t>(position - selected.begin());
+            }
+        }
+        if (object->HasTressfxSdfCollision())
+            candidate->sdfHistory.Create(*backend,
+                128 + static_cast<vk::DeviceSize>(object->GetTressfxSdfCellCount()) * 4,
+                false, "RodSdfHistory");
+        const std::array<vk::DescriptorPoolSize, 2> sizes{{
+            {vk::DescriptorType::eUniformBuffer, 16},
+            {vk::DescriptorType::eStorageBuffer, 80}}};
+        vk::DescriptorPoolCreateInfo poolInfo;
+        poolInfo.setPoolSizes(sizes).setMaxSets(6);
+        candidate->pool = backend->CreateDescriptorPool(poolInfo, "RodDescriptors");
+        std::cout << "[RodGPU] create descriptor pool=0x" << std::hex <<
+            reinterpret_cast<uintptr_t>(static_cast<VkDescriptorPool>(candidate->pool)) <<
+            std::dec << std::endl;
+        for (uint32_t slot = 0; slot < GuideSimulationParamBufferCount; ++slot)
+        {
+            candidate->params[slot].Create(*backend, sizeof(RodGpuParams), true, "RodParams");
+            if (progressive)
+                candidate->implicitParams[slot].Create(*backend, 32, true, "RodImplicitV3Controls");
+            candidate->samples[slot].Create(*backend, sizeof(Eigen::Matrix4f) *
+                (RodGpuMaxSteps + 1) * candidate->paletteCapacity, true, "RodPoseSamples");
+            candidate->readback[slot].Create(*backend,
+                static_cast<vk::DeviceSize>(candidate->guides) * 64 +
+                    (RodGpuGuideVec4Count + RodGpuReferenceVec4Count + 31 + 932 + 416) * 16,
+                true, "RodDiagnosticsReadback");
+            std::array<vk::DescriptorBufferInfo, 33> infos{};
+            infos[0] = object->GetTressfxParamsInfo(slot);
+            infos[1] = object->GetTressfxPositionInfo();
+            infos[2] = object->GetTressfxPreviousPositionInfo();
+            infos[3] = object->GetTressfxPreviousPreviousPositionInfo();
+            infos[4] = object->GetTressfxRestPositionInfo();
+            infos[7] = object->GetTressfxColliderInfo(slot);
+            infos[8] = object->GetTressfxSdfParamsInfo(slot);
+            infos[11] = object->GetTressfxSdfGridInfo();
+            infos[14] = object->GetTressfxBoneWeightsInfo();
+            infos[19] = object->GetTressfxSimulationGuideInfo();
+            infos[20] = object->GetTressfxFollowGuideInfo();
+            infos[21] = object->GetTressfxFollowOffsetInfo();
+            infos[22] = object->GetTressfxFollowFrameRefInfo();
+            if (progressive)
+            {
+                infos[28] = candidate->failureMatrix.Info();
+                infos[29] = candidate->failureCandidate.Info();
+                infos[30] = candidate->lowParts.Info();
+            }
+            infos[23] = candidate->state.Info();
+            infos[24] = candidate->params[slot].Info();
+            infos[25] = candidate->samples[slot].Info();
+            infos[26] = candidate->sdfHistory.Info();
+            infos[27] = candidate->implicitParams[slot].Info();
+            infos[31] = candidate->references.Info();
+            infos[32] = candidate->frameDeltas.Info();
+            for (uint32_t kind = 0; kind < 3; ++kind)
+            {
+                if (kind == 1 && !object->HasTressfxFollowBinding())
+                    continue;
+                if (kind == 2 && !object->HasTressfxSdfCollision())
+                    continue;
+                auto& pipeline = rodPipelines[kind == 2 ? 3 : kind == 1 ?
+                    (progressive ? 5 : 2) : progressive ? 4 :
+                    (object->HasTressfxSdfCollision() ? 1 : 0)];
+                const auto layout = pipeline->GetDescriptorSetLayouts().at(0);
+                vk::DescriptorSetAllocateInfo allocation;
+                allocation.setDescriptorPool(candidate->pool).setSetLayouts(layout);
+                std::vector<vk::DescriptorSet> allocated(1);
+                backend->AllocateDescriptorSets(allocation, allocated);
+                (kind == 0 ? candidate->solveSets[slot] : kind == 1 ?
+                    candidate->followSets[slot] : candidate->sdfHistorySets[slot]) = allocated.front();
+                std::vector<vk::WriteDescriptorSet> writes;
+                for (const auto& reflected : pipeline->GetShaderBindings())
+                {
+                    const uint32_t binding = reflected.binding;
+                    if (reflected.set != 0 || binding >= infos.size() || !infos[binding].buffer)
+                        throw std::runtime_error("Rod GPU shader descriptor has no owned buffer");
+                    vk::WriteDescriptorSet write;
+                    write.setDstSet(allocated.front()).setDstBinding(binding)
+                        .setDescriptorType(reflected.type)
+                        .setBufferInfo(infos[binding]);
+                    writes.push_back(write);
+                }
+                backend->UpdateDescriptorSets(writes);
+            }
+        }
+        candidate->ClearTimeline(pose);
+        candidate->world = renderScene.worldGeneration;
+        found = rodObjects.emplace(object.get(), std::move(candidate)).first;
+    }
+    RodGpuObject& state = *found->second;
+    if (state.owner.lock() != object || state.current != object->GetTressfxPositionInfo().buffer ||
+        pose.palette.size() > state.paletteCapacity || state.algorithmVersion != algorithmVersion ||
+        state.profileMathVersion != profileMathVersion || state.kineticMathVersion != kineticMathVersion ||
+        state.numericEncodingVersion != numericEncodingVersion)
+        throw std::runtime_error("Rod GPU resource identity changed outside graph transaction");
+    if (state.readbackPending[frameSlot] &&
+        state.readbackGeneration[frameSlot] != state.simulationGeneration)
+        state.readbackPending[frameSlot] = false;
+    if (state.readbackPending[frameSlot])
+    {
+        std::ofstream output("artifacts/hair-landing-20261119/gpu-runtime-diagnostics.csv", std::ios::app);
+        output << std::setprecision(10);
+        const float* values = static_cast<const float*>(state.readback[frameSlot].mapped);
+        double accepted = state.receivedSeconds;
+        float maxBlockDefect = 0.0f;
+        float maxPredictorDefect = 0.0f;
+        uint32_t failedGuides = 0;
+        std::ofstream failures("artifacts/hair-landing-20261119/gpu-failed-guides.csv", std::ios::app);
+        const auto& section = object->GetImported()->modelResource.sections[
+            object->GetImportedSectionIndex()];
+        for (uint32_t guide = 0; guide < state.guides; ++guide)
+        {
+            const float* diagnostic = values + guide * 16;
+            accepted = std::min(accepted, static_cast<double>(diagnostic[12]));
+            state.gpuStatus = std::max(state.gpuStatus, static_cast<uint32_t>(diagnostic[0]));
+            maxBlockDefect = std::max(maxBlockDefect, diagnostic[1]);
+            maxPredictorDefect = std::max(maxPredictorDefect, diagnostic[2]);
+            failedGuides += diagnostic[0] != 0.0f ? 1 : 0;
+            if (diagnostic[0] != 0.0f)
+            {
+                const uint32_t sourceGuide = section.tressfxSimulationGuideIndices.empty() ?
+                    guide : section.tressfxSimulationGuideIndices[guide];
+                failures << state.readbackFrame[frameSlot] << ',' << guide << ',' <<
+                    sourceGuide << ',' << diagnostic[0] << ',' << diagnostic[3] << ',' <<
+                    diagnostic[7] << ',' << diagnostic[12] << '\n';
+            }
+        }
+        state.acceptedSeconds = accepted;
+        if (failedGuides != 0 && !state.failureEvidenceWritten &&
+            state.captureFailureSlot != UINT32_MAX &&
+            values[state.captureFailureSlot * 16] != 0.0f)
+        {
+            const std::string prefix = "artifacts/hair-landing-20261119/root-failure-encoding" +
+                std::to_string(state.numericEncodingVersion) + "-" +
+                std::to_string(state.readbackFrame[frameSlot]);
+            const auto save = [&](const char* suffix, const void* data, size_t bytes)
+            {
+                std::ofstream output(prefix + suffix, std::ios::binary);
+                output.write(static_cast<const char*>(data), static_cast<std::streamsize>(bytes));
+                if (!output)
+                    throw std::runtime_error("Rod failure evidence write failed");
+            };
+            const size_t exportOffset = state.guides * 64 +
+                (RodGpuGuideVec4Count + RodGpuReferenceVec4Count + 31) * 16;
+            save(".matrix.bin", reinterpret_cast<const char*>(values) + exportOffset, 932 * 16);
+            save(".candidate.bin", reinterpret_cast<const char*>(values) + exportOffset + 932 * 16, 416 * 16);
+            save(".params.bin", state.params[frameSlot].mapped, sizeof(RodGpuParams));
+            save(".palettes.bin", state.samples[frameSlot].mapped,
+                (RodGpuMaxSteps + 1) * state.paletteCapacity * sizeof(Eigen::Matrix4f));
+            save(".controls.bin", state.implicitParams[frameSlot].mapped, 32);
+            state.failureEvidenceWritten = true;
+        }
+        if (state.gpuStatus != 0)
+            state.debtSeconds = std::max(0.0, state.receivedSeconds - accepted);
+        output << state.readbackFrame[frameSlot] << ',' << state.guides << ',' <<
+            state.gpuStatus << ',' << maxBlockDefect << ',' << maxPredictorDefect << ',' <<
+            accepted << ',' << state.receivedSeconds << ',' << state.dispatchedSeconds << ',' <<
+            state.debtSeconds << ',' << failedGuides << '\n';
+        if (trace.active)
+        {
+            std::ofstream binary("artifacts/hair-landing-20261119/gpu-first-guide-" +
+                std::to_string(state.readbackFrame[frameSlot]) + ".bin", std::ios::binary);
+            binary.write(reinterpret_cast<const char*>(values + state.guides * 16),
+                RodGpuGuideVec4Count * 16);
+            if (progressive)
+            {
+                const auto* references = values + state.guides * 16 + RodGpuGuideVec4Count * 4;
+                std::ofstream referenceFile("artifacts/hair-landing-20261119/gpu-first-guide-" +
+                    std::to_string(state.readbackFrame[frameSlot]) + ".refs.bin", std::ios::binary);
+                referenceFile.write(reinterpret_cast<const char*>(references), RodGpuReferenceVec4Count * 16);
+                std::ofstream deltaFile("artifacts/hair-landing-20261119/gpu-first-guide-" +
+                    std::to_string(state.readbackFrame[frameSlot]) + ".delta.bin", std::ios::binary);
+                deltaFile.write(reinterpret_cast<const char*>(references + RodGpuReferenceVec4Count * 4), 31 * 16);
+            }
+        }
+        state.readbackPending[frameSlot] = false;
+    }
+    const float delta = source ? source->simulationDeltaSeconds :
+        renderScene.hairSimulationDeltaSeconds;
+    const auto history = tressfx.history.Plan(hasPose,
+        hasPose ? source->skinPose->playbackIdentity : 0,
+        hasPose ? source->skinPose->discontinuity : 0, delta);
+    const bool explicitReset = tressfx.resetRequested;
+    if (state.world != renderScene.worldGeneration || explicitReset ||
+        history.action == GuideSimulationFrameAction::Reset)
+    {
+        state.ClearTimeline(pose);
+        state.lastResetReason = static_cast<uint32_t>(explicitReset ?
+            GuideSimulationResetReason::Requested : history.reason);
+        state.world = renderScene.worldGeneration;
+        tressfx.resetRequested = false;
+    }
+    const bool newFrame = state.lastFrame != renderScene.frameIndex;
+    if (newFrame)
+    {
+        if (std::isfinite(delta) && delta > 0.0f)
+        {
+            state.intervals.push_back({state.receivedSeconds, state.receivedSeconds + delta,
+                state.previousPose, pose});
+            state.receivedSeconds += delta;
+            state.debtSeconds += delta;
+        }
+        state.previousPose = pose;
+        state.lastFrame = renderScene.frameIndex;
+    }
+    const uint32_t steps = newFrame && delta > 0.0f && state.gpuStatus == 0 &&
+        !(progressive && state.reset) ? std::min(RodGpuMaxSteps,
+        static_cast<uint32_t>(std::floor((state.debtSeconds + 1.0e-9) / RodGpuStepSeconds))) : 0;
+    RodGpuParams params;
+    params.hairToWorld = draw.model;
+    params.worldToHair = draw.model.inverse();
+    const Rod::Material material;
+    params.material = Eigen::Vector4f(static_cast<float>(material.radius),
+        static_cast<float>(material.density), static_cast<float>(material.youngModulus),
+        static_cast<float>(material.shearModulus));
+    params.support = Eigen::Vector4f(static_cast<float>(material.supportOffsetRatio),
+        static_cast<float>(material.supportDampingRatio), static_cast<float>(material.referenceGravity), 0);
+    params.gravityStep.head<3>() = object->GetTressfxSimulationConfig().gravity * 0.01f;
+    params.gravityStep.w() = static_cast<float>(RodGpuStepSeconds);
+    if (progressive)
+    {
+        std::array<Eigen::Vector4f, 2> controls{
+            Eigen::Vector4f(state.fixedWorldOrigin.x(), state.fixedWorldOrigin.y(),
+                state.fixedWorldOrigin.z(), 1.0e-4f),
+            Eigen::Vector4f(1.0e-6f, 1.0e-6f,
+                state.captureFailureSlot == UINT32_MAX ? 0.0f : static_cast<float>(state.captureFailureSlot),
+                state.captureFailureSlot == UINT32_MAX ? 0.0f : 1.0f)};
+        std::memcpy(state.implicitParams[frameSlot].mapped, controls.data(), 32);
+    }
+    params.windDrag.head<3>() = TressfxSceneWindVelocityCmPerSec(renderScene.resolvedWind) * 0.01f;
+    params.windDrag.w() = static_cast<float>(Rod::EffectiveBundleDragAccelerationPerSpeed(material));
+    params.counts = {state.guides, steps, state.paletteCapacity, RodGpuSweeps};
+    params.flags = {state.reset ? 1u : 0u, object->HasTressfxFollowBinding() ? 1u : 0u,
+        !skinning.strandBones.empty() && !pose.palette.empty() ? 1u : 0u, RodGpuSweeps << 1u};
+    params.timing = Eigen::Vector4f(static_cast<float>(state.receivedSeconds),
+        static_cast<float>(state.debtSeconds - steps * RodGpuStepSeconds), 0, 0);
+    for (uint32_t sample = 0; sample <= steps; ++sample)
+    {
+        const RodGpuPose sampled = state.Sample(
+            state.dispatchedSeconds + sample * RodGpuStepSeconds);
+        params.roots[sample] = sampled.root;
+        auto* palette = static_cast<Eigen::Matrix4f*>(state.samples[frameSlot].mapped);
+        for (uint32_t joint = 0; joint < state.paletteCapacity; ++joint)
+            palette[sample * state.paletteCapacity + joint] = joint < sampled.palette.size()
+                ? sampled.palette[joint] : Eigen::Matrix4f::Identity();
+        const auto& colliders = object->GetTressfxSimulationConfig().capsules;
+        for (size_t collider = 0; collider < colliders.size(); ++collider)
+        {
+            Eigen::Matrix4f transform = draw.model;
+            if (collider < skinning.capsuleJointIndices.size())
+            {
+                const int32_t joint = skinning.capsuleJointIndices[collider];
+                if (joint >= 0 && static_cast<size_t>(joint) < sampled.palette.size())
+                    transform = sampled.palette[joint];
+            }
+            auto transformed = TransformTressfxCapsuleByBone(colliders[collider], transform);
+            transformed.a *= 0.01f;
+            transformed.b *= 0.01f;
+            transformed.radius *= 0.01f;
+            params.capsules[sample][collider] = MakeGuideColliderGpu(transformed);
+        }
+    }
+    if (trace.active)
+    {
+        nlohmann::json metadata;
+        metadata["frame"] = renderScene.frameIndex;
+        metadata["algorithm"] = TressfxSimulationSolverName(solverConfig.solver);
+        metadata["algorithmVersion"] = algorithmVersion;
+        metadata["profileMathVersion"] = TressfxSupportProfileMathVersion(solverConfig.solver);
+        metadata["kineticMathVersion"] = kineticMathVersion;
+        metadata["numericEncodingVersion"] = numericEncodingVersion;
+        metadata["simulationGeneration"] = state.simulationGeneration;
+        metadata["resetIsZeroPhysicalTime"] = progressive && state.reset;
+        metadata["statePositionSpace"] = progressive ? "u from fixed authored-world-rest; no root advection" : "world-SI";
+        metadata["pipelineHotReloadPolicy"] = "graph-owned, no in-place compute replacement";
+        metadata["fixedWorldOriginSI"] = {state.fixedWorldOrigin.x(),
+            state.fixedWorldOrigin.y(), state.fixedWorldOrigin.z()};
+        metadata["snapshot"] = "post-frame; binary flushed two frame slots later";
+        metadata["reset"] = state.reset;
+        metadata["stepSeconds"] = RodGpuStepSeconds;
+        metadata["sweeps"] = RodGpuSweeps;
+        metadata["substeps"] = steps;
+        metadata["receivedSeconds"] = state.receivedSeconds;
+        metadata["dispatchedSeconds"] = state.dispatchedSeconds;
+        metadata["acceptedSecondsLastFence"] = state.acceptedSeconds;
+        metadata["retainedDebtSeconds"] = state.debtSeconds;
+        metadata["gravity"] = {params.gravityStep.x(), params.gravityStep.y(), params.gravityStep.z()};
+        metadata["supportEnabled"] = true;
+        metadata["windVelocitySI"] = {params.windDrag.x(), params.windDrag.y(), params.windDrag.z()};
+        metadata["dragRatePerSpeedSI"] = params.windDrag.w();
+        metadata["capsuleCount"] = object->GetTressfxSimulationConfig().capsules.size();
+        metadata["sdfPresent"] = object->HasTressfxSdfCollision();
+        const auto& section = object->GetImported()->modelResource.sections[
+            object->GetImportedSectionIndex()];
+        const uint32_t firstGuide = section.tressfxSimulationGuideIndices.empty() ?
+            0u : section.tressfxSimulationGuideIndices.front();
+        metadata["firstSourceGuide"] = firstGuide;
+        metadata["referenceRootWorldColumnMajor"] = nlohmann::json::array();
+        for (uint32_t component = 0; component < 16; ++component)
+            metadata["referenceRootWorldColumnMajor"].push_back(state.referencePose.root.data()[component]);
+        for (const auto& joint : state.referencePose.palette)
+        {
+            nlohmann::json matrix = nlohmann::json::array();
+            for (uint32_t component = 0; component < 16; ++component)
+                matrix.push_back(joint.data()[component]);
+            metadata["referencePaletteWorldColumnMajor"].push_back(matrix);
+        }
+        for (uint32_t point = 0; point < 32; ++point)
+        {
+            const auto& rest = section.vertices[(firstGuide * 32 + point) * 2].position;
+            metadata["firstGuideRestSI"].push_back({rest.x() * 0.01, rest.y() * 0.01, rest.z() * 0.01});
+            metadata["firstGuideMassMarkers"].push_back(
+                section.tressfxInverseMass[firstGuide * 32 + point]);
+        }
+        if (firstGuide < skinning.strandBones.size())
+        {
+            const auto packed = TressfxPackStrandBoneWeights(
+                skinning.strandBones[firstGuide], skinning.jointIndex);
+            for (uint32_t influence = 0; influence < 4; ++influence)
+            {
+                metadata["firstGuideJoints"].push_back(packed.joints[influence]);
+                metadata["firstGuideWeights"].push_back(packed.weights[influence]);
+            }
+        }
+        for (uint32_t sample = 0; sample <= steps; ++sample)
+        {
+            const RodGpuPose sampled = state.Sample(
+                state.dispatchedSeconds + sample * RodGpuStepSeconds);
+            nlohmann::json matrix = nlohmann::json::array();
+            for (uint32_t entry = 0; entry < 16; ++entry)
+                matrix.push_back(sampled.root.data()[entry]);
+            metadata["rootsColumnMajor"].push_back(matrix);
+            nlohmann::json palette = nlohmann::json::array();
+            for (const auto& joint : sampled.palette)
+            {
+                nlohmann::json jointMatrix = nlohmann::json::array();
+                for (uint32_t entry = 0; entry < 16; ++entry)
+                    jointMatrix.push_back(joint.data()[entry]);
+                palette.push_back(jointMatrix);
+            }
+            metadata["palettesColumnMajor"].push_back(palette);
+        }
+        std::ofstream output("artifacts/hair-landing-20261119/gpu-frame-" +
+            std::to_string(renderScene.frameIndex) + ".json");
+        output << metadata.dump(2);
+    }
+    const std::vector<Eigen::Matrix4f>* palette = tressfx.frameContext.jointMatrices.empty()
+        ? nullptr : &tressfx.frameContext.jointMatrices;
+    object->WriteTressfxSkinningPalette(tressfx.frameContext.jointMatrices, frameSlot);
+    GuideSimulationParams oldParams = MakeGuideSkinningParams(
+        object->GetTressfxGuideCount(), 32, tressfx.frameContext.skinningMatrix, params.flags[2] != 0u);
+    oldParams.colliderCount = static_cast<uint32_t>(object->GetTressfxSimulationConfig().capsules.size());
+    oldParams.controls.x() = static_cast<float>(RodGpuStepSeconds);
+    object->WriteTressfxSimulationParams(oldParams, frameSlot);
+    uint32_t dispatchCount = 0;
+    const bool sdfValid = object->HasTressfxSdfCollision() &&
+        object->WriteTressfxSdfParams(tressfx.frameContext.skinningMatrix, palette, frameSlot);
+    if (sdfValid)
+    {
+        object->WriteTressfxSdfProxyPalette(tressfx.frameContext.jointMatrices, frameSlot);
+        params.flags[3] |= 1u;
+        RecordPass(commandBuffer, GuideSimulationPass::SdfClear,
+            tressfx.sets[PassIndex(GuideSimulationPass::SdfClear)][frameSlot],
+            (object->GetTressfxSdfCellCount() + 63) / 64, anyDispatch, dispatchCount);
+        RecordPass(commandBuffer, GuideSimulationPass::SdfSplat,
+            tressfx.sets[PassIndex(GuideSimulationPass::SdfSplat)][frameSlot],
+            (object->GetTressfxSdfTriangleCount() + 63) / 64, anyDispatch, dispatchCount);
+    }
+    std::memcpy(state.params[frameSlot].mapped, &params, sizeof(params));
+    if (anyDispatch)
+        RecordInterPassBarrier(commandBuffer);
+    auto& solver = rodPipelines[progressive ? 4 : object->HasTressfxSdfCollision() ? 1 : 0];
+    solver->Bind(commandBuffer);
+    commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+        solver->GetPipelineLayout(), 0, state.solveSets[frameSlot], nullptr);
+    solver->Dispatch(commandBuffer, state.guides, 1, 1);
+    anyDispatch = true;
+    if (object->HasTressfxFollowBinding())
+    {
+        RecordInterPassBarrier(commandBuffer);
+        auto& follow = rodPipelines[progressive ? 5 : 2];
+        follow->Bind(commandBuffer);
+        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+            follow->GetPipelineLayout(), 0, state.followSets[frameSlot], nullptr);
+        follow->Dispatch(commandBuffer,
+            object->GetTressfxGuideCount(), 1, 1);
+    }
+    if (sdfValid)
+    {
+        RecordInterPassBarrier(commandBuffer);
+        rodPipelines[3]->Bind(commandBuffer);
+        commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
+            rodPipelines[3]->GetPipelineLayout(), 0, state.sdfHistorySets[frameSlot], nullptr);
+        rodPipelines[3]->Dispatch(commandBuffer,
+            (object->GetTressfxSdfCellCount() + 63) / 64, 1, 1);
+    }
+    vk::MemoryBarrier transfer;
+    transfer.setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+        vk::PipelineStageFlagBits::eTransfer, {}, transfer, nullptr, nullptr);
+    std::vector<vk::BufferCopy> copies;
+    copies.reserve(state.guides);
+    for (uint32_t guide = 0; guide < state.guides; ++guide)
+        copies.emplace_back((static_cast<vk::DeviceSize>(guide) * RodGpuGuideVec4Count +
+            RodGpuGuideVec4Count - 4) * 16, static_cast<vk::DeviceSize>(guide) * 64, 64);
+    copies.emplace_back(0, static_cast<vk::DeviceSize>(state.guides) * 64,
+        RodGpuGuideVec4Count * 16);
+    commandBuffer.copyBuffer(state.state.buffer, state.readback[frameSlot].buffer, copies);
+    if (progressive)
+    {
+        const vk::DeviceSize referenceOffset = static_cast<vk::DeviceSize>(state.guides) * 64 +
+            RodGpuGuideVec4Count * 16;
+        commandBuffer.copyBuffer(state.references.buffer, state.readback[frameSlot].buffer,
+            vk::BufferCopy(0, referenceOffset, RodGpuReferenceVec4Count * 16));
+        commandBuffer.copyBuffer(state.frameDeltas.buffer, state.readback[frameSlot].buffer,
+            vk::BufferCopy(0, referenceOffset + RodGpuReferenceVec4Count * 16, 31 * 16));
+        const vk::DeviceSize failureOffset = referenceOffset +
+            (RodGpuReferenceVec4Count + 31) * 16;
+        commandBuffer.copyBuffer(state.failureMatrix.buffer, state.readback[frameSlot].buffer,
+            vk::BufferCopy(0, failureOffset, 932 * 16));
+        commandBuffer.copyBuffer(state.failureCandidate.buffer, state.readback[frameSlot].buffer,
+            vk::BufferCopy(0, failureOffset + 932 * 16, 416 * 16));
+    }
+    state.readbackPending[frameSlot] = true;
+    state.readbackFrame[frameSlot] = renderScene.frameIndex;
+    state.readbackGeneration[frameSlot] = state.simulationGeneration;
+    state.dispatchedSeconds += steps * RodGpuStepSeconds;
+    state.debtSeconds -= steps * RodGpuStepSeconds;
+    while (!state.intervals.empty() && state.intervals.front().end <= state.dispatchedSeconds + 1.0e-9)
+        state.intervals.pop_front();
+    state.reset = false;
+    state.initialized = true;
+    tressfx.history.Commit(hasPose, hasPose ? source->skinPose->playbackIdentity : 0,
+        hasPose ? source->skinPose->discontinuity : 0);
+    if (!state.reported)
+    {
+        std::cout << "[RodGPU] solver=" << TressfxSimulationSolverName(solverConfig.solver) <<
+            " algorithmVersion=" << algorithmVersion << " profileMathVersion=" <<
+            profileMathVersion << " kineticMathVersion=" << kineticMathVersion <<
+            " numericEncodingVersion=" << numericEncodingVersion << " guides=" << state.guides
+            << " stateBytes=" << state.state.size << " step=" << RodGpuStepSeconds
+            << " maxSteps=" << RodGpuMaxSteps << " sweeps=" << RodGpuSweeps << std::endl;
+        state.reported = true;
+    }
+}
+}

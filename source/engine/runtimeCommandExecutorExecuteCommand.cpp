@@ -31,6 +31,7 @@
 #include "world/actorIdentity.h"
 #include "world/actorProperty.h"
 #include "world/world.h"
+#include "world/sceneWindCommand.h"
 #include "animation/skeletalPlayback.h"
 #include "script/scriptRuntime.h"
 #include "engine/runtimeCommandExecutorInternal.h"
@@ -1158,6 +1159,36 @@ void RuntimeCommandExecutor::ExecuteCommand(
         diagnostics.ReportInfo(
             std::string("Actor ") + identity.name + " " +
             (command.intValue != 0 ? "shown." : "hidden."));
+        break;
+    }
+    case RuntimeCommandType::ControlSceneWind:
+    {
+        const auto& activeWorld = worldManager.GetActiveWorld();
+        const SceneWindCommandRequest request{command.stringValue, command.floatValue};
+        const double steadySeconds = std::chrono::duration<double>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        std::string error;
+        if (!activeWorld)
+            error = "no active World";
+        WorldWind wind = activeWorld ? activeWorld->GetWind() : WorldWind{};
+        const float previousStrength = wind.strength;
+        if (error.empty() && ApplySceneWindCommand(wind, request, error))
+        {
+            if (request.operation == "strength")
+                activeWorld->SetWind(wind);
+            std::cout << MakeSceneWindCommandReceipt(wind, request,
+                previousStrength, activeWorld->GetGeneration(), steadySeconds).dump()
+                << std::endl;
+        }
+        else
+        {
+            std::cout << nlohmann::json{
+                {"command", "wind"}, {"operation", request.operation},
+                {"status", "rejected"}, {"error", error},
+                {"worldGeneration", activeWorld ? activeWorld->GetGeneration() : 0},
+                {"steadyTimeSeconds", steadySeconds}, {"runtimeOnly", true},
+                {"strengthOverrideApplied", false}}.dump() << std::endl;
+        }
         break;
     }
     case RuntimeCommandType::SetActorProperty:

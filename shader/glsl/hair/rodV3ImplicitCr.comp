@@ -1,0 +1,9 @@
+#version 450
+#define VL_ROD_V2_ANALYTIC 1
+#define VL_ROD_V3_PROGRESSIVE 1
+#define VL_ROD_V3_CR_SOLVE 1
+#define VL_ROD_V3_DISPLACEMENT 1
+#define VL_ROD_SECTION_INERTIA 1
+#define VL_ROD_V2_FAILURE_EXPORT 1
+#define VL_ROD_RUNTIME_FAILURE_EXPORT 1
+#include "rodV2Kernel.glsl"

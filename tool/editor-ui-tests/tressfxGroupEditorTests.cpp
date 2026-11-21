@@ -43,6 +43,22 @@ TEST(TressfxGroupEditor, LoadsGroupsAndCountsNamedAndDefaultGuides)
     EXPECT_EQ(editor.DefaultGuideCount(), 70u);
 }
 
+TEST(TressfxGroupEditor, VersionedProfileSurvivesGroupLoadAndRejectsUnknownProfile)
+{
+    auto group = Group("fringe", {{0, 10}});
+    group["simulationOverrides"] = {{"solverProfile", "effectiveBundleV1"}};
+    TressfxGroupEditor editor;
+    std::string error;
+    ASSERT_TRUE(editor.Load(GroupsDocument(json::array({group})), 100, error)) << error;
+    ASSERT_EQ(editor.Groups().size(), 1u);
+    EXPECT_EQ(editor.Groups()[0].simulationOverrides, group["simulationOverrides"]);
+    auto written = GroupsDocument(json::array());
+    editor.WriteGroupArray(written);
+    EXPECT_EQ(written["groups"][0]["simulationOverrides"], group["simulationOverrides"]);
+    group["simulationOverrides"]["solverProfile"] = "balanced";
+    EXPECT_FALSE(editor.Load(GroupsDocument(json::array({group})), 100, error));
+}
+
 TEST(TressfxGroupEditor, LoadWithoutGroupsLeavesEverythingInDefault)
 {
     TressfxGroupEditor editor;

@@ -4,6 +4,7 @@
 #include <cmath>
 #include <iostream>
 #include <iterator>
+#include <limits>
 #include <stdexcept>
 #include <tuple>
 #include <unordered_set>
@@ -16,9 +17,290 @@
 #include "renderableObject.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/backend/resolvedRenderScene.h"
+#include "hair/rodGpuRuntime.h"
+#include "mesh/loader/common/meshAssetLoader.h"
+#include <nlohmann/json.hpp>
 
 namespace VL::Hair
 {
+void HairSimulationPass::RecordSnapshot(vk::CommandBuffer commandBuffer,
+    const std::shared_ptr<RenderableObject>& object,
+    const VL::RenderScene& renderScene, size_t drawPacketIndex, uint32_t frameSlot)
+{
+    if (snapshot.path.empty() || snapshot.pending || !object)
+        return;
+    const auto rod = rodObjects.find(object.get());
+    if (snapshot.remainingCaptures == 2 && rod == rodObjects.end())
+    {
+        std::cerr << "[HairSnapshot] paired physical-time sampling requires Rod state" << std::endl;
+        snapshot = SnapshotState{};
+        return;
+    }
+    if (snapshot.targetAcceptedSeconds > 0)
+    {
+        if (rod == rodObjects.end() ||
+            rod->second->simulationGeneration != snapshot.expectedSimulationGeneration ||
+            renderScene.worldGeneration != snapshot.expectedWorldGeneration)
+        {
+            std::cerr << "[HairSnapshot] paired sampling cancelled by simulation/world identity change" << std::endl;
+            snapshot = SnapshotState{};
+            return;
+        }
+        if (rod->second->acceptedSeconds < snapshot.targetAcceptedSeconds)
+            return;
+    }
+    const auto& info = object->GetTressfxPositionInfo();
+    if (info.range == 0 || info.range > 512ull * 1024 * 1024)
+        throw std::runtime_error("Hair snapshot size is outside the existing geometry budget");
+    const auto directory = std::filesystem::path(snapshot.path).parent_path();
+    if (!directory.empty())
+        std::filesystem::create_directories(directory);
+    snapshot.size = info.range;
+    snapshot.rodDiagnosticCount = rod == rodObjects.end() ? 0u : rod->second->guides;
+    snapshot.rodHasReferences = rod != rodObjects.end() && rod->second->algorithmVersion == 3;
+    const vk::DeviceSize diagnosticBytes = static_cast<vk::DeviceSize>(snapshot.rodDiagnosticCount) * 64;
+    const vk::DeviceSize stateBytes = static_cast<vk::DeviceSize>(snapshot.rodDiagnosticCount) *
+        RodGpuGuideVec4Count * 16;
+    const vk::DeviceSize referenceBytes = snapshot.rodHasReferences ?
+        static_cast<vk::DeviceSize>(snapshot.rodDiagnosticCount) * RodGpuReferenceVec4Count * 16 : 0;
+    const vk::DeviceSize deltaBytes = snapshot.rodHasReferences ?
+        static_cast<vk::DeviceSize>(snapshot.rodDiagnosticCount) * 31 * 16 : 0;
+    const vk::DeviceSize lowBytes = snapshot.rodHasReferences &&
+        rod->second->numericEncodingVersion >= 3 ?
+        static_cast<vk::DeviceSize>(snapshot.rodDiagnosticCount) * 63 * 16 : 0;
+    const vk::DeviceSize allocationSize = snapshot.size + diagnosticBytes +
+        stateBytes + referenceBytes + deltaBytes + lowBytes;
+    std::tie(snapshot.buffer, snapshot.memory) = backend->CreateBuffer(
+        allocationSize, vk::BufferUsageFlagBits::eTransferDst,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+        "HairCurrentOnlySnapshot");
+    snapshot.mapped = backend->MapMemory(snapshot.memory, allocationSize);
+    snapshot.frameSlot = frameSlot;
+    nlohmann::json metadata;
+    metadata["format"] = "raw-little-endian-float32x4-guide-major-hair-local-cm";
+    metadata["version"] = 1;
+    metadata["frame"] = renderScene.frameIndex;
+    metadata["worldGeneration"] = renderScene.worldGeneration;
+    metadata["guideCount"] = object->GetTressfxGuideCount();
+    metadata["pointsPerGuide"] = object->GetTressfxPointsPerGuide();
+    metadata["simulationGuideCount"] = object->GetTressfxSimulationGuideCount();
+    metadata["bytes"] = snapshot.size;
+    metadata["sourceGuideOrder"] = "original TFX zero-based strand index";
+    metadata["sourceIdentity"] = object->GetName();
+    const auto matrixJson = [](const Eigen::Matrix4f& matrix)
+    {
+        nlohmann::json values = nlohmann::json::array();
+        for (uint32_t component = 0; component < 16; ++component)
+            values.push_back(matrix.data()[component]);
+        return values;
+    };
+    const auto& draw = renderScene.drawPackets[drawPacketIndex];
+    metadata["hairModelColumnMajor"] = matrixJson(draw.model);
+    metadata["cameraViewProjectionColumnMajor"] = matrixJson(renderScene.camera.viewProjection);
+    metadata["cameraPositionCm"] = {renderScene.camera.position.x(),
+        renderScene.camera.position.y(), renderScene.camera.position.z()};
+    const auto& section = object->GetImported()->modelResource.sections[object->GetImportedSectionIndex()];
+    metadata["simulationSourceGuideIds"] = section.tressfxSimulationGuideIndices;
+    if (section.tressfxSimulationGuideIndices.empty())
+        for (uint32_t guide = 0; guide < object->GetTressfxGuideCount(); ++guide)
+            metadata["simulationSourceGuideIds"].push_back(guide);
+    const auto descriptors = objectDescriptors.find(object.get());
+    if (descriptors != objectDescriptors.end())
+    {
+        metadata["rootMatrixHairLocalColumnMajor"] = matrixJson(descriptors->second.frameContext.skinningMatrix);
+        metadata["paletteHairLocalColumnMajor"] = nlohmann::json::array();
+        for (const auto& joint : descriptors->second.frameContext.jointMatrices)
+            metadata["paletteHairLocalColumnMajor"].push_back(matrixJson(joint));
+    }
+    if (rod != rodObjects.end())
+    {
+        metadata["algorithmVersion"] = rod->second->algorithmVersion;
+        metadata["algorithm"] = rod->second->algorithmVersion == 3 ?
+            "cosseratImplicitV3-unqualified-candidate" : "cosseratXpbdV1-unqualified-candidate";
+        metadata["fixedWorldOriginSI"] = {rod->second->fixedWorldOrigin.x(),
+            rod->second->fixedWorldOrigin.y(), rod->second->fixedWorldOrigin.z()};
+        metadata["kineticMathVersion"] = rod->second->kineticMathVersion;
+        metadata["numericEncodingVersion"] = rod->second->numericEncodingVersion;
+        metadata["compensatedLowBytes"] = lowBytes;
+        metadata["simulationGeneration"] = rod->second->simulationGeneration;
+        metadata["receivedSeconds"] = rod->second->receivedSeconds;
+        metadata["dispatchedSeconds"] = rod->second->dispatchedSeconds;
+        metadata["acceptedSecondsLastFence"] = rod->second->acceptedSeconds;
+        metadata["retainedDebtSeconds"] = rod->second->debtSeconds;
+        metadata["gpuStatusLastFence"] = rod->second->gpuStatus;
+        metadata["statusIsCurrentFrame"] = false;
+    }
+    const auto& skinning = object->GetTressfxSkinningBinding();
+    std::vector<TressfxBoneWeightGpu> packed(object->GetTressfxGuideCount());
+    for (uint32_t guide = 0; guide < packed.size(); ++guide)
+        packed[guide] = TressfxPackStrandBoneWeights(
+            skinning.strandBones.empty() ? TressfxStrandBoneWeights{} : skinning.strandBones[guide],
+            skinning.jointIndex);
+    const std::string bonePath = snapshot.path + ".bones.bin";
+    std::ofstream boneFile(bonePath, std::ios::binary);
+    boneFile.write(reinterpret_cast<const char*>(packed.data()), packed.size() * sizeof(TressfxBoneWeightGpu));
+    if (!boneFile)
+        throw std::runtime_error("Hair snapshot bone-weight sidecar could not be written");
+    metadata["bonesPath"] = bonePath;
+    metadata["bonesFormat"] = "per-strand little-endian uint32 joints[4], float32 weights[4]";
+    snapshot.metadata = metadata.dump(2);
+    vk::MemoryBarrier before;
+    before.setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eComputeShader,
+        vk::PipelineStageFlagBits::eTransfer, {}, before, nullptr, nullptr);
+    commandBuffer.copyBuffer(info.buffer, snapshot.buffer,
+        vk::BufferCopy(info.offset, 0, snapshot.size));
+    if (snapshot.rodDiagnosticCount != 0)
+    {
+        std::vector<vk::BufferCopy> regions;
+        regions.reserve(snapshot.rodDiagnosticCount);
+        for (uint32_t guide = 0; guide < snapshot.rodDiagnosticCount; ++guide)
+            regions.emplace_back(
+                (static_cast<vk::DeviceSize>(guide) * RodGpuGuideVec4Count +
+                    RodGpuGuideVec4Count - 4) * 16,
+                snapshot.size + static_cast<vk::DeviceSize>(guide) * 64, 64);
+        commandBuffer.copyBuffer(rod->second->state.buffer, snapshot.buffer, regions);
+        const vk::DeviceSize stateOffset = snapshot.size + diagnosticBytes;
+        commandBuffer.copyBuffer(rod->second->state.buffer, snapshot.buffer,
+            vk::BufferCopy(0, stateOffset, stateBytes));
+        if (snapshot.rodHasReferences)
+        {
+            commandBuffer.copyBuffer(rod->second->references.buffer, snapshot.buffer,
+                vk::BufferCopy(0, stateOffset + stateBytes, referenceBytes));
+            commandBuffer.copyBuffer(rod->second->frameDeltas.buffer, snapshot.buffer,
+                vk::BufferCopy(0, stateOffset + stateBytes + referenceBytes, deltaBytes));
+            if (lowBytes != 0)
+                commandBuffer.copyBuffer(rod->second->lowParts.buffer, snapshot.buffer,
+                    vk::BufferCopy(0, stateOffset + stateBytes + referenceBytes + deltaBytes, lowBytes));
+        }
+    }
+    vk::MemoryBarrier after;
+    after.setSrcAccessMask(vk::AccessFlagBits::eTransferRead)
+        .setDstAccessMask(vk::AccessFlagBits::eShaderRead | vk::AccessFlagBits::eShaderWrite);
+    commandBuffer.pipelineBarrier(vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eVertexShader | vk::PipelineStageFlagBits::eComputeShader,
+        {}, after, nullptr, nullptr);
+    snapshot.pending = true;
+    std::cout << "[HairSnapshot] queued current-only frame=" << renderScene.frameIndex <<
+        " bytes=" << snapshot.size << " path=" << snapshot.path << std::endl;
+}
+
+void HairSimulationPass::FlushSnapshot(uint32_t frameSlot)
+{
+    if (!snapshot.pending || snapshot.frameSlot != frameSlot)
+        return;
+    std::ofstream binary(snapshot.path, std::ios::binary);
+    binary.write(static_cast<const char*>(snapshot.mapped), static_cast<std::streamsize>(snapshot.size));
+    auto metadata = nlohmann::json::parse(snapshot.metadata);
+    if (snapshot.rodDiagnosticCount != 0)
+    {
+        const auto* diagnostics = reinterpret_cast<const float*>(
+            static_cast<const char*>(snapshot.mapped) + snapshot.size);
+        double acceptedMin = std::numeric_limits<double>::infinity();
+        double acceptedMax = 0.0;
+        float residualMax = 0.0f;
+        uint32_t failedGuides = 0;
+        uint32_t nonfiniteGuides = 0;
+        uint32_t statusMax = 0;
+        for (uint32_t guide = 0; guide < snapshot.rodDiagnosticCount; ++guide)
+        {
+            const float* values = diagnostics + guide * 16;
+            bool finite = true;
+            for (uint32_t component = 0; component < 16; ++component)
+                finite = finite && std::isfinite(values[component]);
+            if (!finite)
+            {
+                ++nonfiniteGuides;
+                continue;
+            }
+            failedGuides += values[0] != 0.0f ? 1u : 0u;
+            statusMax = std::max(statusMax, static_cast<uint32_t>(values[0]));
+            residualMax = std::max(residualMax, values[1]);
+            acceptedMin = std::min(acceptedMin, static_cast<double>(values[12]));
+            acceptedMax = std::max(acceptedMax, static_cast<double>(values[12]));
+        }
+        metadata["currentBufferClockScope"] = "same-command-buffer post-solver transfer; mapped after matching frame-slot fence";
+        metadata["currentBufferAcceptedSecondsMin"] = std::isfinite(acceptedMin) ?
+            nlohmann::json(acceptedMin) : nlohmann::json(nullptr);
+        metadata["currentBufferAcceptedSecondsMax"] = acceptedMax;
+        metadata["currentBufferFailedGuides"] = failedGuides;
+        metadata["currentBufferNonfiniteDiagnosticGuides"] = nonfiniteGuides;
+        metadata["currentBufferGpuStatusMax"] = statusMax;
+        metadata["currentBufferComponentResidualMax"] = residualMax;
+        metadata["statusIsCurrentFrame"] = true;
+        std::ofstream diagnosticFile(snapshot.path + ".rod-diagnostics.bin", std::ios::binary);
+        diagnosticFile.write(reinterpret_cast<const char*>(diagnostics),
+            static_cast<std::streamsize>(snapshot.rodDiagnosticCount) * 64);
+        if (!diagnosticFile)
+            throw std::runtime_error("Hair snapshot current-buffer diagnostic sidecar could not be written");
+        const char* payload = static_cast<const char*>(snapshot.mapped) + snapshot.size +
+            static_cast<size_t>(snapshot.rodDiagnosticCount) * 64;
+        const std::array<std::pair<const char*, size_t>, 3> payloads = {{
+            {".rod-state.bin", static_cast<size_t>(snapshot.rodDiagnosticCount) * RodGpuGuideVec4Count * 16},
+            {".rod-refs.bin", static_cast<size_t>(snapshot.rodDiagnosticCount) * RodGpuReferenceVec4Count * 16},
+            {".rod-delta.bin", static_cast<size_t>(snapshot.rodDiagnosticCount) * 31 * 16}
+        }};
+        for (const auto& entry : payloads)
+        {
+            if (!snapshot.rodHasReferences && entry.first != payloads.front().first)
+                continue;
+            std::ofstream output(snapshot.path + entry.first, std::ios::binary);
+            output.write(payload, static_cast<std::streamsize>(entry.second));
+            if (!output)
+                throw std::runtime_error("Hair snapshot material-frame sidecar could not be written");
+            payload += entry.second;
+        }
+        metadata["materialFrameScope"] = "same-command-buffer full selected-guide state/reference/delta sidecars";
+        if (metadata.value("compensatedLowBytes", uint64_t(0)) != 0)
+        {
+            std::ofstream output(snapshot.path + ".rod-low.bin", std::ios::binary);
+            output.write(payload, metadata["compensatedLowBytes"].get<std::streamsize>());
+            if (!output)
+                throw std::runtime_error("Hair snapshot compensated-state sidecar could not be written");
+        }
+    }
+    std::ofstream sidecar(snapshot.path + ".json");
+    sidecar << metadata.dump(2);
+    if (!binary || !sidecar)
+        std::cerr << "[HairSnapshot] failed writing " << snapshot.path << std::endl;
+    else
+        std::cout << "[HairSnapshot] completed current-only path=" << snapshot.path <<
+            " bytes=" << snapshot.size << std::endl;
+    backend->UnmapMemory(snapshot.memory);
+    backend->DestroyBuffer(snapshot.buffer, snapshot.memory);
+    SnapshotState next;
+    if (binary && sidecar && snapshot.remainingCaptures == 2 &&
+        metadata.contains("currentBufferAcceptedSecondsMin") &&
+        metadata["currentBufferAcceptedSecondsMin"].is_number())
+    {
+        next.path = snapshot.path + ".after2s.bin";
+        next.targetAcceptedSeconds = metadata["currentBufferAcceptedSecondsMin"].get<double>() + 2.0;
+        next.expectedSimulationGeneration = metadata["simulationGeneration"].get<uint64_t>();
+        next.expectedWorldGeneration = metadata["worldGeneration"].get<uint64_t>();
+        std::cout << "[HairSnapshot] paired followup targetAcceptedSeconds=" <<
+            next.targetAcceptedSeconds << " path=" << next.path << std::endl;
+    }
+    snapshot = std::move(next);
+}
+
+void HairSimulationPass::FinishSnapshot(bool waitForGpu)
+{
+    if (snapshot.pending)
+    {
+        if (waitForGpu)
+            backend->WaitIdle();
+        FlushSnapshot(snapshot.frameSlot);
+    }
+    else if (backend && snapshot.buffer)
+    {
+        if (snapshot.mapped)
+            backend->UnmapMemory(snapshot.memory);
+        backend->DestroyBuffer(snapshot.buffer, snapshot.memory);
+        snapshot = SnapshotState{};
+    }
+}
+
 void HairSimulationPass::StartTraceObject(RenderableObject& object)
 {
     const uint32_t guideCount = object.GetTressfxGuideCount();

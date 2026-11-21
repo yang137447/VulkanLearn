@@ -120,3 +120,22 @@ TEST(TressfxHairSimulationControls, TextFormatKeepsPrecisionWithoutPadding)
     EXPECT_EQ(TressfxSimulationText(140.0), "140");
     EXPECT_EQ(TressfxSimulationText(-980.0), "-980");
 }
+
+TEST(TressfxHairSimulationControls, RodShowsGravityWithoutRawTressfxControls)
+{
+    std::size_t count = 0;
+    const auto* controls = TressfxSimulationControls(count);
+    for (const char* solver : {"cosseratXpbdV1", "cosseratImplicitV3"})
+    {
+        const nlohmann::json rod = {
+            {"solver", solver}, {"solverProfile", "effectiveBundleV1"}};
+        EXPECT_TRUE(TressfxRodSimulation(rod));
+        for (std::size_t index = 0; index < count; ++index)
+        {
+            EXPECT_EQ(TressfxSimulationControlVisible(rod, controls[index].field),
+                std::string(controls[index].field) == "gravity");
+            EXPECT_TRUE(TressfxSimulationControlVisible(
+                nlohmann::json::object(), controls[index].field));
+        }
+    }
+}

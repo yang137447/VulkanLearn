@@ -6,6 +6,21 @@
             "type": "object",
             "description": "tressfx guide 模拟作者参数，单位沿用项目世界契约：位置为厘米，加速度为厘米/秒²。",
             "properties": {
+                "solver": {
+                    "type": "string",
+                    "enum": ["tressfx", "cosseratXpbdV1", "cosseratImplicitV3"],
+                    "default": "tressfx"
+                },
+                "solverProfile": {
+                    "type": "string",
+                    "enum": ["effectiveBundleV1"],
+                    "description": "Rod 语义 profile；物理派参由共享 CPU Rod 模块定义，切换需要重载。"
+                },
+                "windGain": {
+                    "type": "number",
+                    "minimum": 0,
+                    "maximum": 10
+                },
                 "enabled": {
                     "type": "boolean",
                     "description": "false 时不创建 solver 或模拟历史；放置绑定仍可执行 GPU 骨骼跟随。"
@@ -13,15 +28,6 @@
                 "gravity": {
                     "type": "array",
                     "description": "重力加速度 xyz，单位厘米/秒²。",
-                    "items": {
-                        "type": "number"
-                    },
-                    "minItems": 3,
-                    "maxItems": 3
-                },
-                "wind": {
-                    "type": "array",
-                    "description": "单个作者风向量：方向归一化后作为风锥轴，长度作为 TressFX WindMagnitude 力标量，不是物理风速。运行时按 TressFX SetWind 展开成四路锥形风（绕 Y/Z 各 ±40°），每路乘 wM = |wind| * (sin(simFrame*0.001)^2 + 0.5)。",
                     "items": {
                         "type": "number"
                     },
@@ -113,7 +119,44 @@
                     "description": "cpu 为游戏线程参考 solver；gpu 为 compute dispatch，CPU 不写位置 buffer。"
                 }
             },
-            "additionalProperties": false
+            "additionalProperties": false,
+            "allOf": [
+                {
+                    "if": {
+                        "anyOf": [
+                            {
+                                "properties": {"solver": {"enum": ["cosseratXpbdV1", "cosseratImplicitV3"]}},
+                                "required": ["solver"]
+                            },
+                            {"required": ["solverProfile"]}
+                        ]
+                    },
+                    "then": {
+                        "properties": {
+                            "backend": {"const": "gpu"},
+                            "damping": false,
+                            "iterations": false,
+                            "rootFixedPoints": false,
+                            "maxDt": false,
+                            "bendStiffness": false,
+                            "localShapeStiffness": false,
+                            "globalShapeStiffness": false,
+                            "globalShapeEffectiveRange": false,
+                            "vspCoefficient": false,
+                            "vspAccelThresholdMax": false,
+                            "vspStiffness": false,
+                            "windGain": false
+                        }
+                    }
+                },
+                {
+                    "if": {
+                        "properties": {"solver": {"const": "tressfx"}},
+                        "required": ["solver"]
+                    },
+                    "then": {"properties": {"solverProfile": false}}
+                }
+            ]
         },
         "tressfxSkinning": {
             "type": "object",

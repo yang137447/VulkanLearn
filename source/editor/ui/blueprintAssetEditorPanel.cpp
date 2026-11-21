@@ -459,6 +459,12 @@ void MaterialInstanceAssetEditorPanel::RefreshBlueprintAssetEditor()
             }
             const auto simulation = node.value("simulation", Json::object());
             const auto overrides = simulation.value("overrides", Json::object());
+            for (const char* field : {"solver", "solverProfile"})
+            {
+                const auto controlId = ComponentControlId(index, std::string("hair-") + field, 0, Prefix);
+                SetControlValue(controlId, overrides.value(field, ""));
+                SetDisabled(controlId, disabled);
+            }
             SetControlValue(ComponentControlId(index, "hair-mode", 0, Prefix),
                 simulation.value("mode", "inherit"));
             SetDisabled(ComponentControlId(index, "hair-mode", 0, Prefix), disabled);
@@ -738,6 +744,19 @@ void MaterialInstanceAssetEditorPanel::HandleBlueprintAssetEvent(Rml::Element& e
             if (simulation.value("mode", "inherit") == text) return;
             if (text == "inherit") simulation.erase("mode");
             else simulation["mode"] = text;
+        }
+        else if ((field == "hair-solver" || field == "hair-solverProfile") && !click)
+        {
+            const std::string key = field.substr(5);
+            if (!text.empty() && (key == "solver"
+                    ? text != "tressfx" && text != "cosseratXpbdV1" && text != "cosseratImplicitV3"
+                    : text != "effectiveBundleV1"))
+                return;
+            auto overrides = simulation.value("overrides", Json::object());
+            if (text.empty()) overrides.erase(key);
+            else overrides[key] = text;
+            if (overrides.empty()) simulation.erase("overrides");
+            else simulation["overrides"] = std::move(overrides);
         }
         else if ((field == "hair-value" && !click) || (field == "hair-reset" && click))
         {

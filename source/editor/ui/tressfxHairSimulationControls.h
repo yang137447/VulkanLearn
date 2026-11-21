@@ -8,11 +8,26 @@
 #include <iomanip>
 #include <sstream>
 #include <string>
+#include <string_view>
 
 #include <nlohmann/json.hpp>
 
 namespace VL::EditorUi
 {
+inline bool TressfxRodSimulation(const nlohmann::json& simulation)
+{
+    if (!simulation.is_object())
+        return false;
+    const auto solver = simulation.value("solver", "tressfx");
+    return solver == "cosseratXpbdV1" || solver == "cosseratImplicitV3";
+}
+
+inline bool TressfxSimulationControlVisible(
+    const nlohmann::json& simulation, std::string_view field)
+{
+    return !TressfxRodSimulation(simulation) || field == "gravity";
+}
+
 inline bool TressfxGpuSimulationDefaults(const nlohmann::json& document)
 {
     if (!document.contains("simulationDefaults")) return false;

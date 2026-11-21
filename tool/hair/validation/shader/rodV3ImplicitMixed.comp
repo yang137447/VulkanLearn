@@ -1,0 +1,7 @@
+#version 450
+#extension GL_ARB_gpu_shader_fp64 : require
+#define VL_ROD_V2_ANALYTIC 1
+#define VL_ROD_V3_PROGRESSIVE 1
+#define VL_ROD_V2_THOMAS_SOLVE 1
+#define VL_ROD_V2_MIXED_GEOMETRY 1
+#include "rodV2Kernel.glsl"

@@ -60,6 +60,7 @@ struct HairTraceRequest
     uint32_t frames = 0;
     uint32_t guideStride = 0;
 };
+inline constexpr uint32_t HairSnapshotCurrentOnlyStride = UINT32_MAX;
 
 struct HairTraceHeader
 {

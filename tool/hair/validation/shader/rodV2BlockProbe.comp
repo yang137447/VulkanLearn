@@ -1,0 +1,31 @@
+#version 450
+#include "rodV2Pcr.glsl"
+
+layout(local_size_x = 32) in;
+layout(set = 0, binding = 0, std430) readonly buffer RodV2BlockInputs
+{
+    vec4 values[];
+} blockInputs;
+layout(set = 0, binding = 1, std430) buffer RodV2BlockOutputs
+{
+    vec4 values[];
+} blockOutputs;
+
+void main()
+{
+    uint lane = gl_LocalInvocationID.x;
+    uint offset = lane * 29u;
+    RodV2Matrix bands[3];
+    for (uint band = 0u; band < 3u; ++band)
+    {
+        bands[band] = RodV2Zero();
+        for (uint entry = 0u; entry < 36u; ++entry)
+            RodV2Set(bands[band], entry / 6u, entry % 6u,
+                blockInputs.values[offset + band * 9u + entry / 4u][entry % 4u]);
+    }
+    RodV2Vector right = RodV2Vector(blockInputs.values[offset + 27u].xyz,
+        blockInputs.values[offset + 28u].xyz);
+    RodV2Vector solved = RodV2Pcr(lane, bands[0], bands[1], bands[2], right);
+    blockOutputs.values[lane * 2u] = vec4(solved.linear, float(rodV2LinearStatus));
+    blockOutputs.values[lane * 2u + 1u] = vec4(solved.angular, 0);
+}

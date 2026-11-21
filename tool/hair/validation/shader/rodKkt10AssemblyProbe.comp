@@ -1,0 +1,61 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "rodV3Kkt10.glsl"
+
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0, std430) readonly buffer Inputs
+{
+    float values[];
+} inputData;
+layout(set = 0, binding = 1, std430) buffer Outputs
+{
+    float values[];
+} outputData;
+
+void main()
+{
+    RodV2Matrix base = RodV2Zero();
+    RodV2Vector residual = RodV2Vector(vec3(0), vec3(0));
+    RodKkt10Contact contacts[3];
+    for (uint slot = 0u; slot < 3u; ++slot)
+    {
+        uint offset = slot * 16u;
+        contacts[slot].gradient = vec3(inputData.values[offset],
+            inputData.values[offset + 1u], inputData.values[offset + 2u]);
+        contacts[slot].gap = inputData.values[offset + 3u];
+        contacts[slot].multiplier = inputData.values[offset + 4u];
+        contacts[slot].enabled = inputData.values[offset + 5u] != 0.0;
+        for (uint column = 0u; column < 3u; ++column)
+            for (uint row = 0u; row < 3u; ++row)
+                contacts[slot].hessian[column][row] = inputData.values[offset + 6u + row * 3u + column];
+    }
+    RodKkt10Edge edges[2];
+    for (uint edge = 0u; edge < 2u; ++edge)
+    {
+        uint offset = 48u + edge * 20u;
+        edges[edge].direction = vec3(inputData.values[offset],
+            inputData.values[offset + 1u], inputData.values[offset + 2u]);
+        edges[edge].gap = inputData.values[offset + 3u];
+        edges[edge].multiplier = inputData.values[offset + 4u];
+        edges[edge].enabled = inputData.values[offset + 5u] != 0.0;
+        edges[edge].leftFree = inputData.values[offset + 6u] != 0.0;
+        edges[edge].rightFree = inputData.values[offset + 7u] != 0.0;
+        for (uint column = 0u; column < 3u; ++column)
+            for (uint row = 0u; row < 3u; ++row)
+                edges[edge].normalDerivative[column][row] =
+                    inputData.values[offset + 8u + row * 3u + column];
+    }
+    RodKkt10Matrix lower, diagonal, upper;
+    RodKkt10Vector value;
+    RodKkt10AssembleRow(base, base, base, residual, true, contacts,
+        edges[0], edges[1], inputData.values[88], inputData.values[89],
+        lower, diagonal, upper, value);
+    for (uint entry = 0u; entry < 100u; ++entry)
+    {
+        outputData.values[entry] = lower.values[entry];
+        outputData.values[100u + entry] = diagonal.values[entry];
+        outputData.values[200u + entry] = upper.values[entry];
+    }
+    for (uint entry = 0u; entry < 10u; ++entry)
+        outputData.values[300u + entry] = value.values[entry];
+}

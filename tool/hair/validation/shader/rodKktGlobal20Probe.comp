@@ -1,0 +1,86 @@
+#version 450
+
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0, std430) readonly buffer Inputs
+{
+    float values[];
+} inputData;
+layout(set = 0, binding = 1, std430) buffer Outputs
+{
+    float values[];
+} outputData;
+
+void main()
+{
+    float matrix[400];
+    float right[20];
+    float solution[20];
+    uint permutation[20];
+    for (uint entry = 0u; entry < 400u; ++entry)
+        matrix[entry] = inputData.values[entry];
+    for (uint row = 0u; row < 20u; ++row)
+    {
+        right[row] = inputData.values[400u + row];
+        permutation[row] = row;
+    }
+    bool success = true;
+    for (uint column = 0u; column < 20u; ++column)
+    {
+        float largest = 0.0;
+        uint pivotRow = column;
+        uint pivotColumn = column;
+        for (uint row = column; row < 20u; ++row)
+            for (uint entry = column; entry < 20u; ++entry)
+            {
+                float value = abs(matrix[row * 20u + entry]);
+                if (value > largest)
+                {
+                    largest = value;
+                    pivotRow = row;
+                    pivotColumn = entry;
+                }
+            }
+        if (largest == 0.0 || isnan(largest) || isinf(largest))
+        {
+            success = false;
+            break;
+        }
+        for (uint entry = 0u; entry < 20u; ++entry)
+        {
+            float value = matrix[column * 20u + entry];
+            matrix[column * 20u + entry] = matrix[pivotRow * 20u + entry];
+            matrix[pivotRow * 20u + entry] = value;
+        }
+        float value = right[column];
+        right[column] = right[pivotRow];
+        right[pivotRow] = value;
+        for (uint row = 0u; row < 20u; ++row)
+        {
+            value = matrix[row * 20u + column];
+            matrix[row * 20u + column] = matrix[row * 20u + pivotColumn];
+            matrix[row * 20u + pivotColumn] = value;
+        }
+        uint originalColumn = permutation[column];
+        permutation[column] = permutation[pivotColumn];
+        permutation[pivotColumn] = originalColumn;
+        for (uint row = column + 1u; row < 20u; ++row)
+        {
+            float factor = matrix[row * 20u + column] / matrix[column * 20u + column];
+            for (uint entry = column; entry < 20u; ++entry)
+                matrix[row * 20u + entry] -= factor * matrix[column * 20u + entry];
+            right[row] -= factor * right[column];
+        }
+    }
+    if (success)
+        for (int row = 19; row >= 0; --row)
+        {
+            float value = right[row];
+            for (uint column = uint(row + 1); column < 20u; ++column)
+                value -= matrix[uint(row) * 20u + column] * solution[column];
+            solution[row] = value / matrix[uint(row) * 20u + uint(row)];
+            success = success && !isnan(solution[row]) && !isinf(solution[row]);
+        }
+    outputData.values[20] = success ? 0.0 : 1.0;
+    for (uint row = 0u; row < 20u; ++row)
+        outputData.values[permutation[row]] = success ? solution[row] : 0.0;
+}

@@ -1,0 +1,92 @@
+#version 450
+#define VL_ROD_V2_ANALYTIC 1
+#define VL_ROD_V2_EXTERNAL_MAIN 1
+#include "rodV2Kernel.glsl"
+
+layout(set = 0, binding = 28, std430) buffer RodActualMatrices
+{
+    vec4 values[];
+} actualMatrices;
+
+void main()
+{
+    uint lane = gl_LocalInvocationID.x;
+    uint slot = gl_WorkGroupID.x;
+    uint guide = slot;
+    if (lane == 0u)
+        failure = 0u;
+    barrier();
+    RodInitialize(slot, guide, lane);
+    mat4 root = RodRootMatrix(guide, 0u);
+    mat3 rotation = RodRigidRotation(root);
+    vec3 authoredRoot = restPositions.positions[guide * 32u].xyz;
+    vec3 anchor = ((root * vec4(authoredRoot, 1)).xyz -
+        implicitControls.originTolerance.xyz * 100.0) * .01;
+    positions[lane].xyz = anchor + rotation *
+        (restPositions.positions[guide * 32u + lane].xyz - authoredRoot) * .01;
+    targets[lane] = anchor + rotation * RodRotation(restOrientations[0]) * rootLocals[lane].xyz;
+    targetVelocities[lane] = vec3(0);
+    externalAcceleration[lane] = rod.gravityStep.xyz;
+    v2Positions[lane] = positions[lane];
+    if (positions[lane].w == 0.0)
+        v2Positions[lane].xyz = targets[lane];
+    oldPositions[lane] = positions[lane];
+    v2OldVelocity[lane] = vec3(0);
+    rodState.guides[slot].points[lane].position = positions[lane];
+    rodState.guides[slot].points[lane].velocity = vec4(0);
+    if (lane < 31u)
+    {
+        orientations[lane] = RodMul(TressfxQuatFromMatrix(mat4(rotation)), restOrientations[lane]);
+        oldOrientations[lane] = orientations[lane];
+        v2Orientations[lane] = orientations[lane];
+        v2OldOmega[lane] = vec3(0);
+        rodState.guides[slot].segments[lane].orientation = orientations[lane];
+        rodState.guides[slot].segments[lane].angularVelocity = vec4(0);
+    }
+    barrier();
+    if (lane == 0u)
+    {
+        float mass = 0.0;
+        float stiffness = 0.0;
+        v2LengthScale = 0.0;
+        for (uint point = 0u; point < 32u; ++point)
+        {
+            mass += masses[point].x;
+            stiffness = max(stiffness, masses[point].y);
+            if (point < 31u)
+                v2LengthScale += restStrains[point].w;
+        }
+        v2ForceScale = mass * 9.8 + stiffness * v2LengthScale;
+        v2TorqueScale = v2ForceScale * v2LengthScale;
+    }
+    barrier();
+    RodV2Matrix bands[3];
+    bands[0] = lane > 0u ? RodV2Tangent(lane, lane - 1u) : RodV2Zero();
+    bands[1] = RodV2Tangent(lane, lane);
+    bands[2] = lane < 31u ? RodV2Tangent(lane, lane + 1u) : RodV2Zero();
+    uint offset = slot * 932u + lane * 29u;
+    for (uint band = 0u; band < 3u; ++band)
+        for (uint entry = 0u; entry < 36u; ++entry)
+            actualMatrices.values[offset + band * 9u + entry / 4u][entry % 4u] =
+                RodV2Entry(bands[band], entry / 6u, entry % 6u);
+    RodV2Vector residual = RodV2Residual(lane);
+    actualMatrices.values[offset + 27u] = vec4(-residual.linear, 0);
+    actualMatrices.values[offset + 28u] = vec4(-residual.angular, 0);
+#ifdef VL_ROD_V2_THOMAS_SOLVE
+    RodV2Vector direction = RodV2Thomas(lane, bands[0], bands[1], bands[2],
+#else
+    RodV2Vector direction = RodV2Pcr(lane, bands[0], bands[1], bands[2],
+#endif
+        RodV2Vector(-residual.linear, -residual.angular));
+    currentPositions.positions[slot * 64u + lane * 2u] = vec4(direction.linear, float(rodV2LinearStatus));
+    currentPositions.positions[slot * 64u + lane * 2u + 1u] = vec4(direction.angular, 0);
+    if (lane == 0u)
+    {
+        actualMatrices.values[slot * 932u + 928u] = vec4(v2LengthScale, v2ForceScale,
+            v2TorqueScale, rod.gravityStep.w);
+        actualMatrices.values[slot * 932u + 929u] = implicitControls.originTolerance;
+        actualMatrices.values[slot * 932u + 930u] = rod.gravityStep;
+        actualMatrices.values[slot * 932u + 931u] =
+            vec4(float(failure), float(rodV2LinearStatus), 0, 0);
+    }
+}

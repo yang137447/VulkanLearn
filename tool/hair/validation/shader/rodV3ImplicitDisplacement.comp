@@ -1,0 +1,6 @@
+#version 450
+#define VL_ROD_V2_ANALYTIC 1
+#define VL_ROD_V3_PROGRESSIVE 1
+#define VL_ROD_V2_THOMAS_SOLVE 1
+#define VL_ROD_V3_DISPLACEMENT 1
+#include "rodV2Kernel.glsl"

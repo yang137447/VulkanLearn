@@ -112,6 +112,8 @@ const Field fields[] = {
     // TressFX 默认模拟标量由独立文档拥有；放置覆盖不写回这里。作者值由
     // MeshAssetValidator 做值域与封闭对象校验；实时预览另走运行期命令。
     {K::Tressfx, "", "simulationDefaults.gravity", ValueKind::Vector3, false, "cm/s^2"},
+    {K::Tressfx, "", "simulationDefaults.solver", ValueKind::Text},
+    {K::Tressfx, "", "simulationDefaults.solverProfile", ValueKind::Text, true},
     {K::Tressfx, "", "simulationDefaults.damping", ValueKind::Number},
     {K::Tressfx, "", "simulationDefaults.iterations", ValueKind::Number},
     {K::Tressfx, "", "simulationDefaults.bendStiffness", ValueKind::Number},

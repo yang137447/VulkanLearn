@@ -7,6 +7,50 @@
 
 ## 实现边界
 
+### 版本化求解器的配置边界
+
+`cosseratXpbdV1` 是显式 opt-in 候选，未获物理质量放行。
+配置/序列化测试通过不代表短步长与迭代预算的动态资格通过。
+该 tag 标识有限惯量 XPBD 算法，不能在同一身份下替换为其他时间积分算法。
+`cosseratImplicitV3` 是独立 tag，标识完整动量残差带状 Newton 与渐进四次
+支撑能的候选；它不是 XPBD 的别名，也不继承 V1 的数值或运行结论。
+tag 的配置可接受性不等于求解器质量放行。
+
+`simulationDefaults.solver` 接受 `tressfx`（缺省）、`cosseratXpbdV1`
+或 `cosseratImplicitV3`。两个 Rod tag 的 `solverProfile` 仅接受
+`effectiveBundleV1`，省略时使用该定义；
+未知字符串、错误 JSON 类型，以及 TressFX 搭配 `solverProfile` 都在配置边界拒绝。
+执行后端与模型选择分别保存，但两个 Rod tag 的运行时配置必须显式使用
+`backend: "gpu"`；`cpu` 和缺省 CPU 均拒绝，不能回退到旧 `GuideSimulation`。
+纯 CPU Rod 数学/测试接口不等于运行时 CPU backend。
+
+`effectiveBundleV1` 的材料与支撑定义由 `source/hair/rod/` 拥有，
+属于工程 effective bundle 假设，不是实测人发参数。作者配置不提供裸
+δ、ζ、E、G 或刚度旋钮，也没有未经定义的其他档位。
+Rod 配置拒绝显式作者的 `damping`、`iterations`、`rootFixedPoints`、`maxDt`、
+`bendStiffness`、`localShapeStiffness`、`globalShapeStiffness`、
+`globalShapeEffectiveRange`、`vspCoefficient`、`vspAccelThresholdMax`、
+`vspStiffness`、`windGain`；TressFX 旧配置继续接受这些字段。
+公共 `gravity` 保持有限三分量、厘米/秒²单位；风方向和风速仍属于场景。
+
+分组允许稀疏 `solverProfile`，不允许分组选择 `solver/backend`。
+合成顺序仍为资产默认值 → 分组覆盖 → placement 覆盖。Rod 与任何层显式作者的
+旧 raw 字段混用会报错；placement 也不能把显式 raw-authored 的旧资产默认值
+静默切换成 Rod。需要语义配置的资产使用独立 opt-in TF 描述符。
+Rod 写出和行为身份包含版本化 solver/profile，写出时不携带无效旧 raw 字段；
+TressFX 缺省序列化保持原格式。
+行为键和分组行为键另包含内部 `algorithmVersion/profileMathVersion`：
+XPBD V1 为 `1/1`，Implicit V3 为 `3/3`。这些不是作者 JSON 字段；
+同名工程材料 profile 不会让两个算法/支撑数学身份变成同一个缓存键。
+
+`hair set` 仍是单对象数值请求，Rod 拒绝旧 raw 字段并保持配置不变。
+`solver/solverProfile` 属于需要重载的字段。纯编辑器控件会隐藏 Rod 的旧 raw
+数值项；分组编辑器保留并校验字符串 profile。
+上述边界由 `TressfxSemanticAuthoring`、`TressfxHairSimulationControls` 和
+`TressfxGroupEditor` 定向测试覆盖；`AssetDocumentTest` 也覆盖两个版本 tag
+的标准修改、保存、重载与 raw 修改拒绝。它们不证明 GPU 数值一致性、全头体积、
+时间债、根运动、碰撞、恢复时间或性能已经通过。
+
 `source/hair/` 的 `vl_hair_assets` 是纯 CPU 静态库，供根工程 `main`、
 `vl_tfx_inspect` 和 `hair_asset_tests` 链接；不依赖 UE、Vulkan、World 或材质系统。
 该库提供 `.tfx` 解析、`.tfxbone` 纯 CPU 解析与骨名→目标骨架映射

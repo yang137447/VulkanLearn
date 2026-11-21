@@ -1,0 +1,44 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "rodKkt10BandSolve.glsl"
+
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0, std430) readonly buffer Inputs
+{
+    float values[];
+} inputData;
+layout(set = 0, binding = 1, std430) buffer Outputs
+{
+    float values[];
+} outputData;
+
+RodKkt10Matrix RodKktLoadBand(uint point, uint band)
+{
+    RodKkt10Matrix matrix;
+    for (uint entry = 0u; entry < 100u; ++entry)
+        matrix.values[entry] = inputData.values[point * 310u + band * 100u + entry];
+    return matrix;
+}
+
+RodKkt10Vector RodKktLoadResidual(uint point)
+{
+    RodKkt10Vector residual;
+    for (uint entry = 0u; entry < 10u; ++entry)
+        residual.values[entry] = inputData.values[point * 310u + 300u + entry];
+    return residual;
+}
+
+void main()
+{
+    uint count = uint(inputData.values[9920]);
+    float originalResidual, smallestPivotRatio;
+    uint supernodeCount;
+    uint status = RodKktSolveBand32(count, originalResidual, supernodeCount, smallestPivotRatio);
+    for (uint point = 0u; point < count; ++point)
+        for (uint component = 0u; component < 10u; ++component)
+            outputData.values[point * 10u + component] = rodKktDirection[point].values[component];
+    outputData.values[320] = float(status);
+    outputData.values[321] = originalResidual;
+    outputData.values[322] = float(supernodeCount);
+    outputData.values[323] = smallestPivotRatio;
+}

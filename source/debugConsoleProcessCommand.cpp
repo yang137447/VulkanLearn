@@ -13,10 +13,12 @@
 #include "engine/runtimeCommand.h"
 #include "engine/editorHost.h"
 #include "hair/hairConsoleCommand.h"
+#include "hair/hairTraceFormat.h"
 #include "hair/tressfxLiveParams.h"
 #include "particles/particleDump.h"
 #include "particles/particleRuntimeCommand.h"
 #include "world/world.h"
+#include "world/sceneWindCommand.h"
 
 namespace
 {
@@ -380,14 +382,31 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
-    // hair trace <path> <frames> <guide-stride>：一次性只读 GPU 回读。
-    // hair reset [objectName]：请求渲染线程在下一个正 delta 帧执行一次 ResetPositions。
-    // Console 线程只解析值语义；对象选择、guide 采样、Vulkan buffer 与文件
-    // 都归渲染线程的 HairSimulationPass，未激活时零开销。
+    if (command == "wind")
+    {
+        std::string arguments;
+        std::getline(commandStream, arguments);
+        VL::SceneWindCommandRequest request;
+        std::string error;
+        if (!VL::ParseSceneWindCommand(arguments, request, error))
+        {
+            std::cout << error << std::endl;
+            return;
+        }
+        VL::RuntimeCommand runtimeCommand;
+        runtimeCommand.type = VL::RuntimeCommandType::ControlSceneWind;
+        runtimeCommand.stringValue = std::move(request.operation);
+        runtimeCommand.floatValue = request.strength;
+        runtimeCommand.sourceText = line;
+        commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
     if (command == "hair")
     {
         const char* hairUsage =
             "Usage: hair trace <path> <frames> <guide-stride>\n"
+            "       hair snapshot <path>\n"
+            "       hair snapshot-pair <path> (Rod, two physical seconds apart)\n"
             "       hair reset [objectName]\n"
             "       hair set <objectName> <field> <value...>\n"
             "       fields: gravity (x y z), damping, iterations, bendStiffness,\n"
@@ -397,6 +416,24 @@ void DebugConsole::ProcessCommand(const std::string& line)
         if (!(commandStream >> action))
         {
             std::cout << hairUsage << std::endl;
+            return;
+        }
+        if (action == "snapshot" || action == "snapshot-pair")
+        {
+            std::string path;
+            std::string extra;
+            if (!(commandStream >> path) || path.empty() || (commandStream >> extra))
+            {
+                std::cout << hairUsage << std::endl;
+                return;
+            }
+            VL::RuntimeCommand request;
+            request.type = VL::RuntimeCommandType::RequestHairTrace;
+            request.stringValue = std::move(path);
+            request.hairTraceFrames = action == "snapshot-pair" ? 2 : 1;
+            request.hairTraceGuideStride = VL::Hair::HairSnapshotCurrentOnlyStride;
+            request.sourceText = line;
+            commandBus.Queue(std::move(request));
             return;
         }
         if (action == "reset")

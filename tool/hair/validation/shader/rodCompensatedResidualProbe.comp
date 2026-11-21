@@ -1,0 +1,53 @@
+#version 450
+#define VL_ROD_V2_ANALYTIC 1
+#define VL_ROD_V3_PROGRESSIVE 1
+#define VL_ROD_V3_DISPLACEMENT 1
+#define VL_ROD_SECTION_INERTIA 1
+#define VL_ROD_V3_COMPENSATED_STATE 1
+#define VL_ROD_V3_LOW_DIRECTIONAL 1
+#define VL_ROD_V2_FAILURE_EXPORT 1
+#define VL_ROD_V2_EXTERNAL_MAIN 1
+#include "rodV2Kernel.glsl"
+
+void main()
+{
+    uint lane = gl_LocalInvocationID.x;
+    positions[lane] = rodState.guides[0].points[lane].position;
+    masses[lane] = rodState.guides[0].points[lane].massSupport;
+    v2Positions[lane] = lateState.values[lane];
+    oldPositions[lane] = lateState.values[63u + lane];
+    v2OldVelocity[lane] = lateState.values[126u + lane].xyz;
+    targets[lane] = lateState.values[189u + lane].xyz;
+    targetVelocities[lane] = lateState.values[221u + lane].xyz;
+    externalAcceleration[lane] = lateState.values[253u + lane].xyz;
+    v3CandidateLow[lane] = compensatedState.values[lane].xyz;
+    v3OldLow[lane] = vec3(0);
+    if (lane < 31u)
+    {
+        v2Orientations[lane] = lateState.values[32u + lane];
+        oldOrientations[lane] = lateState.values[95u + lane];
+        v2OldOmega[lane] = lateState.values[158u + lane].xyz;
+        v3CandidateQuaternionLow[lane] = compensatedState.values[32u + lane];
+        v3OldQuaternionLow[lane] = vec4(0);
+        restOrientations[lane] = rodState.guides[0].segments[lane].restOrientation;
+        restStrains[lane] = rodState.guides[0].segments[lane].restStrainLength;
+        restJoints[lane] = rodState.guides[0].segments[lane].restJointLength;
+        inertias[lane] = rodState.guides[0].segments[lane].inertia;
+    }
+    if (lane == 0u)
+    {
+        v2LengthScale = lateState.values[349].x;
+        v2ForceScale = lateState.values[349].y;
+        v2TorqueScale = lateState.values[349].z;
+    }
+    barrier();
+    float designDisplacement = .08 * v2LengthScale;
+    v3CubicStiffness[lane] = positions[lane].w == 0.0 ? 0.0 :
+        max(0.0, (masses[lane].x * rod.windDrag.w * 400.0 -
+            masses[lane].y * designDisplacement) /
+            (designDisplacement * designDisplacement * designDisplacement));
+    barrier();
+    RodV2Vector residual = RodV2Residual(lane);
+    lateMatrices.values[lane * 2u] = vec4(residual.linear, 0);
+    lateMatrices.values[lane * 2u + 1u] = vec4(residual.angular, 0);
+}

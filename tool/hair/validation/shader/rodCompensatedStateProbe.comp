@@ -1,0 +1,33 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "rodCompensatedState.glsl"
+
+layout(local_size_x = 1) in;
+layout(set = 0, binding = 0, std430) readonly buffer Inputs
+{
+    vec4 values[];
+} inputData;
+layout(set = 0, binding = 1, std430) buffer Outputs
+{
+    vec4 values[];
+} outputData;
+
+void main()
+{
+    for (uint point = 0u; point < 32u; ++point)
+    {
+        vec3 high, low;
+        RodCompensatedPosition(inputData.values[point].xyz, vec3(0),
+            inputData.values[63u + point].xyz, high, low);
+        outputData.values[point] = vec4(high, 0);
+        outputData.values[63u + point] = vec4(low, 0);
+        if (point < 31u)
+        {
+            vec4 quaternionHigh, quaternionLow;
+            RodCompensatedQuaternion(inputData.values[32u + point], vec4(0),
+                inputData.values[95u + point], quaternionHigh, quaternionLow);
+            outputData.values[32u + point] = quaternionHigh;
+            outputData.values[95u + point] = quaternionLow;
+        }
+    }
+}

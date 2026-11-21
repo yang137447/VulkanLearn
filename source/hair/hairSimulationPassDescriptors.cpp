@@ -443,7 +443,12 @@ void HairSimulationPass::ResetDescriptorCache() noexcept
         for (std::vector<DescriptorPoolBudget>& pools : descriptorPools)
         {
             for (DescriptorPoolBudget& budget : pools)
+            {
+                std::cout << "[TressFX] destroy descriptor pool=0x" << std::hex <<
+                    reinterpret_cast<uintptr_t>(static_cast<VkDescriptorPool>(budget.pool)) <<
+                    std::dec << std::endl;
                 backend->DestroyDescriptorPool(budget.pool);
+            }
             pools.clear();
         }
     }

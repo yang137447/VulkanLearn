@@ -62,7 +62,8 @@ inline const HairLiveParameterSpec* FindHairLiveParameterSpec(std::string_view f
 // 让命令落到 “unknown parameter”。
 inline bool IsHairReloadOnlyField(std::string_view field)
 {
-    return field == "enabled" || field == "backend" || field == "rootFixedPoints" ||
+    return field == "solver" || field == "solverProfile" ||
+        field == "enabled" || field == "backend" || field == "rootFixedPoints" ||
         field == "maxDt" || field == "vspStiffness" || field == "localShapeStiffness" ||
         field == "collision" || field == "strandRadius" || field == "skinning" ||
         field == "capsules" || field == "boneWeights" || field == "weights";

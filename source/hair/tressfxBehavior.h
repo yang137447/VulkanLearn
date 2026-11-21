@@ -3,11 +3,56 @@
 #include <optional>
 #include <stdexcept>
 #include <string>
+#include <string_view>
 
 #include "mesh/meshAssetTypes.h"
 
 namespace VL::Hair
 {
+
+inline bool IsRodSimulationSolver(TressfxSimulationSolver solver)
+{
+    return solver == TressfxSimulationSolver::CosseratXpbdV1 ||
+        solver == TressfxSimulationSolver::CosseratImplicitV3;
+}
+
+inline const char* TressfxSimulationSolverName(TressfxSimulationSolver solver)
+{
+    switch (solver)
+    {
+    case TressfxSimulationSolver::Tressfx: return "tressfx";
+    case TressfxSimulationSolver::CosseratXpbdV1: return "cosseratXpbdV1";
+    case TressfxSimulationSolver::CosseratImplicitV3: return "cosseratImplicitV3";
+    }
+    throw std::invalid_argument("unknown hair solver enum");
+}
+
+inline uint32_t TressfxSolverAlgorithmVersion(TressfxSimulationSolver solver)
+{
+    switch (solver)
+    {
+    case TressfxSimulationSolver::Tressfx: return 0;
+    case TressfxSimulationSolver::CosseratXpbdV1: return 1;
+    case TressfxSimulationSolver::CosseratImplicitV3: return 3;
+    }
+    throw std::invalid_argument("unknown hair solver enum");
+}
+
+inline uint32_t TressfxSupportProfileMathVersion(TressfxSimulationSolver solver)
+{
+    return TressfxSolverAlgorithmVersion(solver);
+}
+
+inline bool IsTressfxRawSimulationField(std::string_view field)
+{
+    for (std::string_view raw : {"damping", "iterations", "rootFixedPoints",
+             "maxDt", "bendStiffness", "localShapeStiffness",
+             "globalShapeStiffness", "globalShapeEffectiveRange", "vspCoefficient",
+             "vspAccelThresholdMax", "vspStiffness", "windGain"})
+        if (field == raw)
+            return true;
+    return false;
+}
 
 enum class TressfxSimulationMode { Inherit, Off, On };
 

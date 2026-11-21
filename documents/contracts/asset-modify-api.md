@@ -26,10 +26,11 @@ TR 资产；TR 内部参数改走 `terrain.modify`。临时 `SC_model_preview.js
 具体可写字段以 `get_capabilities` 为准，字段定义、typed codec 与能力投影共用
 `assetDocumentFields.cpp` 的一张表。
 
-TressFX 能力表包含 8 个 `simulationDefaults.*` 一级字段与整段 `groups` 数组（分组形状与校验见
+TressFX 能力表包含 11 个 `simulationDefaults.*` 一级字段与整段 `groups` 数组（分组形状与校验见
 `tressfx-asset-import.md` 的“分组”一节）：`gravity`（向量）、`damping`、
 `iterations`、`bendStiffness`、`globalShapeStiffness`、`globalShapeEffectiveRange`、
-`vspCoefficient`、`vspAccelThresholdMax`（数值）。`wind` 不在能力表内：风由场景 `wind` 对象作者，
+`vspCoefficient`、`vspAccelThresholdMax`、`windGain`（数值），以及
+`solver`、`solverProfile`（文本）。`wind` 不在能力表内：风由场景 `wind` 对象作者，
 TF 里出现的 `simulationDefaults.wind` 在加载期被拒绝。这些字段只对 Tressfx 文档 kind 开放，
 Mesh 能力表不包含模拟字段。值域由
 `MeshAssetValidator::BuildLoadPlan` 在 modify/validate/save 阶段校验，越界直接拒绝；
@@ -41,6 +42,19 @@ TF 不承载角色绑定或碰撞代理。蓝图组件的 `simulation.mode` 与�
 `hairCollision` 属于 BP 的完整组件数组；独立场景 mesh 的同类配置在 `tressfx` 对象内，
 不属于 `scene.modify` 的逐字段能力。TF 的旧 `simulation`、`collision`、
 `collisionDefaults` 字段会被拒绝。
+
+配置校验对 `solver` 采用版本化封闭值：`tressfx`（缺省）或
+`cosseratXpbdV1`、`cosseratImplicitV3`；两个 Rod tag 只接受
+`solverProfile: "effectiveBundleV1"`，
+不接受旧 raw TressFX stiffness/damping/VSP 等字段。TressFX 与
+`solverProfile` 混用、未知 profile、Rod 选择 CPU backend 都被拒绝。
+完整字段名单和分组合成约束见
+[TressFX 配置边界](tressfx-asset-import.md#版本化求解器的配置边界)。
+两个文本字段不改变 `enabled/backend` 的只读能力，也不扩大 Scene 实例组件权限。
+配置解析和纯编辑器控件测试覆盖这些拒绝与保留语义；它们不等价于 GPU
+运行或新模型物理验收。两个独立 tag 都不是通过修改作者字段就获得资格的
+默认生产路径；Implicit V3 不能在 XPBD V1 身份下替换执行算法。
+
 BP 文档支持完整替换组件数组，包括增删和父链调整。可选
 [C# 蓝图](csharp-blueprint-runtime.md) 的场景新增/改名/复制/删除、实例属性与 inline
 组件/物理编辑、获准的继承组件字段编辑/重置由 GT 作者适配器复用 Scene 草稿与保存 owner，

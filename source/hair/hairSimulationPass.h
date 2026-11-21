@@ -30,6 +30,7 @@ struct RenderScene;
 
 namespace Hair
 {
+struct RodGpuObject;
 // TressFX 5.0 guide solver 的 pass 顺序，严格对应源 .usf：
 //   Integration -> StrandLevel -> VSP -> LocalShape -> LengthConstraintsWind
 // 之后是 VL 追加的碰撞阶段：胶囊 Collision（源 guide shader 没有），以及
@@ -236,6 +237,29 @@ private:
         void* restMapped = nullptr;
         vk::DeviceSize restBytes = 0;
     };
+    struct SnapshotState
+    {
+        std::string path;
+        std::string metadata;
+        vk::Buffer buffer = nullptr;
+        vk::DeviceMemory memory = nullptr;
+        void* mapped = nullptr;
+        vk::DeviceSize size = 0;
+        uint32_t rodDiagnosticCount = 0;
+        bool rodHasReferences = false;
+        uint32_t remainingCaptures = 1;
+        double targetAcceptedSeconds = 0;
+        uint64_t expectedSimulationGeneration = 0;
+        uint64_t expectedWorldGeneration = 0;
+        uint32_t frameSlot = 0;
+        bool pending = false;
+    };
+    void RecordSnapshot(vk::CommandBuffer commandBuffer,
+        const std::shared_ptr<RenderableObject>& object,
+        const VL::RenderScene& renderScene, size_t drawPacketIndex,
+        uint32_t frameSlot);
+    void FlushSnapshot(uint32_t frameSlot);
+    void FinishSnapshot(bool waitForGpu);
 
     vk::DescriptorPool AcquireDescriptorPool(uint32_t pass, uint32_t setCount);
     ObjectDescriptors& EnsureObjectDescriptors(RenderableObject& object);
@@ -257,6 +281,10 @@ private:
         const VL::ResolvedRenderScene& scene,
         const VL::RenderScene& renderScene,
         uint32_t frameSlot);
+    void RecordRod(vk::CommandBuffer commandBuffer,
+        const std::shared_ptr<RenderableObject>& object,
+        const VL::RenderScene& renderScene, size_t drawPacketIndex,
+        uint32_t frameSlot, bool& anyDispatch);
 
     // trace 的录制/回读辅助。未激活时都在 Record 开头一次布尔判断后返回。
     void StartTraceObject(RenderableObject& object);
@@ -272,11 +300,14 @@ private:
     RendererBackendVulkan* backend = nullptr;
     std::array<std::shared_ptr<ComputePipeline>, GuideSimulationPassCount> pipelines{};
     std::shared_ptr<ComputePipeline> skinningPipeline;
+    std::array<std::shared_ptr<ComputePipeline>, 6> rodPipelines;
+    std::unordered_map<const RenderableObject*, std::shared_ptr<RodGpuObject>> rodObjects;
     // 最后一条池链供独立蒙皮；源 guide solver 的九阶段枚举与调度保持不变。
     std::array<std::vector<DescriptorPoolBudget>, GuideSimulationPassCount + 1> descriptorPools;
     std::unordered_map<const RenderableObject*, ObjectDescriptors> objectDescriptors;
     std::unordered_map<const RenderableObject*, SkinningDescriptors> skinningDescriptors;
     TraceState trace;
+    SnapshotState snapshot;
     // 渲染线程独占：RequestReset 在 RecordHairSimulation 内、Record 之前调用；
     // 下一帧 Record 把它展开成逐对象 resetRequested 后清空。
     std::optional<std::string> pendingResetObject;

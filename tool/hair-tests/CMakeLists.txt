@@ -19,6 +19,17 @@ add_executable(hair_asset_tests
     tressfxGroupBindingTests.cpp
     tressfxGeometryCacheTests.cpp
     tressfxSurfaceBrushTests.cpp
+    rodProductionTests.cpp
+    rodCollisionTests.cpp
+    rodContactImplicitTests.cpp
+    rodSectionInertiaTests.cpp
+    rodWorkCertificateTests.cpp
+    rodRootMotionTests.cpp
+    rodImplicitAirTests.cpp
+    rodAxialLimitTests.cpp
+    rodSmoothSdfTests.cpp
+    tressfxSemanticAuthoringTests.cpp
+    sceneWindCommandTests.cpp
     ${PROJECT_SOURCE_DIR}/source/mesh/loader/hair/tressfxModelImporter.cpp
     ${PROJECT_SOURCE_DIR}/source/mesh/validation/meshAssetValidator.cpp
     ${PROJECT_SOURCE_DIR}/source/hair/tressfxGroupSimulation.cpp

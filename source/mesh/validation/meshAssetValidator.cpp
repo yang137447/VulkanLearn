@@ -169,7 +169,7 @@ namespace
                 "localShapeStiffness", "globalShapeStiffness",
                 "globalShapeEffectiveRange", "vspCoefficient",
                 "vspAccelThresholdMax", "vspStiffness", "backend", "skinning",
-                "windGain"};
+                "windGain", "solver", "solverProfile"};
             for (auto field = simulation.begin(); field != simulation.end(); ++field)
             {
                 if (std::find(std::begin(known), std::end(known), field.key()) ==
@@ -178,6 +178,41 @@ namespace
                         "TressFX simulation has unknown field \"" + field.key() +
                         "\": " + std::string(meshAssetPath));
             }
+        }
+        if (simulation.contains("solver"))
+        {
+            const auto& solver = simulation.at("solver");
+            if (solver == "tressfx")
+                config.solver = TressfxSimulationSolver::Tressfx;
+            else if (solver == "cosseratXpbdV1")
+                config.solver = TressfxSimulationSolver::CosseratXpbdV1;
+            else if (solver == "cosseratImplicitV3")
+                config.solver = TressfxSimulationSolver::CosseratImplicitV3;
+            else
+                throw std::runtime_error(
+                    "Hair simulation solver must be tressfx, cosseratXpbdV1 or cosseratImplicitV3: " +
+                    std::string(meshAssetPath));
+        }
+        if (simulation.contains("solverProfile"))
+        {
+            if (simulation.at("solverProfile") != "effectiveBundleV1")
+                throw std::runtime_error(
+                    "Hair simulation solverProfile must be \"effectiveBundleV1\": " +
+                    std::string(meshAssetPath));
+            if (!VL::Hair::IsRodSimulationSolver(config.solver))
+                throw std::runtime_error(
+                    "Hair simulation solverProfile requires a versioned Rod solver: " +
+                    std::string(meshAssetPath));
+        }
+        for (auto field = simulation.begin(); field != simulation.end(); ++field)
+        {
+            if (!VL::Hair::IsTressfxRawSimulationField(field.key()))
+                continue;
+            config.tressfxRawParametersAuthored = true;
+            if (VL::Hair::IsRodSimulationSolver(config.solver))
+                throw std::runtime_error(
+                    "Rod simulation rejects TressFX raw parameter \"" + field.key() +
+                    "\"; use solverProfile: " + std::string(meshAssetPath));
         }
         config.enabled = simulation.value("enabled", true);
         if (simulation.contains("gravity"))
@@ -223,6 +258,12 @@ namespace
                     "TressFX simulation backend must be \"cpu\" or \"gpu\": " +
                     std::string(meshAssetPath));
         }
+        if (VL::Hair::IsRodSimulationSolver(config.solver) &&
+            config.backend != TressfxSimulationBackend::Gpu)
+            throw std::runtime_error(
+                "versioned Rod runtime requires backend \"gpu\"; "
+                "the CPU reference is available only through the Rod test/tool API: " +
+                std::string(meshAssetPath));
         if (simulation.contains("skinning"))
         {
             const auto& skinning = simulation.at("skinning");
@@ -792,7 +833,7 @@ namespace
         // 同样不会是组级标量。
         static const char* const allowed[] = {"damping", "bendStiffness",
             "globalShapeStiffness", "globalShapeEffectiveRange", "vspCoefficient",
-            "vspAccelThresholdMax"};
+            "vspAccelThresholdMax", "solverProfile"};
         for (auto field = overrides.begin(); field != overrides.end(); ++field)
         {
             bool known = false;
@@ -805,7 +846,14 @@ namespace
                     "asset defaults or placement): " + context);
         }
         // 结果对象丢弃：这里只借用数值校验，不把组覆盖提前合并进资产默认值。
-        MeshAssetValidator::BuildTressfxSimulationConfig({{"simulation", overrides}}, context);
+        auto validationValues = overrides;
+        if (validationValues.contains("solverProfile"))
+        {
+            validationValues["solver"] = "cosseratXpbdV1";
+            validationValues["backend"] = "gpu";
+        }
+        MeshAssetValidator::BuildTressfxSimulationConfig(
+            {{"simulation", validationValues}}, context);
     }
 
     struct OwnedGuideRange
@@ -1067,6 +1115,9 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
             effectiveMeshAssetJson, std::string(meshAssetPath));
         loadPlan.tressfxGuideGroups = ReadTressfxGuideGroups(
             effectiveMeshAssetJson, meshAssetPath);
+        for (const auto& group : loadPlan.tressfxGuideGroups)
+            VL::Hair::ResolveTressfxBehaviorLayers(loadPlan.tressfxSimulation,
+                group.simulationOverrides, {}, std::string(meshAssetPath));
         std::ostringstream identity;
         // 几何身份只含几何输入；默认值变更在 renderable 有效配置键中体现。
         identity << "|tressfx-geometry-v2|radius=" << std::hexfloat << loadPlan.strandRadius
@@ -1263,6 +1314,12 @@ namespace VL::Hair
 {
 nlohmann::json WriteTressfxSimulationValues(const TressfxSimulationConfig& config)
 {
+    if (IsRodSimulationSolver(config.solver))
+        return {
+            {"enabled", config.enabled},
+            {"backend", config.backend == TressfxSimulationBackend::Gpu ? "gpu" : "cpu"},
+            {"solver", TressfxSimulationSolverName(config.solver)}, {"solverProfile", "effectiveBundleV1"},
+            {"gravity", {config.gravity.x(), config.gravity.y(), config.gravity.z()}}};
     nlohmann::json value = {
         {"enabled", config.enabled},
         {"backend", config.backend == TressfxSimulationBackend::Gpu ? "gpu" : "cpu"},
@@ -1349,6 +1406,9 @@ TressfxPlacementBehavior ReadTressfxPlacementBehavior(
                 behavior.overrides.contains("collision"))
                 throw std::runtime_error("TressFX overrides contain forbidden fields: " + context);
             internal["simulation"].update(behavior.overrides);
+            if (behavior.overrides.contains("solverProfile") &&
+                !behavior.overrides.contains("solver"))
+                internal["simulation"]["solver"] = "cosseratXpbdV1";
         }
     }
     if (node.contains("skinning"))
@@ -1380,6 +1440,29 @@ TressfxSimulationConfig ResolveTressfxBehaviorLayers(
         throw std::runtime_error("TressFX simulation overrides must be an object" +
             (context.empty() ? std::string() : ": " + context));
     nlohmann::json simulation = WriteTressfxSimulationValues(defaults);
+    const auto changesSolver = [&](const nlohmann::json& layer)
+    {
+        return layer.contains("solver") && layer.at("solver") !=
+            TressfxSimulationSolverName(defaults.solver);
+    };
+    if (changesSolver(overrides) || changesSolver(placement.overrides))
+    {
+        const auto selectsRod = [](const nlohmann::json& layer)
+        {
+            return layer.contains("solver") &&
+                (layer.at("solver") == "cosseratXpbdV1" ||
+                 layer.at("solver") == "cosseratImplicitV3");
+        };
+        if (defaults.tressfxRawParametersAuthored &&
+            (selectsRod(overrides) || selectsRod(placement.overrides)))
+            throw std::runtime_error(
+                "Rod solver cannot inherit explicitly authored TressFX raw defaults: " + context);
+        for (auto field = simulation.begin(); field != simulation.end();)
+            if (IsTressfxRawSimulationField(field.key()) || field.key() == "solverProfile")
+                field = simulation.erase(field);
+            else
+                ++field;
+    }
     simulation.update(overrides);
     simulation.update(placement.overrides);
     if (placement.mode != TressfxSimulationMode::Inherit)
@@ -1389,12 +1472,23 @@ TressfxSimulationConfig ResolveTressfxBehaviorLayers(
     nlohmann::json internal = {{"simulation", simulation}};
     if (!placement.hairCollision.empty())
         internal["collision"] = placement.hairCollision;
-    return MeshAssetValidator::BuildTressfxSimulationConfig(internal, context);
+    auto result = MeshAssetValidator::BuildTressfxSimulationConfig(internal, context);
+    result.tressfxRawParametersAuthored = defaults.tressfxRawParametersAuthored;
+    for (const auto* layer : {&overrides, &placement.overrides})
+        for (auto field = layer->begin(); field != layer->end(); ++field)
+            result.tressfxRawParametersAuthored =
+                result.tressfxRawParametersAuthored || IsTressfxRawSimulationField(field.key());
+    return result;
 }
 
 std::string MakeTressfxBehaviorKey(const TressfxSimulationConfig& config)
 {
     nlohmann::json identity = WriteTressfxSimulationValues(config);
+    if (IsRodSimulationSolver(config.solver))
+    {
+        identity["algorithmVersion"] = TressfxSolverAlgorithmVersion(config.solver);
+        identity["profileMathVersion"] = TressfxSupportProfileMathVersion(config.solver);
+    }
     if (config.skinning)
         identity["skinning"] = WriteTressfxSkinning(*config.skinning);
     identity["capsules"] = nlohmann::json::array();

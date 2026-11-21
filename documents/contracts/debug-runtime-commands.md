@@ -18,6 +18,59 @@ camera pose <px> <py> <pz> <tx> <ty> <tz>
 
 相机命令作用于当前 active World 的 Camera。`lookat` 保留当前位置和当前 up；`pose` 使用世界空间位置与目标点重建朝向。命令执行前要求所有输入为有限值，目标点不能与相机位置重合。
 
+## Scene Wind
+
+```text
+wind get
+wind strength <cm/s>
+```
+
+普通 Console 入口通过 `CommandBus` 排队，在 GT 稳定命令点检查 active World
+和已有的 `wind` 对象。没有 World 或没有作者风对象时输出 `status: "rejected"`；
+不隐式新建风对象。`strength` 只接受一个有限非负数，`get` 不接受额外参数。
+`scene.modify` 没有风字段能力；这条入口不经过编辑器作者草稿。
+
+`strength` 只改变当前 World 风的目标强度，单位 cm/s，不改方向、gust 或既有
+`SceneWindRuntime` 缓动。它不重载 World、不重置发丝或风时间、不写资产，
+也不包含自动时间线。需要先无风、再加风、再停风时分别显式投递命令。
+
+执行端 stdout 输出一行 JSON receipt：`command: "wind"`、`operation`、
+`status`、`worldGeneration`、`steadyTimeSeconds`、`runtimeOnly: true`、
+`strengthOverrideApplied`。成功 receipt 还包含 `windName`、
+`previousTargetStrengthCmPerSecond`、`targetStrengthCmPerSecond`、
+`direction` 和 `gust`。强度是作者目标，不是已经缓动后的即时风速；
+`steadyTimeSeconds` 是 GT 执行时单调时钟，用于外部注入记录，不能当作
+已接受的发丝物理时间。失败 receipt 包含 `error` 且不改变风。
+
+解析、缺失对象拒绝、原子拒绝、方向/gust 保留、既有缓动和 receipt 字段由
+`SceneWindCommand` 模块测试覆盖；运行中轨迹和发丝响应属于单独验收。
+`main_game` 的单/双 worker API smoke 还核对了
+`get → strength 2000 → get → strength 0 → get` 的成功 receipt、
+目标强度和同一 World generation；这是逐帧命令 smoke，不是完整风/恢复时程。
+
+## Hair Current Snapshot
+
+```text
+hair snapshot <path>
+```
+
+通过现有 `RequestHairTrace` 命令通道请求一次 current-only 快照，选择当前
+dispatch 列表中的首个可用 GPU 毛发对象。它不重载场景或复位模拟。
+命令只接受一个非空路径；已有快照请求未完成时拒绝新的快照请求。
+
+数据文件是 little-endian float32×4、原始 TFX strand 顺序的当前点缓冲；
+xyz 为 hair-local 厘米。输出 `<path>.json` 元数据与 `<path>.bones.bin`
+骨权 sidecar，包含原始 source ID 顺序、模拟 guide 选择、hair model、
+相机矩阵和骨骼调色板。current-only 路径受既有几何预算约束（512 MiB），
+不受连续小子集 trace 的 256 条采样上限约束。它不保存 previous/history 轨迹。
+
+复制在 GPU command buffer 中排队，正常路径在对应 frame slot fence 完成后
+落盘；结束时仍有待处理读回的清理属于显式安全点。元数据中的
+`acceptedSecondsLastFence`、`gpuStatusLastFence` 是最近完成 fence 的状态，
+`statusIsCurrentFrame` 明确为 false，不能当作该 current 数据帧已通过求解的证明。
+40,334×32 current 的实际 wire 检查覆盖 20,651,008 字节位置数据、
+1,290,688 字节骨权及 source/ref 一致性；该检查不是 settled 或风质量验收。
+
 ## Screenshot
 
 ```text

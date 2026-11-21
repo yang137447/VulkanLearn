@@ -189,6 +189,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  glass impact <pane-name> [speed] - launch a Jolt sphere at a glass pane\n";
     std::cout << "  shoot - fire a visible arrow from the render camera\n";
     std::cout << "  camera get - print the active camera pose\n";
+    std::cout << "  wind <get|strength cm/s> - inspect or override the current scene wind target without reload\n";
     std::cout << "  camera position <x> <y> <z> - set camera position\n";
     std::cout << "  camera lookat <x> <y> <z> - aim camera at a world-space target\n";
     std::cout << "  camera pose <px> <py> <pz> <tx> <ty> <tz> - set position and look-at\n";

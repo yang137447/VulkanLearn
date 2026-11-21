@@ -1,0 +1,5 @@
+#version 450
+#define VL_ROD_V3_COMPENSATED_FOLLOW 1
+#define VL_ROD_V3_FOLLOW 1
+#define VL_ROD_V3_DISPLACEMENT_FOLLOW 1
+#include "rodFollowKernel.glsl"

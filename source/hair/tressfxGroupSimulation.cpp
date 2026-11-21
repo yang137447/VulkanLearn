@@ -87,6 +87,16 @@ std::string MakeTressfxGroupSimulationKey(
         return {};
     nlohmann::json identity = nlohmann::json::array();
     for (const TressfxSimulationConfig& config : configs)
+    {
+        if (IsRodSimulationSolver(config.solver))
+        {
+            identity.push_back({
+                {"solver", TressfxSimulationSolverName(config.solver)},
+                {"solverProfile", "effectiveBundleV1"},
+                {"algorithmVersion", TressfxSolverAlgorithmVersion(config.solver)},
+                {"profileMathVersion", TressfxSupportProfileMathVersion(config.solver)}});
+            continue;
+        }
         identity.push_back({
             {"damping", config.damping},
             {"bendStiffness", config.bendStiffness},
@@ -94,6 +104,7 @@ std::string MakeTressfxGroupSimulationKey(
             {"globalShapeEffectiveRange", config.globalShapeEffectiveRange},
             {"vspCoefficient", config.vspCoefficient},
             {"vspAccelThresholdMax", config.vspAccelThresholdMax}});
+    }
     return identity.dump();
 }
 

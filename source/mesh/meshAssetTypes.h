@@ -50,6 +50,18 @@ enum class TressfxSimulationBackend
     Gpu,
 };
 
+enum class TressfxSimulationSolver
+{
+    Tressfx,
+    CosseratXpbdV1,
+    CosseratImplicitV3,
+};
+
+enum class TressfxSolverProfile
+{
+    EffectiveBundleV1,
+};
+
 // 逐 strand 根点权重的来源。RootBone 保持历史单根骨；Mesh 在加载期从源角色
 // 绑定姿态网格派生多骨权重（每个 guide 根点复制最近身体顶点的完整影响）。
 // 两种来源都不改 GPU 通道：多骨数据仍走 binding 14/15 与 motion.w bit2。
@@ -90,6 +102,9 @@ struct TressfxCollisionMeshConfig
 
 struct TressfxSimulationConfig
 {
+    TressfxSimulationSolver solver = TressfxSimulationSolver::Tressfx;
+    TressfxSolverProfile solverProfile = TressfxSolverProfile::EffectiveBundleV1;
+    bool tressfxRawParametersAuthored = false;
     bool enabled = false;
     Eigen::Vector3f gravity = Eigen::Vector3f(0.0f, -980.0f, 0.0f);
     // 风不在资产里：它由场景 `wind` 对象统一作者（scene-wind.md），

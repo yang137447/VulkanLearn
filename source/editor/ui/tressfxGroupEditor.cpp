@@ -136,7 +136,8 @@ bool TressfxGroupEditor::IsAllowedOverrideField(std::string_view field)
 {
     return field == "damping" || field == "bendStiffness" ||
         field == "globalShapeStiffness" || field == "globalShapeEffectiveRange" ||
-        field == "vspCoefficient" || field == "vspAccelThresholdMax";
+        field == "vspCoefficient" || field == "vspAccelThresholdMax" ||
+        field == "solverProfile";
 }
 
 bool TressfxGroupEditor::Load(const json& document, uint32_t guideCount, std::string& error)
@@ -372,6 +373,15 @@ bool TressfxGroupEditor::Validate(std::string& error) const
                 error = context + "simulationOverrides field \"" + field.key() +
                     "\" is not allowed";
                 return false;
+            }
+            if (field.key() == "solverProfile")
+            {
+                if (field.value() != "effectiveBundleV1")
+                {
+                    error = context + "solverProfile must be effectiveBundleV1";
+                    return false;
+                }
+                continue;
             }
             if (!IsFiniteNumber(field.value()))
             {
@@ -609,7 +619,7 @@ bool TressfxGroupEditor::SetOverride(size_t index, std::string_view field,
         overrides.erase(key);
         return true;
     }
-    if (!std::isfinite(*value)) return false;
+    if (field == "solverProfile" || !std::isfinite(*value)) return false;
     overrides[key] = *value;
     return true;
 }

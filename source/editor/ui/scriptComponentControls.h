@@ -195,6 +195,16 @@ inline std::string ScriptComponentControls(const EditorSceneActorSnapshot& actor
                     {prefix + "component-materialOverride", index}, node.value("materialOverride", "")));
                 const auto simulation = node.value("simulation", nlohmann::json::object());
                 const auto overrides = simulation.value("overrides", nlohmann::json::object());
+                markup += UiWidgets::PropertyControlRow("Solver", UiWidgets::Select(
+                    ComponentControlId(index, "hair-solver", 0, prefix), {prefix + "hair-solver", index},
+                    UiWidgets::Option("", "Inherit") + UiWidgets::Option("tressfx", "TressFX") +
+                    UiWidgets::Option("cosseratXpbdV1", "Cosserat XPBD v1") +
+                    UiWidgets::Option("cosseratImplicitV3", "Cosserat Implicit v3")));
+                markup += UiWidgets::PropertyControlRow("Solver Profile", UiWidgets::Select(
+                    ComponentControlId(index, "hair-solverProfile", 0, prefix),
+                    {prefix + "hair-solverProfile", index},
+                    UiWidgets::Option("", "Inherit") +
+                    UiWidgets::Option("effectiveBundleV1", "Effective Bundle v1")));
                 markup += UiWidgets::PropertyControlRow("Simulation", UiWidgets::Select(
                     ComponentControlId(index, "hair-mode", 0, prefix), {prefix + "hair-mode", index},
                     UiWidgets::Option("inherit", "Inherit") + UiWidgets::Option("off", "Off") +
@@ -204,6 +214,8 @@ inline std::string ScriptComponentControls(const EditorSceneActorSnapshot& actor
                 for (std::size_t parameter = 0; parameter < count; ++parameter)
                 {
                     const auto& control = controls[parameter];
+                    if (!TressfxSimulationControlVisible(overrides, control.field))
+                        continue;
                     const std::string field = control.field;
                     // 空值代表继承；向量作为完整 JSON 值编辑，不能把未改的轴烘成覆盖。
                     std::string input = UiWidgets::Input(

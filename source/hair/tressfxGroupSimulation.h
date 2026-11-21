@@ -17,9 +17,9 @@ namespace VL::Hair
 
 // groups[].simulationOverrides 的唯一合法字段集。CPU 与 GPU 都消费同一份
 // 解析结果；其他模拟字段属于资产/放置对象级参数，不允许按组覆盖。
-inline constexpr std::array<std::string_view, 6> TressfxGroupSimulationOverrideFields = {
+inline constexpr std::array<std::string_view, 7> TressfxGroupSimulationOverrideFields = {
     "damping", "bendStiffness", "globalShapeStiffness",
-    "globalShapeEffectiveRange", "vspCoefficient", "vspAccelThresholdMax"};
+    "globalShapeEffectiveRange", "vspCoefficient", "vspAccelThresholdMax", "solverProfile"};
 
 bool IsTressfxGroupSimulationOverrideField(std::string_view field);
 

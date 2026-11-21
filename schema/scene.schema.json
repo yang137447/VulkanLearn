@@ -24,6 +24,9 @@
             "items": {
                 "oneOf": [
                     {
+                        "$ref": "#/$defs/windObject"
+                    },
+                    {
                         "$ref": "#/$defs/blueprintObject"
                     },
                     {
@@ -94,6 +97,33 @@
     ],
     "additionalProperties": false,
     "$defs": {
+        "windObject": {
+            "type": "object",
+            "properties": {
+                "name": {"type": "string", "minLength": 1},
+                "type": {"const": "wind"},
+                "direction": {
+                    "type": "array",
+                    "items": {"type": "number"},
+                    "minItems": 3,
+                    "maxItems": 3,
+                    "not": {"const": [0, 0, 0]}
+                },
+                "strength": {"type": "number", "minimum": 0},
+                "gust": {
+                    "type": "object",
+                    "properties": {
+                        "amplitude": {"type": "number", "minimum": 0, "maximum": 1},
+                        "frequency": {"type": "number", "minimum": 0},
+                        "turbulence": {"type": "number", "minimum": 0, "maximum": 1}
+                    },
+                    "required": ["amplitude", "frequency", "turbulence"],
+                    "additionalProperties": false
+                }
+            },
+            "required": ["name", "type", "direction", "strength"],
+            "additionalProperties": false
+        },
         "blueprintObject": {
             "type": "object",
             "not": {"required": ["actorPath"]},

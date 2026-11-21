@@ -3,6 +3,7 @@
 #include <string>
 
 #include "hair/tressfxLiveParams.h"
+#include "hair/tressfxBehavior.h"
 #include "mesh/meshAssetTypes.h"
 
 namespace VL::Hair
@@ -15,6 +16,12 @@ inline bool ApplyHairLiveParameter(::TressfxSimulationConfig& config,
     const HairLiveParameterRequest& request, std::string& error)
 {
     error.clear();
+    if (IsRodSimulationSolver(config.solver) &&
+        IsTressfxRawSimulationField(request.field))
+    {
+        error = "rod solver rejects TressFX raw parameters; select solverProfile and reload";
+        return false;
+    }
     // 这里只校验参数本身：对象名属于命令/目标边界，不参与“写 config”的语义。
     const HairLiveParameterSpec* spec = FindHairLiveParameterSpec(request.field);
     if (spec == nullptr)

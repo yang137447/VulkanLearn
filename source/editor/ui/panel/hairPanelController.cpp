@@ -284,8 +284,18 @@ void MaterialInstanceAssetEditorPanel::RefreshHairSimulationSection(bool isHair,
     std::size_t count = 0;
     const TressfxSimulationControl* controls = TressfxSimulationControls(count);
     std::string rows;
+    const auto currentSimulation = document
+        ? document->document.value("simulationDefaults", nlohmann::json::object())
+        : nlohmann::json::object();
+    if (TressfxRodSimulation(currentSimulation))
+        rows += UiWidgets::PropertyInfo("Solver / Profile",
+            currentSimulation.value("solver", "") == "cosseratImplicitV3"
+                ? "Cosserat Implicit v3 / Effective Bundle v1"
+                : "Cosserat XPBD v1 / Effective Bundle v1");
     for (std::size_t index = 0; index < count; ++index)
     {
+        if (!TressfxSimulationControlVisible(currentSimulation, controls[index].field))
+            continue;
         std::vector<UiWidgets::NumericComponent> components;
         for (uint32_t component = 0; component < controls[index].components; ++component)
         {
@@ -366,6 +376,10 @@ void MaterialInstanceAssetEditorPanel::SubmitHairSimulationLive(std::size_t cont
     std::size_t count = 0;
     const TressfxSimulationControl* controls = TressfxSimulationControls(count);
     if (controlIndex >= count) return;
+    if (!TressfxSimulationControlVisible(
+            authored->document.value("simulationDefaults", nlohmann::json::object()),
+            controls[controlIndex].field))
+        return;
     UiAction action;
     action.type = UiActionType::SetHairSimulationParameter;
     action.previewHairParameter.worldGeneration = generation;
@@ -398,6 +412,10 @@ void MaterialInstanceAssetEditorPanel::SubmitHairSimulationSave()
     payload.assetPath = active->path;
     for (std::size_t index = 0; index < count; ++index)
     {
+        if (!TressfxSimulationControlVisible(
+                document->document.value("simulationDefaults", nlohmann::json::object()),
+                controls[index].field))
+            continue;
         const auto values = PanelSimulationValue(hairSimulationValues, controls[index]);
         EditorAssetFieldChange change;
         change.field = std::string("simulationDefaults.") + controls[index].field;

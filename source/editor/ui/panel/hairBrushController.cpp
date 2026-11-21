@@ -1041,6 +1041,8 @@ void MaterialInstanceAssetEditorPanel::RefreshHairGroupsSection(bool isHair, boo
         rows += "<div class=\"hair-group-subhead\">Overrides</div>";
         for (const HairGroupOverrideSpec& spec : HairGroupOverrideSpecs)
         {
+            if (TressfxRodSimulation(simulation))
+                continue;
             const bool inherited = !group.simulationOverrides.contains(spec.field);
             rows += "<div class=\"hair-group-override-row\">"
                 "<label class=\"hair-group-override-label\">" + Text(spec.label) + "</label>"
@@ -1106,6 +1108,8 @@ void MaterialInstanceAssetEditorPanel::RefreshHairGroupsSection(bool isHair, boo
         const bool selectedSaved = selectedSavedIndex >= 0;
         for (const HairGroupOverrideSpec& spec : HairGroupOverrideSpecs)
         {
+            if (TressfxRodSimulation(simulation))
+                continue;
             const bool inherited = !group.simulationOverrides.contains(spec.field);
             const std::string valueId = "hair-group-override-" + std::string(spec.field) + "-value";
             SetControlValue(valueId, TressfxSimulationText(inherited
