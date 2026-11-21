@@ -27,6 +27,10 @@
 # Fig. 2 的源文件已迁入知识库；旧本地 Vite 构建产物不入库。
 /tool/visualization/estevez-fig2/
 __pycache__/
+# 在仓库根手动跑 glslang / 误用 `> $null` 产生的散落产物：只忽略根目录，
+# 不影响 shader/spv/ 与 docs 里的正式产物。
+/*.spv
+/$null
 # 论文 PDF 的抽取文本（tmp/pdftext/）：按需重新生成，不入库。
 # 生成命令见 documents/plan/rendering/shading-model-alignment-plan.md §1.4.1。
 /tmp/pdftext/
