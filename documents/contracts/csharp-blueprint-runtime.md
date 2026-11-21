@@ -62,6 +62,52 @@ cmake --build build -j8
 .\build\bin\main.exe --dev-ui
 ```
 
+### 沙箱/工作区外的 worktree（环境约束）
+
+dotnet/MSBuild 进程在 Codex Windows 沙箱里**只能写工作区根目录**。仓库约定
+worktree 放在 `D:\YYBWorkSpace\GitHub\VulkanLearn-worktrees`，它在工作区根
+（`D:\YYBWorkSpace\GitHub\VulkanLearn`）之外，所以 `vl_gameplay` 会在
+`Directory.CreateTempSubdirectory` 上抛 `UnauthorizedAccessException`，
+或写 `obj/`/输出 DLL 时被拒（`csc : error CS2012`）。
+
+现象与判据：
+
+- `MSBUILD : error MSB1025 ... Access to the path '...\Temp\MSBuildTemp*.xxx' is denied`
+- 同一份 `dotnet build` 把 `TEMP`、`--output`、`BaseIntermediateOutputPath`
+  指向工作区根内的目录就能成功——说明是写入范围而不是 SDK 或项目问题。
+
+通用修法：把托管构建的临时/中间/输出目录重定向到一个可写根。
+`script/CMakeLists.txt` 提供缓存变量 `VULKANLEARN_SCRIPT_BUILD_ROOT`
+（默认空 = 保持原有 in-tree 布局）。设置后 `vl_gameplay` 会用
+`cmake -E env TEMP/TMP=<root>/tmp`、`BaseIntermediateOutputPath=<root>/obj/`、
+`--artifacts-path=<root>/tmp/artifacts`、`--output=<root>/bin` 执行，
+再把结果 `copy_directory` 回 `bin/managed`——CMake 自己能写回 worktree，
+只有 dotnet/MSBuild 需要可写根。
+
+配置入口（任意分支/worktree 通用，自动用 `git worktree list` 找到主 checkout）：
+
+```powershell
+powershell -NoProfile -File tool\script-build\configure-csharp-build.ps1 -BuildDir build-csharp
+cmake --build build-csharp --target main_editor main_game vl_gameplay -j 4
+```
+
+脚本默认把根放在 `<主 checkout>/artifacts/script-build/<topic>`，并接受
+`-BuildRoot` / `VULKANLEARN_SCRIPT_BUILD_ROOT` 覆盖。也可以手动传：
+
+```powershell
+cmake -S . -B build-csharp -G "MinGW Makefiles" `
+  -DVULKANLEARN_ENABLE_CSHARP_BLUEPRINTS=ON `
+  -DVULKANLEARN_DOTNET_EXECUTABLE=<sdk>/dotnet.exe `
+  -DVULKANLEARN_SCRIPT_BUILD_ROOT=<writable-root>
+```
+
+把 worktree 目录本身加入 Codex 工作区也能解决（沙箱写入范围随之扩大），
+但在多 worktree/CI 场景下，`VULKANLEARN_SCRIPT_BUILD_ROOT` 是可复现的做法。
+
+`Common/Blueprints/GunOutlineDemo.blueprint.cs` 依赖已经移除的 per-actor
+材质参数 API（`GetMaterial`/`MaterialInstance`/`SetScalar`），会让整包编译失败；
+当前已改名为 `.disabled`，`Maps/SC_gun_outline_demo` 在该 API 恢复前无法运行。
+
 SDK 未进入 PATH 时使用 `-DVULKANLEARN_DOTNET_EXECUTABLE=D:/path/to/dotnet.exe`。
 开关默认 OFF；关闭时不查找 SDK，普通场景照常构建，含 Blueprint 的场景加载被拒绝。
 构建输出在 `build/bin/managed`：桥接、Gameplay DLL/PDB/runtimeconfig 与 hostfxr。
@@ -755,6 +801,25 @@ LateTick 后按 FIFO 投递当批消息，接收者按订阅 ID 排序；
 接收回调产生的新消息留到下一帧。回调失败撤销该次服务变更/消息并清理失败 owner。
 服务只在所属 Blueprint 的 live GT 播放回调可用，OnCreate 不可调用；
 Stop/World 换代释放委托，旧上下文句柄被拒绝。
+
+### 运行时 UI 事件（展示关卡）
+
+RmlUi 的展示 UI 可以把点击事件交给蓝图：
+
+- UI 侧：`UiSubsystem` 在 C# 宿主启用时把 `selectMaterial` / `closeShowcasePanel`
+  转成 `RuntimeCommandType::ShowcaseUiEvent`（`stringValue=事件名`，
+  `secondaryStringValue=参数`）；宿主关闭时回退到原生回调。
+- 执行侧：`ScriptRuntimeSubsystem::InvokeUiEvent` 调托管 `op = "ui_event"`；
+  `NativeBridge` 广播给当前上下文里 `Started` 的蓝图，
+  蓝图覆写 `protected virtual void OnUiEvent(string name, string value)`。
+- 蓝图在回调里只能记录意图：`Blueprint.Showcase.SelectMaterial(string id)` /
+  `SetPanelOpen(bool)`。请求按 blueprint 导出为 `showcaseCommands`
+  （`materialId` + `panelOpen`），原生 `ShowcaseController` 在 GT 帧内消费一次，
+  负责可见性、旋转与面板状态。蓝图不依赖 `showcase.materials` 的数组顺序。
+- 声明了 `showcase` 块的关卡在有 C# 宿主时自动进入 Play；
+  没有 `showcase` 块的关卡不改变 Play 行为。
+- C# 侧示例：`Common/Blueprints/ClothShowcase.blueprint.cs`；
+  关卡实例见 `Maps/SC_cloth_showcase/SC_cloth_showcase_3d66Dress_csharp.json`。
 
 ## 运行时组件与动态资产
 
