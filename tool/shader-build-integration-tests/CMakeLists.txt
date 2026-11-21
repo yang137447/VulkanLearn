@@ -2,6 +2,8 @@ add_executable(shader_build_integration_tests
     shaderBuildIntegrationTests.cpp
     ${PROJECT_SOURCE_DIR}/source/pipeline/shaderReflectionService.cpp
     ${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp
+    ${PROJECT_SOURCE_DIR}/source/core/runtimeFileTrace.cpp
+    ${PROJECT_SOURCE_DIR}/source/core/tracingIfstream.cpp
     ${PROJECT_SOURCE_DIR}/source/shader/build/contentHash.cpp
     ${PROJECT_SOURCE_DIR}/source/shader/build/shaderBuildManifest.cpp
     ${PROJECT_SOURCE_DIR}/source/shader/shaderAbiSignature.cpp

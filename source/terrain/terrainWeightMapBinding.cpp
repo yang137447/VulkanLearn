@@ -1,6 +1,7 @@
 #include "terrain/terrainWeightMapBinding.h"
 
 #include <algorithm>
+#include <stdexcept>
 #include <utility>
 
 namespace VL
@@ -9,8 +10,11 @@ namespace VL
 void TerrainWeightMapBindingTracker::Record(
     const void* weightsIdentity,
     std::string materialPath,
-    std::string placementId)
+    std::string placementId,
+    BindingPolicy policy)
 {
+    if (!weightsIdentity || materialPath.empty() || placementId.empty())
+        throw std::invalid_argument("Terrain local weight binding requires texture, material and placement identities");
     auto binding = std::find_if(
         bindings.begin(),
         bindings.end(),
@@ -24,10 +28,14 @@ void TerrainWeightMapBindingTracker::Record(
         entry.weightsIdentity = weightsIdentity;
         entry.materialPath = std::move(materialPath);
         entry.placements.push_back(std::move(placementId));
+        entry.immutablePublicationOnly =
+            policy == BindingPolicy::VerifiedImmutablePublication;
         bindings.push_back(std::move(entry));
         return;
     }
 
+    binding->immutablePublicationOnly &=
+        policy == BindingPolicy::VerifiedImmutablePublication;
     if (std::find(
             binding->placements.begin(),
             binding->placements.end(),
@@ -37,11 +45,27 @@ void TerrainWeightMapBindingTracker::Record(
     }
 }
 
+void TerrainWeightMapBindingTracker::RecordFrozenOverlay(
+    const void* importedWeightsIdentity,
+    const void* frozenWeightsIdentity,
+    std::string materialPath,
+    std::string placementId)
+{
+    if (!importedWeightsIdentity || !frozenWeightsIdentity ||
+        importedWeightsIdentity == frozenWeightsIdentity)
+    {
+        throw std::invalid_argument(
+            "Terrain composited Local weights require the final per-placement "
+            "overlay binding, not the immutable imported base: " + materialPath);
+    }
+    Record(frozenWeightsIdentity, std::move(materialPath), std::move(placementId));
+}
+
 std::string TerrainWeightMapBindingTracker::SharedBindingError() const
 {
     for (const Binding& binding : bindings)
     {
-        if (binding.placements.size() <= 1)
+        if (binding.placements.size() <= 1 || binding.immutablePublicationOnly)
             continue;
         std::string placements;
         for (const std::string& placement : binding.placements)

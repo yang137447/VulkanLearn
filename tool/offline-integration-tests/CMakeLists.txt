@@ -9,6 +9,8 @@ add_executable(vl_offline_adapter_tests
     ${CMAKE_SOURCE_DIR}/source/render/offline/offlineSceneAdapter.cpp
     ${CMAKE_SOURCE_DIR}/source/render/offline/offlineColorImage.cpp
     ${CMAKE_SOURCE_DIR}/source/resource/image/textureIO.cpp
+    ${CMAKE_SOURCE_DIR}/source/core/runtimeFileTrace.cpp
+    ${CMAKE_SOURCE_DIR}/source/core/tracingIfstream.cpp
     ${CMAKE_SOURCE_DIR}/source/resource/image/ddsTexture.cpp
     ${CMAKE_SOURCE_DIR}/source/resource/image/ktx2Texture.cpp
     ${CMAKE_SOURCE_DIR}/source/resource/image/hostImage.cpp)
@@ -35,6 +37,8 @@ add_executable(vl_offline_coordinator_tests
     ${CMAKE_SOURCE_DIR}/source/particles/particleAssetModuleSchema.cpp
     ${CMAKE_SOURCE_DIR}/source/particles/particleAssetLoader.cpp
     ${CMAKE_SOURCE_DIR}/source/resource/image/textureIO.cpp
+    ${CMAKE_SOURCE_DIR}/source/core/runtimeFileTrace.cpp
+    ${CMAKE_SOURCE_DIR}/source/core/tracingIfstream.cpp
     ${CMAKE_SOURCE_DIR}/source/resource/image/ddsTexture.cpp
     ${CMAKE_SOURCE_DIR}/source/resource/image/ktx2Texture.cpp
     ${CMAKE_SOURCE_DIR}/source/resource/image/hostImage.cpp

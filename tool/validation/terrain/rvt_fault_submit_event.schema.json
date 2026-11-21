@@ -1,0 +1,49 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Raw owner observations for explicit preSubmit failure and actual Abort",
+  "type": "object",
+  "required": [
+    "protocol", "event", "runId", "sequence", "monotonicMs", "frame", "faultId",
+    "worldGeneration", "surfaceId", "mip", "x", "y", "revision",
+    "tokenGeneration", "contentIdentity", "submissionEpoch", "abortTicket",
+    "failureMode", "injectedSubmitResult", "rawSubmitResult", "backendSubmitCalls"
+  ],
+  "properties": {
+    "protocol": {"const": 1},
+    "event": {"enum": ["submit-fault-consumed", "submit-abort-observed"]},
+    "runId": {"type": "string", "minLength": 1},
+    "sequence": {"type": "integer", "minimum": 0},
+    "monotonicMs": {"type": "number", "minimum": 0},
+    "frame": {"type": "integer", "minimum": 0},
+    "faultId": {"type": "string", "minLength": 1, "maxLength": 96},
+    "worldGeneration": {"type": "integer", "minimum": 1},
+    "surfaceId": {"type": "string", "pattern": "^terrain\\|.+", "maxLength": 256},
+    "mip": {"type": "integer", "minimum": 0, "maximum": 31},
+    "x": {"type": "integer", "minimum": 0, "maximum": 131071},
+    "y": {"type": "integer", "minimum": 0, "maximum": 131071},
+    "revision": {"type": "integer", "minimum": 0},
+    "tokenGeneration": {"type": "integer", "minimum": 1},
+    "contentIdentity": {"type": "string", "pattern": "^[0-9a-f]{64}$"},
+    "submissionEpoch": {"type": "integer", "minimum": 1},
+    "abortTicket": {"type": "integer", "minimum": 1},
+    "failureMode": {"const": "injected-before-submit"},
+    "injectedSubmitResult": {"type": "integer", "minimum": -2147483648, "maximum": -1},
+    "rawSubmitResult": {"type": ["integer", "null"]},
+    "backendSubmitCalls": {"type": "integer", "minimum": 0},
+    "activeGenerationBefore": {"type": "integer", "minimum": 0},
+    "activeGenerationAfter": {"type": "integer", "minimum": 0},
+    "recordedTasks": {"type": "integer", "minimum": 0},
+    "abortedTasks": {"type": "integer", "minimum": 0},
+    "publishedChannels": {"type": "integer", "minimum": 0}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"event": {"const": "submit-abort-observed"}}},
+      "then": {"required": [
+        "activeGenerationBefore", "activeGenerationAfter", "recordedTasks", "abortedTasks", "publishedChannels"
+      ]}
+    }
+  ],
+  "additionalProperties": false,
+  "$comment": "Raw observations preserve wrong counts and lost World generations. Consumers reject backendSubmitCalls!=0 or rawSubmitResult!=null for this injection mode, partial publication, unmatched/duplicate tickets and non-retained World. A later real successful native frame is required for old World usability; no boolean pass or fake fence completion."
+}

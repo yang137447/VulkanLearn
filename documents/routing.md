@@ -43,6 +43,29 @@
 | `source/resource/image/textureAssetValidation.h`、`source/textureAssetLoader.cpp` | `contracts/texture-asset-json-v1.md`、`contracts/asset-modify-api.md` | — |
 | `source/resource/image/hostImage.*`、`source/resource/image/textureIO.*`、`source/resource/image/ddsTexture.cpp`、`source/resource/image/ktx2Texture.cpp`、`source/resource/image/hostImageVulkanPlan.h`、`source/resource/device/deviceTextureFactory.*`、`tool/texture-asset-tests/**` | `contracts/texture-asset-json-v1.md`、`contracts/testing.md` | — |
 | `source/terrain/**`、`source/physics/joltRegistration.*`、`source/render/resource/rendererTerrainLoader.*`、`source/render/resource/terrainFeedbackGpu.*`、`shader/glsl/M_terrain*.json`、`shader/glsl/M_terrain.*.glsl`、`shader/glsl/materialFunction/mf_terrainLayer*.glsl`、`shader/glsl/pass/M_terrainFeedback.json`、`shader/glsl/pass/terrainFeedback.*`、`tool/terrain-tests/**` | `contracts/terrain.md`、`contracts/testing.md`、`contracts/texture-asset-json-v1.md`（VT atlas/压缩格式） | — |
+| `source/terrain/terrainCompositedVT.*`、`source/terrain/terrainCompositedVTStore.*`、`source/terrain/terrainCompositedDependencies.*`、`source/terrain/terrainCompositedResidency.*`、`source/terrain/terrainCompositedFeedback.*` | `contracts/terrain-composited-vt.md`、`contracts/terrain.md` | — |
+| `source/terrain/terrainCompositedProduction.*`、`source/terrain/terrainCompositedAdjacency.*`、`source/terrain/terrainCompositedIdentity.h`、`source/terrain/terrainCompositedAuthorRecipe.*`、`source/terrain/terrainCompositedAuthorDependency.h` | `contracts/terrain-composited-vt.md`、`contracts/terrain.md`、`contracts/texture-asset-json-v1.md` | — |
+| `source/terrain/terrainRvtBudget.*`、`source/terrain/terrainRvtScheduler.*` | `contracts/terrain-composited-vt.md`、`contracts/testing.md`、`contracts/vulkanlearn-architecture.html` | — |
+| `source/terrain/terrainCompositedDirty.*`、`source/terrain/terrainCompositedRefresh.h`、`source/terrain/terrainCompositedWeightOverlay.*`、`source/editor/terrain/terrainCompositedAuthorMonitor.*` | `contracts/terrain-composited-vt.md`、`contracts/terrain.md`、`contracts/editor-runtime-data-boundary.md` | — |
+| `source/render/terrain/terrainCompositedRuntime.*`、`source/render/resource/terrainCompositedService.*`、`source/render/resource/terrainCompositedBakeGpu.*` | `contracts/terrain-composited-vt.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/vulkanlearn-architecture.html` | Terrain composited-only cutover |
+| `source/render/resource/terrainCompositedProductionGpu.*`、`source/render/resource/terrainCompositedFeedbackGpu.*`、`source/render/resource/terrainCompositedBakeAdjacency.h` | `contracts/terrain-composited-vt.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/texture-asset-json-v1.md`、`contracts/vulkanlearn-architecture.html` | — |
+| `source/render/resource/terrainCompositedQualityGpu.*`、`source/render/resource/terrainCompositedQualityReplay.*`、`source/render/resource/terrainCompositedQualityData.h`、`source/render/frame/terrainCompositedQualityFrame.*` | `contracts/terrain-composited-vt.md`、`contracts/testing.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/vulkanlearn-architecture.html` | — |
+| `source/render/frame/terrainCompositedLoading.*`、`source/render/frame/terrainCompositedReadiness.*`、`source/render/frame/terrainCompositedQualityValidation.*`、`source/render/frame/terrainCompositedFrameLifetime.h`、`source/terrain/terrainCompositedQualityClock.h` | `contracts/terrain-composited-vt.md`、`contracts/testing.md`、`contracts/vulkanlearn-architecture.html` | — |
+| `source/terrain/terrainCompositedSourceSnapshots.*`、`source/terrain/terrainCompositedShaderPath.h`、`source/render/resource/terrainCompositedResourceSnapshot.*` | `contracts/terrain-composited-vt.md`、`contracts/descriptor-imageinfo-management.md`、`contracts/shader-build-cache.md` | — |
+| `source/engine/terrainChunkStreamerLifecycle.cpp`、`tool/terrain-tests/terrainChunkStreamerLifecycleTests.cpp` | `contracts/terrain.md`、`contracts/terrain-composited-vt.md`、`contracts/testing.md`、`contracts/vulkanlearn-architecture.html` | — |
+| `source/render/resource/terrainHeightAtlas.*`、`source/terrain/terrainHeightAtlasLayout.h`、`source/terrain/terrainHeightAtlasStore.*` | `contracts/terrain-composited-vt.md`、`contracts/terrain.md`、`contracts/texture-asset-json-v1.md` | — |
+| `source/terrain/terrainVertexUpdateQueue.*`、`source/editor/terrain/terrainCompositedSculptApply.*`、`source/editor/terrain/terrainCompositedSculptCommit.cpp` | `contracts/terrain-composited-vt.md`、`contracts/terrain.md`、`contracts/editor-runtime-data-boundary.md` | — |
+| `shader/glsl/materialFunction/terrainCompositedEvaluation.glsl`、`shader/glsl/materialFunction/terrainCompositedFeedback.glsl`、`shader/glsl/materialFunction/mf_terrainCompositedVT.glsl`、`shader/glsl/materialFunction/terrainHeightAtlas.glsl`、`shader/glsl/materialFunction/mf_terrainLayerBlend.glsl`、`shader/glsl/M_terrain.json`、`shader/glsl/pass/terrainFeedback.frag` | `contracts/terrain-composited-vt.md`、`contracts/terrain.md`、`contracts/material-param-authoring-and-reflection.md` | Terrain composited-only cutover |
+| `shader/glsl/materialFunction/terrainCompositedFootprint.glsl` | `contracts/terrain-composited-vt.md`、`contracts/material-param-authoring-and-reflection.md` | — |
+| `shader/glsl/terrain/terrainCompositedBakeWorld.comp`、`shader/glsl/terrain/terrainCompositedBakeWorldPadding.comp`、`shader/glsl/terrain/terrainCompositedBakeWorldTypes.glsl`、`shader/glsl/terrain/terrainCompositedBakeWorldEvaluator.glsl`、`shader/glsl/terrain/terrainCompositedBakeCoverage.glsl`、`shader/glsl/terrain/terrainCompositedBakeRoute.glsl` | `contracts/terrain-composited-vt.md`、`contracts/terrain.md`、`contracts/material-param-authoring-and-reflection.md`、`contracts/shader-build-cache.md` | — |
+| `shader/glsl/terrain/terrainCompositedBakeSamplingDiagnostic.comp`、`shader/glsl/terrain/terrainCompositedSourceFilterCandidate.glsl` | `contracts/terrain-composited-vt.md`、`contracts/testing.md`、`contracts/material-param-authoring-and-reflection.md`、`rationale/terrain-rvt-source-filter-proposal.md` | — |
+| `shader/glsl/terrain/terrainCompositedQuality.comp`、`shader/glsl/terrain/terrainCompositedQualityVisible.glsl` | `contracts/terrain-composited-vt.md`、`contracts/testing.md`、`contracts/material-param-authoring-and-reflection.md` | — |
+| `shader/glsl/materialFunction/terrainCoverage.glsl`、`shader/glsl/engine/passTemplate/base.tesc.glsl`、`shader/glsl/engine/passTemplate/base.tese.glsl` | `contracts/terrain.md`、`contracts/terrain-composited-vt.md`、`contracts/material-mesh-pass-composition.md` | — |
+| `source/engine/launchOptions.*`、`source/engine/application.cpp`、`source/render/resource/rendererTerrainLoader.cpp`、`source/editor/editorHost.cpp`、`tool/game-export/terrainPackageClosure.h` | `contracts/terrain-composited-vt.md`、`contracts/terrain.md` | Terrain composited-only cutover |
+| `source/debugConsoleProcessCommand.cpp`、`source/engine/runtimeCommand.h`、`source/engine/runtimeCommandExecutorExecuteCommand.cpp`、`shader/glsl/pass/M_terrainFeedback.json` | `contracts/terrain-composited-vt.md`、`contracts/debug-runtime-commands.md` | Terrain composited-only cutover |
+| `tool/terrain-tests/terrainComposited*Tests.cpp`、`tool/terrain-tests/terrainHeightAtlasTests.cpp`、`tool/terrain-tests/terrainHeightAtlasStoreTests.cpp` | `contracts/terrain-composited-vt.md`、`contracts/testing.md` | — |
+| `tool/terrain-tests/terrainRvt*Tests.cpp`、`tool/terrain-tests/terrainVertexUpdateQueueTests.cpp`、`tool/editor-ui-tests/terrainCompositedSculptApplyTests.cpp`、`tool/editor-ui-tests/terrain-composited-sculpt-private/**` | `contracts/terrain-composited-vt.md`、`contracts/terrain.md`、`contracts/testing.md` | — |
+| `config/terrainRvtP0Frozen.json`、`config/terrainRvtP0Frozen.json.sha256`、`config/terrainRvtP0Frozen.json.review.json`、`tool/validation/terrain/**` | `contracts/terrain-composited-vt.md`、`contracts/testing.md` | — |
 | `source/script/scriptPhysics.*`、`source/script/scriptRuntime.cpp`、`source/world/loading/terrainCollisionInstances.*`、`source/world/world.h` | `contracts/terrain.md`、`contracts/csharp-blueprint-runtime.md`、`contracts/testing.md` | — |
 | `source/scene/validation/**` | `contracts/asset-modify-api.md`、`contracts/terrain.md`、`contracts/vulkanlearn-architecture.html` | — |
 | `source/render/offline/**` | `contracts/vl-offline-rendering.md` | — |
@@ -202,60 +225,12 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 - `source/engine/testing/**`（runtime validation services）
 - `source/core/**`
 - `extern/**`（第三方依赖；除 `extern/BLAKE3` 的锁定说明外不写文档）
-- 地形：运行时已支持 `terrain` 场景对象、TR 高度图网格与 chunk mesh 渲染；
-  M_terrain 已支持最多 256 层的层表、tile 候选层、World 级 32×32 global page table + ID/权重
-  atlas 与 top-4 数组混合；page manager 已有 CPU resident/eviction、虚拟页到物理
-  atlas 槽位的分配与批量 region 上传；注册身份是场景 `placementId`，同一 TR 可多处摆放，
-  场景级 `pageOrigin`/`pageTilesPerSide` 可覆盖虚拟区域，fallback 只占物理槽位且缺页
-  输出中性表面。P3 后 renderer 使用 `preload=false`：feedback miss 驱动
-  `RequestPageAtEpoch`，每帧限流请求/上传，物理槽位淘汰后进入 CPU quarantine 并到期回收；
-  `terrain stats`/`terrain capacity N` 提供驻留与预算观测。P3.1 起只有同时具备
-  `TR.layers` 与 `layerTable` 材质的地形进入 feedback，epoch-aware LRU 使用
-  `lastTouchedEpoch`，降预算遵守 `max(2, framesInFlight+1)` 安全窗。独立的 128×128
-  `terrainFeedback` pass（D32 depth）与 host-visible 回读 ring 仍在。
-  L1 已把层 catalog 扩成 256×4（row2 页数/页表基址、row3 平均色）并新增纯 CPU 的
-  `source/terrain/terrainLayerPageManager.*`：层页 `(layerId, mip, pageX, pageY)` 的
-  物理页分配/淘汰/quarantine/上传批次。L2 已把 catalog、每 mip 的 RGBA32F 页表与
-  三张 4096² atlas（4096²/slice、无 mip）建进 GPU，加载期用 GPU→GPU `vkCmdCopyImage`
-  上传每层尾页，并输出淘汰失效项；`terrainlayerstats` 提供层页/atlas 观测。
-  L3 已给 `M_terrain` 加 `u_terrainLayerMode`（默认 0）：mode 0 保持旧三数组
-  快速路径；mode 1 走 top-4 → catalog → 每 mip 页表 → atlas 的采样，含 mip
-  选择、页内半 texel inset、catalog avgColor 缺页 fallback 与 sourceResolution
-  一致性校验，并在选中 mip 无效时回退到更粗的 mip。L4a 由
-  `source/terrain/terrainLayerVisibility.*` 把覆盖页 feedback 推导成
-  “可见层 → mip → 该 mip 全部页”，逐帧限量请求/上传/淘汰；mode 1 不再加载期
-  全量预取（`terrainlayer preload` 只作对照）。L4c 在同一 resolver 里对目标 mip
-  缺页的页追加 +1/+2 级粗 mip 预取（优先级递减、受层最大 mip 与每帧预算约束），
-  `terrainlayer stats` 输出 `fallbackSlots/fallbackPages/fallbackLevels/targetMips`
-  等回退分布；shader 侧 `avgColor` 淡入仍未实现。默认视觉路径仍与 L1/L2 逐字节一致。
-  `source/terrain/terrainCollision.*` 提供 Jolt 静态 heightfield 碰撞的 RAII body：cm→m、
-  placement 平移/旋转/缩放、16 位高度压缩，并复用调用方已有的 PhysicsSystem；
-  `source/physics/joltRegistration.*` 是地形与 `ScriptPhysicsWorld` 共用的进程级
-  Jolt 注册。World 通过 `world/loading/terrainCollisionInstances.*` 保留每个
-  terrain placement 的计划与 TRS，Play 时 `ScriptPhysicsWorld::SetTerrainCollisions`
-  创建/替换 body，Stop/World 换代销毁；编辑器与普通加载不创建物理世界。
-  `TerrainCollisionWorld` 只是测试/离线夹具。CPU 侧已有 LOD/边界缝合生成；
-  `lodLevels>1` 时 `RendererTerrainLoader` 按**加载期几何驻留窗口**生成
-  (chunk, LOD)（`source/terrain/terrainChunkResidency.*` +
-  `TerrainMeshBuilder::ComputeChunkBounds`/`TerrainChunkBuildFilter`），窗口外只建
-  coarsest；`WorldSnapshotBuilder` 每帧按相机到 chunk 世界 AABB 的距离与 10% 滞回
-  选目标级，目标级未驻留时回退到 resident 的更粗一级，阴影/拾取/材质上下文共享同一
-  快照，`terrainlod stats` 与 `terrainchunk stats` 可观测。运行时不做异步补传/卸载，
-  相机移出窗口只会走兜底。`lodLevels=1` 旧资产仍逐字节等同 LOD0。
-  S1 新增 World 级 `source/terrain/terrainLayerRegistry.*`：层身份是
-  `layer.key`（缺省 `<assetPath>#<name>`），同 key 参数一致跨 TR 去重成同一个
-  globalId，参数冲突/同 TR 重复/超过 256 层都在加载期失败；单 TR 的
-  globalId == 局部下标，旧输出逐字节不变。ID/权重页写 globalId，
-  `TerrainPageManager::RegisterTerrain` 保存 placement 的 local→global 映射。
-  S2 把层源数组改成 `source/terrain/terrainLayerSources.h` 的
-  `map<sourceSet, TerrainSourceSetRecord>`：同 set 共享同一组 shared_ptr，
-  不同 set 可绑定不同数组，层页上传按 `layerSlices` 还原源 slice，三张 atlas
-  仍只有一组（格式必须一致）。`terrainlayerstats` 输出
-  `globalLayers/sourceSets/dedupedLayers/capacity`。
-  当前没有低分辨率 fallback/淡入、相机/视锥预取、地形编辑，也没有
-  分块或编辑后的碰撞重建。行为见
-  [terrain 契约](contracts/terrain.md)；后续计划见
-  `plan/rendering/terrain-openworld-demo-plan.md`（非契约）。
+
+地形已有精确路由，不属于未覆盖模块：CPU 几何、Editor、Paint/coverage 与碰撞见
+[terrain 契约](contracts/terrain.md)；唯一材质运行时标准 compositedVT + 常驻 height
+见 [合成 VT 契约](contracts/terrain-composited-vt.md)。
+被删除的层源页管理、层页可见性与旧双路径说明只作为
+[历史记录](rationale/terrain-legacy-runtime-contract-snapshot.md)，不作为源码入口或验收证据。
 
 ## 组合规则
 
@@ -265,6 +240,12 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
 
 ## 规划入口（非契约）
 
+- [地形 RVT 按需生产方案](plan/rendering/terrain-runtime-virtual-texture-production-plan.md)：
+  P0–P6 退出要求和设计背景，不是本轮完成证明。阶段证据见
+  [执行台账](rationale/terrain-rvt-production-execution.md)，当前行为以 V2/gen3 契约和源码为准。
+- [地形合成 VT 资源生命周期计划](plan/rendering/terrain-composited-vt-lifecycle-plan.md)：
+  待审阅设计，非当前能力。梳理 Editor 编辑快照、共享构建/Cook、合成材质虚拟页、
+  Runtime 驻留、版本与增量刷新，以及从层源 VT 迁移的阶段验收。
 - [实时破碎物理与声音研究计划](plan/physics/realtime-fracture-and-audio-plan.md)：
   玻璃冲击/二次碎裂、气球破裂和事件驱动声音的混合路线、数据模型、里程碑与风险；
   当前已落地运行时平面/球面破碎、橡皮膜软壳、Jolt 冲击、动态网格、落地音和气球爆裂读感；
@@ -273,30 +254,17 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   气球橡胶膜充气/撕裂/回缩、实时碎片条带、宽带爆裂声与视觉时序的证据和调参建议；
   非契约研究记录，具体实现以 `contracts/softbody-runtime.md` 和源码为准。
 - [地形系统：Open World Demo Collection 复刻计划](plan/rendering/terrain-openworld-demo-plan.md)：
-  当前地形目标。CPU 高度图网格 + 最多 32 层 + tile 候选层 + ID/权重图 top-4；
-  GPU-driven/VT 与几何 streaming 仍搁置；CPU 几何 LOD 已接运行时选择
-  （大世界层表另见下一项）。
-  M2 的基础 TR/场景/网格/World 渲染已落地并写入 `contracts/terrain.md`；M3+ 的层混合与
-  画面复刻仍未实现。计划不替代当前契约。
+  早期 CPU 网格、层混合与画面复刻的阶段计划；其中的阶段实现状态不是当前合同。
 - [地形大世界与上百层地表架构](plan/rendering/terrain-large-world-layers-plan.md)：
-  从上百层/大世界目标倒推的层表、tile 候选层、ID/权重图、VT 与流式阶段。未实现，
-  不替代 `contracts/terrain.md`；先用于确认层数、世界尺寸和显存预算。
+  层表、tile 候选层、ID/权重与流式预算的历史设计，不替代当前合同。
 - [地形 VT 流式闭环设计](plan/rendering/terrain-vt-streaming-design.md)：
-  GPU feedback → CPU 驻留/LRU → 子区域上传的下一阶段闭环；含 feedback 载体对比、
-  texel/ring 格式、frame fence/epoch 保护和分步验收。P0/P1/P2/P4 的 World-local state、
-  batch 上传、feedback pass/回读统计、placementId/fallback 解耦已落地；P3 的
-  `ApplyFeedback`、feedback 驱动请求/淘汰、每帧上传 ring 与 quarantine 也已落地。
-  仍不替代 `contracts/terrain.md`。
+  覆盖率反馈、LRU、上传 ring 与 epoch 保护的历史分阶段设计；
+  coverage 的现存职责见 `contracts/terrain.md`。
 - [地形层纹理流式设计](plan/rendering/terrain-layer-texture-streaming-design.md)：
-  256 层 albedo/normal/pbr 的显存预算、layer catalog、第二级 VT/数组页方案对比与
-  L0–L4 分步实施。L0（BC7/BC5）、L1（catalog v2 + CPU 层页管理器）与 L2
-  （GPU 层 atlas/页表/加载期上传）与 L3（`u_terrainLayerMode=1` 的 shader VT
-  采样、材质 schema、sourceResolution 校验）已落地；L4a/b/c 的覆盖页+精确层
-  feedback、逐帧上传/淘汰、粗 mip 预取与 feedback 饥饿保护也已落地。多 biome
-  `sourceSet`/全局 layer catalog 仍未实现，不替代 `contracts/terrain.md`。
+  已退役 layer source VT 的方案比较与阶段记录，不是可选运行时入口；
+  当前唯一材质合同为 `contracts/terrain-composited-vt.md`。
 - [全局 layer catalog / 多 biome sourceSet 设计](plan/rendering/terrain-global-layer-catalog-design.md)：
-  把 `layerId = TR.layers` 下标、World 单组源纹理的限制扩展到全局稳定 ID、
-  source set table、统一 atlas 与分步迁移。未实现，不替代 `contracts/terrain.md`。
+  层身份与 sourceSet 的设计背景；现存作者源、coverage 与烘焙依赖以当前合同为准。
 - [开放世界场景栈路线图](plan/rendering/open-world-scene-stack-roadmap.md)：
   地形碰撞/GASP、植被撒点与石头对齐、PP2 分层风、3D 风力点、LOD、自定义 shading 的依赖与阶段。
   未实现，不替代当前契约。

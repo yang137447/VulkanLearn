@@ -11,7 +11,7 @@ namespace VL
 {
 
 TerrainFeedbackGpuRing::TerrainFeedbackGpuRing(
-    RendererBackendVulkan& backend)
+    RendererBackendVulkan& backend, std::shared_ptr<TerrainRvtBudgetOwner> budget)
     : rendererBackend(&backend)
 {
     const uint32_t slotCount = backend.GetFrameFenceCount();
@@ -24,6 +24,16 @@ TerrainFeedbackGpuRing::TerrainFeedbackGpuRing(
     const vk::DeviceSize slotBytes =
         static_cast<vk::DeviceSize>(width) * height *
         TerrainFeedbackTexelBytes;
+    if (budget)
+    {
+        const auto allocation = backend.QueryBufferMemoryRequirements(
+            slotBytes, vk::BufferUsageFlagBits::eTransferDst).size;
+        lease = budget->TryReserve({allocation * slotCount, allocation * slotCount +
+            slotCount * (sizeof(vk::Buffer) + sizeof(vk::DeviceMemory) + sizeof(void*)), 0, 0},
+            TerrainRvtCostClass::Workspace, TerrainRvtResourcePhase::Candidate);
+        if (!lease)
+            throw std::runtime_error("Coverage feedback ring exceeds frozen actual allocation budget");
+    }
     buffers.reserve(slotCount);
     memories.reserve(slotCount);
     mapped.reserve(slotCount);

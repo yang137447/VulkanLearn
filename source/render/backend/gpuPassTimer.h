@@ -12,6 +12,7 @@
 
 #include "core/performanceSnapshot.h"
 #include "render/backend/gpuPassTimings.h"
+#include "render/backend/gpuFrameIdentity.h"
 
 namespace VL
 {
@@ -58,9 +59,13 @@ public:
     void PrepareFrame(uint32_t frameSlot);
     // 在 backend BeginFrame 返回后、任何被计时命令之前调用；frameSlot 是
     // frame-in-flight 索引，不是 swapchain image 索引。
-    void BeginFrame(vk::CommandBuffer commandBuffer, uint32_t frameSlot);
+    void BeginFrame(vk::CommandBuffer commandBuffer, uint32_t frameSlot,
+        const RenderFrameIdentity& identity, uint64_t completedEpoch);
     // 在 SubmitFrame 之前调用，把本帧查询交给 2 帧后的读回。
     void EndFrame();
+    void FrameSubmitted() noexcept;
+    void AbortFrame() noexcept;
+    bool WantsFrameQueries(uint32_t frameSlot) const;
 
     // 当前帧是否正在采集（BeginFrame 已激活且尚未 EndFrame）。关闭采集时为 false，
     // 调用方据此跳过只为统计服务的场景扫描（例如 hair HasWork）。
@@ -80,11 +85,12 @@ private:
         uint32_t pendingCount = 0;
         uint32_t currentCount = 0;
         bool pendingValid = false;
+        GpuQueryFrameIdentity identity;
     };
 
     void ResetResources(RendererBackendVulkan& rendererBackend);
     void EnsureQueryPool(uint32_t frameSlot);
-    void CollectSlotResults(uint32_t frameSlot);
+    void CollectSlotResults(uint32_t frameSlot, uint64_t completedEpoch);
     void PublishSnapshot();
     void LogTableIfDue();
     void LogLatestTable();

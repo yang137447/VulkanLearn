@@ -1,4 +1,5 @@
 #include "engine/frame/engineFramePhases.h"
+#include "engine/frame/terrainLoadingGate.h"
 
 #include <algorithm>
 #include <chrono>
@@ -98,7 +99,8 @@ void LogFrameHitchIfNeeded(
 void RunEngineUpdatePhase(
     const EngineFrameContext& context,
     float deltaTime,
-    float simulationDelta)
+    float simulationDelta,
+    bool terrainLoading)
 {
     SubsystemCollection& subsystems = *context.subsystems;
     AudioRuntime* const& audioRuntime = context.audioRuntime;
@@ -139,7 +141,7 @@ void RunEngineUpdatePhase(
             PROFILE_SCOPE("Scripts.ScriptBuild");
             TickEngineScriptBuild(context.scriptBuild, deltaTime);
         }
-        if (world && world->GetGeneration() != autoPlayWorldGeneration &&
+        if (!terrainLoading && world && world->GetGeneration() != autoPlayWorldGeneration &&
             runtimeConfig.GetScriptSettings().autoPlay &&
             !RenderSystem::GetInstance().IsOfflineMode() &&
             std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json")
@@ -159,18 +161,19 @@ void RunEngineUpdatePhase(
             std::string error;
             scripts.Control(*world, ScriptPlayState::Editing, error);
         }
-        if (scripts.IsEditing())
+        if (!terrainLoading && scripts.IsEditing())
             controller->Update(simulationDelta, subsystems.GetInputSubsystem().GetActionState());
         {
             PROFILE_SCOPE("Scripts.RuntimeTick");
-            scripts.Tick(world, simulationDelta,
-                subsystems.GetInputSubsystem().GetActionState(),
-                subsystems.GetDiagnosticsSubsystem());
+            if (!terrainLoading)
+                scripts.Tick(world, simulationDelta,
+                    subsystems.GetInputSubsystem().GetActionState(),
+                    subsystems.GetDiagnosticsSubsystem());
         }
         // 粒子模拟跟随脚本时钟：Pause 冻结，Playing 使用 timeScale 后的 delta，
         // Editing 保持编辑器时间。必须在 Tick 之后、发布快照之前写入。
         RenderSystem::GetInstance().SetPendingSimulationDelta(
-            scripts.ParticleDeltaOr(simulationDelta));
+            terrainLoading ? 0.0f : scripts.ParticleDeltaOr(simulationDelta));
     }
     {
         // 可破坏物会话跟着 Play/Editing 状态切换；先恢复作者场景再步进共享冲击世界。
@@ -178,7 +181,7 @@ void RunEngineUpdatePhase(
         const bool nativeGameplay = world && world->IsNativeGameplay();
         const bool sessionActive = world && !offline &&
             (nativeGameplay || !scripts.IsEditing());
-        const bool gameplayActive = sessionActive &&
+        const bool gameplayActive = !terrainLoading && sessionActive &&
             (nativeGameplay || !scripts.IsPaused());
         const bool editingNow =
             world && !offline && !nativeGameplay && scripts.IsEditing();
@@ -229,7 +232,7 @@ void RunEngineUpdatePhase(
     }
     // 普通动画的编辑预览独立于 C# Play；绑定蓝图角色的发丝则消费
     // 同一份 scaled dt。冻结后交给 RT，不让曝光墙钟绕过 Pause/TimeScale。
-    const float gameSimulationDelta =
+    const float gameSimulationDelta = terrainLoading ? 0.0f :
         scripts.ContextTime().at("deltaTime").get<float>();
     const float hairSimulationDelta = scripts.IsEditing()
         ? simulationDelta : gameSimulationDelta;
@@ -237,11 +240,12 @@ void RunEngineUpdatePhase(
     // master SpeedTree 用连续墙钟，风自身的 1/60 固定步长和 0.25 s 追帧上限会消化
     // 长帧；这里若用夹取后的值，hitch 时风会永久变慢。
     RenderSystem::GetInstance().SetSimulationFrameDeltas(
-        simulationDelta, gameSimulationDelta, hairSimulationDelta, deltaTime);
+        simulationDelta, gameSimulationDelta, hairSimulationDelta,
+        terrainLoading ? 0.0f : deltaTime);
     {
         CpuFrameStageScope animationStage(cpuFrameProfiler, CpuFrameStage::Animation);
         // 动画 CPU 蒙皮/求值发生在 World::TickAnimations，毛发 GT 步进在下一段单独计时。
-        if (world && !RenderSystem::GetInstance().IsOfflineMode())
+        if (!terrainLoading && world && !RenderSystem::GetInstance().IsOfflineMode())
         {
             PROFILE_SCOPE("World.TickAnimations");
             world->TickAnimations(simulationDelta);
@@ -422,10 +426,6 @@ void TickEngineFrame(EngineFrameContext& context)
     {
         RenderSystem::GetInstance().ReportTerrainStatistics();
     }
-    if (commandResult.terrainLayerStatisticsRequested)
-    {
-        RenderSystem::GetInstance().ReportTerrainLayerStatistics();
-    }
     if (commandResult.terrainLodStatisticsRequested)
     {
         RenderSystem::GetInstance().ReportTerrainLodStatistics();
@@ -518,7 +518,7 @@ void TickEngineFrame(EngineFrameContext& context)
     // UE 用 MaxUndilatedFrameTime/MaxSimulationTimeStep 防止 hitch 一帧推进整段：
     // 游戏/动画只消费上限 0.1 s 的模拟时间，FPS 与资产轮询仍用原始帧间隔。
     constexpr float MaxSimulationDelta = 0.1f;
-    const float simulationDelta = std::min(deltaTime, MaxSimulationDelta);
+    float simulationDelta = std::min(deltaTime, MaxSimulationDelta);
 
     // input 由两段不连续区间组成（平台事件轮询 + 动作状态更新），其余 UI 策略
     // 与命令执行归入 other；同一阶段的多个区间在累加器里相加。
@@ -573,12 +573,24 @@ void TickEngineFrame(EngineFrameContext& context)
         return;
     }
 
+    const auto& inputWorld = subsystems.GetWorldManager().GetActiveWorld();
+    const bool terrainLoading = IsTerrainWorldLoading(
+        inputWorld.get(), RenderSystem::GetInstance().IsOfflineMode());
+    if (terrainLoading)
+        simulationDelta = 0.0f;
     {
         CpuFrameStageScope inputStage(cpuFrameProfiler, CpuFrameStage::Input);
+        if (terrainLoading)
+        {
+            auto& input = subsystems.GetInputSubsystem();
+            input.SetGameKeyboardEnabled(false);
+            input.SetGamePointerEnabled(false);
+            input.SetRelativeMouseModeAllowed(false);
+        }
         subsystems.GetInputSubsystem().UpdateActionState();
     }
 
-    RunEngineUpdatePhase(context, deltaTime, simulationDelta);
+    RunEngineUpdatePhase(context, deltaTime, simulationDelta, terrainLoading);
 
     // 即使当前没有 World，也要持续补音频流，避免设备欠载造成爆音。
     if (audioRuntime) audioRuntime->Update();

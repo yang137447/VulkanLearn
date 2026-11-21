@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cctype>
 #include <fstream>
+#include "core/tracingIfstream.h"
 #include <set>
 #include <sstream>
 #include <stdexcept>
@@ -210,7 +211,8 @@ MaterialParameterIncludeGenerator::GeneratedIncludeCandidate
 MaterialParameterIncludeGenerator::BuildGeneratedIncludeContent(
     const std::filesystem::path& materialFilePath)
 {
-    std::ifstream materialFile(materialFilePath);
+    VL::RuntimeFileTrace::TracingIfstream materialFile(
+        materialFilePath, std::ios::in, "MaterialParameterIncludeGenerator.MDefinition");
     if (!materialFile.is_open())
     {
         throw std::runtime_error(

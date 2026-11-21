@@ -1,3 +1,4 @@
+#include "render/diagnostics/terrainCaptureHooks.h"
 #include "render/backend/rendererDrawExecutor.h"
 
 #include "baseStructs.h"
@@ -773,11 +774,45 @@ void RendererDrawExecutor::DrawSurfaceScene(
                     nullptr);
 
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
+                const auto captureHooks = domain == SurfaceDrawDomain::Geometry && drawPacket.isTerrain
+                    ? AcquireTerrainCaptureHooks() : std::shared_ptr<ITerrainCaptureHooks>{};
+                std::shared_ptr<PipelineBase> diagnosticPipeline;
+                TerrainCaptureDrawInputs captureInputs;
+                if (captureHooks)
+                {
+                    captureInputs = BuildTerrainCaptureDrawInputs(drawPacket,
+                        static_cast<uint32_t>(draw.drawPacketIndex),
+                        context.swapChainImageIndex % RenderableObject::DynamicMeshFrameSlotCount,
+                        context.swapChainImageIndex, renderPipeline, renderPass,
+                        drawResources.renderableObject, draw.objectResourceEntry,
+                        materialGroup.material, materialInstanceGroup.materialInstance);
+                    diagnosticPipeline = captureHooks->SelectActualDraw(captureInputs);
+                }
+                if (diagnosticPipeline)
+                {
+                    if (diagnosticPipeline->UsesTessellation() != renderPipelineUsesTessellation)
+                        throw std::runtime_error("Diagnostic pipeline changed actual draw topology");
+                    commandBuffer.bindPipeline(diagnosticPipeline->GetBindPoint(), diagnosticPipeline->GetPipeline());
+                    for (uint32_t set = 0; set < 4; ++set)
+                        if (captureInputs.descriptorSetMask & (1u << set))
+                            commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                diagnosticPipeline->GetPipelineLayout(), set, captureInputs.descriptorSets[set], nullptr);
+                    captureHooks->BindActualDraw(commandBuffer, captureInputs, *diagnosticPipeline);
+                }
                 drawResources.renderableObject->Draw(
                     commandBuffer,
                     context.swapChainImageIndex %
                         RenderableObject::DynamicMeshFrameSlotCount,
                     renderPipelineUsesTessellation);
+                if (diagnosticPipeline)
+                {
+                    captureHooks->ActualDrawRecorded(captureInputs);
+                    commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
+                    for (uint32_t set = 0; set < 4; ++set)
+                        if (captureInputs.descriptorSetMask & (1u << set))
+                            commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                renderPipeline.GetPipelineLayout(), set, captureInputs.descriptorSets[set], nullptr);
+                }
             }
         }
     }

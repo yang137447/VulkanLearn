@@ -27,6 +27,7 @@ struct LaunchOptions
     bool runShaderComputeReloadTest = false;
     bool runWorldGraphTransactionTest = false;
     bool forceShaderRebuild = false;
+    bool terrainVtCook = false;
     bool offlineRender = false;
     bool exitAfterTests = false;
     // 逐 pass GPU 计时：默认关闭以保证普通日志与逐帧路径无额外开销；

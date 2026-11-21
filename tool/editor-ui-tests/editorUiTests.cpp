@@ -277,7 +277,11 @@ EditorSceneActorSnapshot CameraBlueprint(const std::string& name)
 class TestSystem final : public Rml::SystemInterface
 {
 public:
-    double GetElapsedTime() override { return Rml::SystemInterface::GetElapsedTime() + timeOffset; }
+    double GetElapsedTime() override
+    {
+        return (manualClock ? 0.0 : Rml::SystemInterface::GetElapsedTime()) + timeOffset;
+    }
+    bool manualClock = false;
     double timeOffset = 0;
     bool LogMessage(Rml::Log::Type type, const Rml::String& message) override
     {
@@ -2330,6 +2334,7 @@ TEST_F(EditorUiTest, BlueprintAssetComponentSelectionShowsOnlyItsDetailsWithoutM
 
 TEST_F(EditorUiTest, BlueprintLogicSelectionHidesSpatialGizmoAndViewportPickSelectsOnlyMesh)
 {
+    system.manualClock = true;
     OpenBlueprintAsset();
     PublishBlueprintViewport();
     PublishBlueprintLogicComponents();
@@ -2345,6 +2350,14 @@ TEST_F(EditorUiTest, BlueprintLogicSelectionHidesSpatialGizmoAndViewportPickSele
             EXPECT_FALSE(document->GetElementById("blueprint-gizmo-" + std::to_string(axis) + "-" +
                 std::to_string(line))->IsVisible(true));
     MovePointer(BlueprintViewportPoint());
+    auto* pickHover = context->GetHoverElement();
+    auto* pickImage = document->GetElementById("blueprint-asset-preview-image");
+    const auto pickPoint = BlueprintViewportPoint();
+    ASSERT_EQ(pickHover, pickImage)
+        << "hover=" << (pickHover ? pickHover->GetId() : "null")
+        << " point=" << pickPoint.x << "," << pickPoint.y
+        << " image visible=" << pickImage->IsVisible(true)
+        << " image size=" << pickImage->GetClientWidth() << "," << pickImage->GetClientHeight();
     context->ProcessMouseButtonDown(0, 0);
     context->ProcessMouseButtonUp(0, 0);
     Refresh();
@@ -2352,16 +2365,48 @@ TEST_F(EditorUiTest, BlueprintLogicSelectionHidesSpatialGizmoAndViewportPickSele
     EXPECT_TRUE(document->GetElementById("blueprint-asset-component-details-0")->IsVisible(true));
     EXPECT_FALSE(document->QuerySelector("#blueprint-asset-logic-tree-0 .list-item")->IsClassSet("selected"));
     EXPECT_TRUE(sink.commands.empty());
-    // Publishing the viewport schedules a debounced PreviewBlueprint request;
-    // it is not part of the viewport pick and must not hide a pick-generated action.
-    runtimeSink.actions.erase(
-        std::remove_if(runtimeSink.actions.begin(), runtimeSink.actions.end(),
-            [](const UiAction& action)
-            {
-                return action.type == UiActionType::PreviewBlueprint;
-            }),
-        runtimeSink.actions.end());
     EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintViewportPickWaitsForDebouncedReplacementGeneration)
+{
+    system.manualClock = true;
+    OpenBlueprintAsset();
+    PublishBlueprintViewport();
+    PublishBlueprintLogicComponents();
+    Click("[data-action=blueprint-asset-logic-select][data-index='0']");
+    system.timeOffset = 0.349;
+    Refresh();
+    auto* image = document->GetElementById("blueprint-asset-preview-image");
+    ASSERT_TRUE(image->IsVisible(true));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    system.timeOffset = 0.351;
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    ASSERT_EQ(runtimeSink.actions[0].type, UiActionType::PreviewBlueprint);
+    EXPECT_FALSE(image->IsVisible(true));
+    MovePointer(BlueprintViewportPoint());
+    EXPECT_EQ(context->GetHoverElement(), document->GetElementById("blueprint-asset-preview-surface"));
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-logic-details-0")->IsVisible(true));
+    auto replacement = std::make_shared<std::vector<EditorSceneActorSnapshot>>(*snapshot.sceneActors);
+    for (auto& actor : *replacement)
+        actor.worldGeneration = 8;
+    snapshot.sceneActors = replacement;
+    Refresh();
+    ASSERT_TRUE(image->IsVisible(true));
+    MovePointer(BlueprintViewportPoint());
+    ASSERT_EQ(context->GetHoverElement(), image);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("blueprint-asset-logic-details-0")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-component-details-0")->IsVisible(true));
+    EXPECT_FALSE(document->QuerySelector("#blueprint-asset-logic-tree-0 .list-item")->IsClassSet("selected"));
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_TRUE(sink.commands.empty());
 }
 
 TEST_F(EditorUiTest, BlueprintLogicSelectionFallsBackImmediatelyWhenRemoved)
@@ -5674,6 +5719,88 @@ TEST_F(EditorUiTest, ExpandedOutlinerMeshRoutesChildSelectionThroughTheExistingS
         snapshot.activeDocument->assetPath);
     // 槽位选中仍走迁移前的 RequestMaterialSelection，没有第二条打开文档的路径。
     EXPECT_TRUE(sink.commands.empty());
+}
+
+TEST_F(EditorUiTest, TerrainModelSelectionIdentityEnablesSculptWithoutSelectingSameNamedMesh)
+{
+    const auto terrain = LayeredTerrainActor("Landscape_00", 1);
+    SelectSceneActorForSculpt(terrain);
+    AddActor(MeshActor("Landscape_00", 1));
+    snapshot.selectedActorIdentity.clear();
+    Refresh();
+    Click("[data-action=outliner-actor][data-index='1']");
+    ASSERT_TRUE(selectionSink.selectedModel);
+    const auto& selected = *selectionSink.selectedModel;
+    snapshot.selectedActorIdentity = ResolveSceneSelectionActorIdentity(
+        selected.actorIdentity, selected.objectIdentity);
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("terrain-mode-sculpt")->HasAttribute("disabled"));
+    EXPECT_FALSE(document->GetElementById("terrain-mode-paint")->HasAttribute("disabled"));
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    const auto stroke = BeginTerrainStrokeAtCenter();
+    ASSERT_EQ(stroke.type, UiActionType::TerrainEdit);
+    EXPECT_EQ(stroke.terrainBrush.placementId, terrain.identity);
+    EXPECT_EQ(stroke.terrainBrush.worldGeneration, terrain.worldGeneration);
+}
+
+TEST_F(EditorUiTest, TerrainMaterialSelectionIdentityKeepsPaintAvailable)
+{
+    const auto terrain = LayeredTerrainActor("Landscape_00", 1);
+    SelectSceneActorForSculpt(terrain);
+    Click("[data-action=outliner-expand][data-index='1']");
+    Refresh();
+    Click("[data-action=outliner-slot]");
+    ASSERT_TRUE(selectionSink.selectedMaterial);
+    const auto& selected = *selectionSink.selectedMaterial;
+    snapshot.selectedActorIdentity = ResolveSceneSelectionActorIdentity(
+        selected.modelContext.actorIdentity, selected.objectIdentity);
+    snapshot.selectedMaterialSlotIndex = selected.materialSlotIndex;
+    Refresh();
+    ASSERT_FALSE(document->GetElementById("terrain-mode-paint")->HasAttribute("disabled"));
+    Click("#terrain-mode-paint");
+    Refresh();
+    const auto stroke = BeginPaintStrokeAtCenter();
+    ASSERT_EQ(stroke.type, UiActionType::TerrainPaint);
+    EXPECT_EQ(stroke.terrainPaint.placementId, terrain.identity);
+    EXPECT_EQ(stroke.terrainPaint.worldGeneration, terrain.worldGeneration);
+}
+
+TEST_F(EditorUiTest, TerrainPickContextIdentityResolvesActorInsteadOfChunkObject)
+{
+    const auto terrain = LayeredTerrainActor("Landscape_00", 1);
+    SelectSceneActorForSculpt(terrain);
+    Editor::Selection::MaterialInstanceSelection picked;
+    picked.worldGeneration = terrain.worldGeneration;
+    picked.objectId = terrain.meshObjectId;
+    picked.objectIdentity = "Landscape_00::chunk_0_0";
+    picked.modelContext.actorIdentity = terrain.identity;
+    snapshot.selectedActorIdentity = ResolveSceneSelectionActorIdentity(
+        picked.modelContext.actorIdentity, picked.objectIdentity);
+    Refresh();
+    ASSERT_FALSE(document->GetElementById("terrain-mode-paint")->HasAttribute("disabled"));
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    const auto stroke = BeginTerrainStrokeAtCenter();
+    ASSERT_EQ(stroke.type, UiActionType::TerrainEdit);
+    EXPECT_EQ(stroke.terrainBrush.placementId, terrain.identity);
+}
+
+TEST_F(EditorUiTest, SelectionWithoutActorIdentityFallsBackToMeshAndDisablesTerrainBrushes)
+{
+    const auto terrain = LayeredTerrainActor("Landscape_00", 1);
+    SelectSceneActorForSculpt(terrain);
+    const auto mesh = MeshActor("Landscape_00", 1);
+    AddActor(mesh);
+    snapshot.selectedActorIdentity = ResolveSceneSelectionActorIdentity(
+        {}, mesh.sceneObjectIdentity);
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("terrain-mode-sculpt")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById("terrain-mode-paint")->HasAttribute("disabled"));
+    Click("#workspace-undo");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_NE(document->GetElementById("actor-details-content")->GetInnerRML().find(
+        mesh.sections.front().meshKey), std::string::npos);
 }
 
 TEST_F(EditorUiTest, OutlinerMeshSelectionKeepsThePreviousModelRouting)

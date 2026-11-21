@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -8,6 +9,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <regex>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -169,6 +171,7 @@ nlohmann::json BuildTerrainJson()
     return {
         {"name", "TR_terrain_tests"},
         {"type", "terrain"},
+        {"compositedVT", {{"enabled", true}, {"packagePath", "Generated/Validation/TerrainTests/Cooked/manifest.json"}}},
         {"heightmapPath", "Generated/Validation/TerrainTests/heightmap.png"},
         {"size", {1000.0, 1000.0}},
         {"heightScale", 100.0},
@@ -534,6 +537,139 @@ TEST(TerrainMeshBuilder, Lod0BuildsQuadPatchIndices)
     EXPECT_EQ(chunk.patchIndices[lastQuad + 1], 19u);
     EXPECT_EQ(chunk.patchIndices[lastQuad + 2], 24u);
     EXPECT_EQ(chunk.patchIndices[lastQuad + 3], 23u);
+}
+
+TEST(TerrainMeshBuilder, TessellationOuterFactorsMatchReversedSharedEdges)
+{
+    const auto shaderPath =
+        std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() /
+        "shader/glsl/engine/passTemplate/base.tesc.glsl";
+    std::ifstream shaderStream(shaderPath);
+    ASSERT_TRUE(shaderStream.is_open()) << shaderPath;
+    const std::string shader(
+        (std::istreambuf_iterator<char>(shaderStream)),
+        std::istreambuf_iterator<char>());
+    std::map<std::string, std::array<int, 2>> declaredEdges;
+    const std::regex declaration(
+        R"(const\s+float\s+(edge[0-3][0-3])\s*=\s*TerrainTessFactorForEdge\(p([0-3]),\s*p([0-3])\))");
+    for (auto match = std::sregex_iterator(shader.begin(), shader.end(), declaration);
+         match != std::sregex_iterator(); ++match)
+        declaredEdges[(*match)[1].str()] = {
+            std::stoi((*match)[2].str()), std::stoi((*match)[3].str())};
+    ASSERT_EQ(declaredEdges.size(), 4u);
+    std::array<std::array<int, 2>, 4> selectedEdges{};
+    std::set<int> assignedOuterEdges;
+    const std::regex assignment(
+        R"(gl_TessLevelOuter\[([0-3])\]\s*=\s*(edge[0-3][0-3])\s*;)");
+    for (auto match = std::sregex_iterator(shader.begin(), shader.end(), assignment);
+         match != std::sregex_iterator(); ++match)
+    {
+        const int outer = std::stoi((*match)[1].str());
+        ASSERT_TRUE(assignedOuterEdges.insert(outer).second);
+        ASSERT_EQ(declaredEdges.count((*match)[2].str()), 1u);
+        selectedEdges[outer] = declaredEdges.at((*match)[2].str());
+    }
+    ASSERT_EQ(assignedOuterEdges.size(), 4u);
+
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t column, uint32_t row) {
+            return 0.02f * static_cast<float>(
+                column * column + row * row + column * row);
+        }));
+    const auto chunks = VL::TerrainMeshBuilder::BuildChunks(plan, 0);
+    ASSERT_EQ(chunks.size(), 4u);
+    using Patch = std::array<Eigen::Vector3f, 4>;
+    std::vector<Patch> patches;
+    for (const auto& chunk : chunks)
+        for (size_t offset = 0; offset < chunk.patchIndices.size(); offset += 4)
+        {
+            Patch patch;
+            for (size_t corner = 0; corner < patch.size(); ++corner)
+                patch[corner] = chunk.vertices.at(
+                    chunk.patchIndices.at(offset + corner)).position;
+            patches.push_back(patch);
+        }
+    ASSERT_EQ(patches.size(), 16u);
+    const std::array<std::array<int, 2>, 4> domainEdges{
+        {{3, 0}, {0, 1}, {1, 2}, {2, 3}}};
+    const auto factor = [](const Eigen::Vector3f& start,
+                           const Eigen::Vector3f& end) {
+        const auto project = [](const Eigen::Vector3f& position) {
+            const float depth = position.z() + 1500.0f;
+            return Eigen::Vector2f(
+                position.x() / depth * 640.0f,
+                (position.y() - 800.0f) / depth * 360.0f);
+        };
+        return std::clamp((project(end) - project(start)).norm() / 16.0f,
+            1.0f, 8.0f);
+    };
+    const auto evaluate = [](const Patch& patch, float horizontal, float vertical) {
+        return Eigen::Vector3f(
+            patch[0] * ((1.0f - horizontal) * (1.0f - vertical)) +
+            patch[1] * (horizontal * (1.0f - vertical)) +
+            patch[2] * (horizontal * vertical) +
+            patch[3] * ((1.0f - horizontal) * vertical));
+    };
+    const std::array<Eigen::Vector2f, 4> domainCorners{
+        Eigen::Vector2f(0, 0), Eigen::Vector2f(1, 0),
+        Eigen::Vector2f(1, 1), Eigen::Vector2f(0, 1)};
+    size_t sharedEdges = 0;
+    size_t legacyFactorMismatches = 0;
+    std::set<int> coveredOuterEdges;
+    for (size_t first = 0; first < patches.size(); ++first)
+        for (size_t second = first + 1; second < patches.size(); ++second)
+            for (int firstOuter = 0; firstOuter < 4; ++firstOuter)
+                for (int secondOuter = 0; secondOuter < 4; ++secondOuter)
+                {
+                    const auto firstDomain = domainEdges[firstOuter];
+                    const auto secondDomain = domainEdges[secondOuter];
+                    const auto& firstPatch = patches[first];
+                    const auto& secondPatch = patches[second];
+                    if (!firstPatch[firstDomain[0]].isApprox(
+                            secondPatch[secondDomain[1]]) ||
+                        !firstPatch[firstDomain[1]].isApprox(
+                            secondPatch[secondDomain[0]]))
+                        continue;
+                    ++sharedEdges;
+                    coveredOuterEdges.insert(firstOuter);
+                    coveredOuterEdges.insert(secondOuter);
+                    SCOPED_TRACE(::testing::Message()
+                        << "patches=" << first << "," << second
+                        << " outer=" << firstOuter << "," << secondOuter);
+                    const auto firstSelected = selectedEdges[firstOuter];
+                    const auto secondSelected = selectedEdges[secondOuter];
+                    EXPECT_EQ(firstSelected, firstDomain);
+                    EXPECT_EQ(secondSelected, secondDomain);
+                    const float firstFactor = factor(
+                        firstPatch[firstSelected[0]], firstPatch[firstSelected[1]]);
+                    const float secondFactor = factor(
+                        secondPatch[secondSelected[0]], secondPatch[secondSelected[1]]);
+                    EXPECT_FLOAT_EQ(firstFactor, secondFactor);
+                    const int firstSegments = static_cast<int>(std::ceil(firstFactor));
+                    const int secondSegments = static_cast<int>(std::ceil(secondFactor));
+                    ASSERT_EQ(firstSegments, secondSegments);
+                    for (int sample = 0; sample <= firstSegments; ++sample)
+                    {
+                        const float parameter = static_cast<float>(sample) / firstSegments;
+                        const Eigen::Vector2f firstUv =
+                            domainCorners[firstDomain[0]] * (1.0f - parameter) +
+                            domainCorners[firstDomain[1]] * parameter;
+                        const Eigen::Vector2f secondUv =
+                            domainCorners[secondDomain[0]] * parameter +
+                            domainCorners[secondDomain[1]] * (1.0f - parameter);
+                        EXPECT_TRUE(evaluate(firstPatch, firstUv.x(), firstUv.y()).isApprox(
+                            evaluate(secondPatch, secondUv.x(), secondUv.y()), 1.0e-6f));
+                    }
+                    const float legacyFirst = factor(
+                        firstPatch[firstOuter], firstPatch[(firstOuter + 1) % 4]);
+                    const float legacySecond = factor(
+                        secondPatch[secondOuter], secondPatch[(secondOuter + 1) % 4]);
+                    if (std::abs(legacyFirst - legacySecond) > 1.0e-4f)
+                        ++legacyFactorMismatches;
+                }
+    EXPECT_EQ(sharedEdges, 24u);
+    EXPECT_EQ(coveredOuterEdges.size(), 4u);
+    EXPECT_GT(legacyFactorMismatches, 0u);
 }
 
 TEST(TerrainMeshBuilder, CoarseLodPatchIndicesMirrorBaseQuadsAndTransitionTriangles)

@@ -12,6 +12,7 @@
 #include "terrain/terrainAssetTypes.h"
 #include "terrain/terrainCollisionTypes.h"
 #include "terrain/terrainHeightmapEditor.h"
+#include "terrain/terrainCompositedDirty.h"
 #include "vertexDataStruct.h"
 
 namespace VL
@@ -51,6 +52,8 @@ struct TerrainMeshUpdate
     TerrainAssetDesc desc;
     std::shared_ptr<const HostImage> heightmap;
     std::vector<TerrainChunkMeshUpdate> chunks;
+    TerrainCompositedEditDirty compositedDirty;
+    uint64_t sourceRevision = 0;
 };
 
 // 一次 Landscape 雕刻会话。纯 CPU，不持有 World/Vulkan；UI 在 preview 阶段
@@ -74,6 +77,8 @@ public:
     }
     bool IsStrokeActive() const noexcept { return strokeActive_; }
     uint64_t Revision() const noexcept;
+    const TerrainCompositedEditDirty& CompositedDirty() const noexcept { return compositedDirty_; }
+    bool AcknowledgeCompositedDirty(uint64_t revision) { return compositedDirty_.Acknowledge(revision); }
 
     // BeginStroke 固定“本笔开始前”的高度快照；ApplyBrush 只改 preview，
     // EndStroke 有变化才 push 一条历史。一次 stroke 最多一条 undo。
@@ -97,13 +102,16 @@ public:
 
     // 自上次 ResetDirty 以来 dirty chunks 的全部 LOD 网格。heightmap 是当前
     // 编辑后的完整 R32_FLOAT 快照，resourceKey/objectName 与渲染加载期一致。
-    TerrainMeshUpdate BuildUpdate() const;
+    // allChunks 用于初始 baseline，不修改 dirty 状态；驻留过滤由调用方完成。
+    TerrainMeshUpdate BuildUpdate(bool allChunks = false) const;
     void ResetDirty();
     bool SaveHeightmap(const std::filesystem::path& path, std::string& error) const;
 
 private:
     void EnsureHeightBounds() const;
     void MarkAllDirty();
+    void IncludeCompositedDirty(const TerrainPixelRect& changed);
+    void RestoreSamples(std::vector<float> samples);
 
     std::unique_ptr<TerrainHeightmapEditor> editor_;
     TerrainAssetDesc desc_;
@@ -116,6 +124,9 @@ private:
     std::vector<float> strokeStartSamples_;
     std::deque<std::vector<float>> undoStack_;
     std::deque<std::vector<float>> redoStack_;
+    TerrainCompositedEditDirty compositedDirty_;
+    mutable std::shared_ptr<const HostImage> publishedHeightmap_;
+    mutable uint64_t publishedHeightmapRevision_ = 0;
 
     // Raycast 的 AABB 只用于限定参数范围，实际求交仍按高度场进行。
     mutable bool heightBoundsDirty_ = true;

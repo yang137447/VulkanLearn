@@ -1365,6 +1365,7 @@ Json TerrainAssetDocument()
     return {
         {"name", "TR_test"},
         {"type", "terrain"},
+        {"compositedVT", {{"enabled", true}, {"packagePath", "Generated/Validation/TerrainDocument/Cooked/manifest.json"}}},
         {"description", "Terrain asset API test"},
         {"heightmapPath", "image.png"},
         {"materialInstancePath", "MI_test.json"},

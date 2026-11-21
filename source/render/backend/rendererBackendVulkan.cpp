@@ -16,6 +16,7 @@
 #include "pipeline/graphicsPipelineBuilder.h"
 #include "profiler.h"
 #include "render/backend/frameEpochRing.h"
+#include "render/backend/frameAbandonVulkan.h"
 #include "render/rhi/vulkan/rhiDeviceVulkan.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/resource/rendererThumbnailImages.h"
@@ -503,8 +504,6 @@ RendererFrameContext RendererBackendVulkan::BeginFrame(uint32_t currentFrame)
         frameContext.swapchainImageIndex,
         frameSync.taskFinishedFence);
 
-    rhiDevice->ResetFence(frameSync.taskFinishedFence);
-
     const VulkanSwapchainImageSyncResources imageSync =
         rhiDevice->GetSwapchainImageSyncResources(presentTarget, frameContext.swapchainImageIndex);
     frameContext.commandBuffer = imageSync.commandBuffer;
@@ -587,6 +586,9 @@ void RendererBackendVulkan::SubmitFrame(
     submitPlan.submittedEpoch = static_cast<uint64_t>(currentFrame) + 1;
 
     vk::CommandBuffer commandBuffer = submitPlan.commandBuffer;
+    if (!frameContext.ready ||
+        frameContext.disposition.Phase() != AcquiredFramePhase::Recording)
+        throw std::logic_error("Submit requires a live recording frame");
     commandBuffer.end();
     {
         PROFILE_SCOPE("Render:Submit");
@@ -600,7 +602,9 @@ void RendererBackendVulkan::SubmitFrame(
             .setWaitDstStageMask(waitDstStageMask)
             .setCommandBuffers(commandBuffer);
 
+        rhiDevice->ResetFence(submitPlan.taskFinishedFence);
         rhiDevice->SubmitToGraphicsQueue(submitInfo, submitPlan.taskFinishedFence);
+        frameContext.disposition.Submitted();
     }
 
     RecordSubmittedFrameEpoch(
@@ -623,6 +627,46 @@ void RendererBackendVulkan::SubmitFrame(
             swapchainRecreateRequired.store(true, std::memory_order_release);
         }
     }
+}
+
+void RendererBackendVulkan::DiscardFrameCommands(const RendererFrameContext& frameContext)
+{
+    if (!frameContext.ready ||
+        frameContext.disposition.Phase() != AcquiredFramePhase::Recording)
+        throw std::logic_error("Only unsubmitted acquired frame commands can be discarded");
+    frameContext.commandBuffer.reset();
+    frameContext.disposition.Discarded();
+}
+
+FrameAbortResult RendererBackendVulkan::FrameAbandonAfterAcquire(
+    const RendererFrameContext& frameContext, uint32_t currentFrame)
+{
+    if (!initialized || !frameContext.ready)
+        throw std::logic_error("Frame abandon requires a live backend acquired frame");
+    auto& target = rhiDevice->GetPresentTarget();
+    const auto frameSync = rhiDevice->GetFrameSyncResources(frameContext.frameIndex);
+    const auto imageSync = rhiDevice->GetSwapchainImageSyncResources(target, frameContext.swapchainImageIndex);
+    const FrameAbandonVulkanSync sync{rhiDevice->GetDevice(), frameContext.commandBuffer,
+        rhiDevice->GetSwapchainImages(target).at(frameContext.swapchainImageIndex),
+        frameSync.imageAcquiredSemaphore, imageSync.renderFinishedSemaphore, frameSync.taskFinishedFence,
+        rhiDevice->GetSwapchainImageViews(target).at(frameContext.swapchainImageIndex),
+        rhiDevice->GetSwapchainImageFormat(target), target.extent};
+    const auto presentResult = RecoverAcquiredFrame(sync, frameContext.disposition,
+        [this](const vk::SubmitInfo& info, vk::Fence fence) {
+            rhiDevice->SubmitToGraphicsQueue(info, fence);
+        },
+        [this, &target, &frameContext](vk::Semaphore finished) {
+            return rhiDevice->PresentSwapchainImage(target, finished, frameContext.swapchainImageIndex);
+        });
+    const uint64_t epoch = static_cast<uint64_t>(currentFrame) + 1;
+    RecordSubmittedFrameEpoch(frameFenceEpochs, frameContext.frameIndex, epoch);
+    ResourceRetireQueue::GetInstance().MarkFrameSubmitted(epoch);
+    hasSubmittedFrame = true;
+    lastSubmittedFrameIndex = frameContext.frameIndex;
+    const bool recreate = RequiresSwapchainRecreate(presentResult);
+    if (recreate)
+        swapchainRecreateRequired.store(true, std::memory_order_release);
+    return {epoch, frameContext.frameIndex, frameContext.swapchainImageIndex, recreate};
 }
 
 void RendererBackendVulkan::WaitForPreviousFrameFence(

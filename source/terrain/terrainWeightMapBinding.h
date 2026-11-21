@@ -8,13 +8,26 @@ namespace VL
 {
 
 // mode 1 的单块地形权重纹理守卫（纯 CPU，不依赖渲染资源）。
-// 同一个 weightsIdentity（loader 传 layerWeightMaps.get()）被多个 placement
-// 使用时，所有 tile 会采样同一份掩码，必须在 World 加载期直接失败。
+// loader 传最终消费的 layerWeightMaps.get()；作者/overlay 跨 placement 共享非法，
+// 已由 Service 验证闭包与映射的不可变 publication 可以共享真实 Texture。
 class TerrainWeightMapBindingTracker
 {
 public:
+    enum class BindingPolicy
+    {
+        PlacementOwned,
+        VerifiedImmutablePublication
+    };
+
     void Record(
         const void* weightsIdentity,
+        std::string materialPath,
+        std::string placementId,
+        BindingPolicy policy = BindingPolicy::PlacementOwned);
+
+    void RecordFrozenOverlay(
+        const void* importedWeightsIdentity,
+        const void* frozenWeightsIdentity,
         std::string materialPath,
         std::string placementId);
 
@@ -33,6 +46,7 @@ private:
         const void* weightsIdentity = nullptr;
         std::string materialPath;
         std::vector<std::string> placements;
+        bool immutablePublicationOnly = true;
     };
 
     std::vector<Binding> bindings;

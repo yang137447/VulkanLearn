@@ -1,0 +1,33 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+layout(local_size_x = 64) in;
+layout(std430, set = 0, binding = 0) readonly buffer Queries
+{
+    uvec4 header;
+    vec4 points[];
+} queries;
+layout(std430, set = 0, binding = 1) buffer Results
+{
+    uint targets[];
+} results;
+struct Chart
+{
+    vec4 rowU;
+    vec4 rowV;
+    vec4 metricU;
+    vec4 metricV;
+};
+layout(std430, set = 0, binding = 2) readonly buffer Charts
+{
+    Chart entries[];
+} charts;
+#include "../../../shader/glsl/terrain/terrainCompositedBakeRoute.glsl"
+
+void main()
+{
+    const uint index = gl_GlobalInvocationID.x;
+    if (index < queries.header.x)
+        results.targets[index] = TerrainBakeResolve(
+            queries.points[index].xy, queries.header.y, queries.header.z, queries.header.w == 2u);
+}

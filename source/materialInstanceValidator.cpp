@@ -11,6 +11,35 @@
 
 namespace
 {
+    void ValidateTerrainMigrationFields(
+        const nlohmann::json& materialInstanceJson,
+        std::string_view materialInstancePath)
+    {
+        if (materialInstanceJson.value("shaderName", std::string()) != "terrain")
+            return;
+        const auto reject = [&](const std::string& field)
+        {
+            throw std::runtime_error(
+                "Retired terrain material field '" + field +
+                "': migrate to composited VT with resident tiling height, remove the retired override and recook the terrain scene: " +
+                std::string(materialInstancePath));
+        };
+        if (materialInstanceJson.contains("parameters"))
+            for (const char* field : {
+                "u_terrainLayerMode", "u_layerForceMip", "u_layerPageResolution",
+                "u_layerAtlasResolution", "u_layerPagesPerAtlasSlice",
+                "u_layerTilesPerAtlasSide", "u_layerMaxMip", "u_heightBlendDistanceFade"})
+                if (materialInstanceJson.at("parameters").contains(field))
+                    reject(field);
+        if (materialInstanceJson.contains("textures"))
+            for (const auto& entry : materialInstanceJson.at("textures").items())
+                if (entry.key().rfind("layerPageTable", 0) == 0 ||
+                    entry.key() == "layerAlbedoAtlas" ||
+                    entry.key() == "layerNormalAtlas" ||
+                    entry.key() == "layerPbrAtlas")
+                    reject(entry.key());
+    }
+
     vk::CullModeFlags ParseCullMode(const nlohmann::json& materialInstanceJson)
     {
         if (!materialInstanceJson.contains("renderStates"))
@@ -371,6 +400,7 @@ MaterialInstanceBuildPlan MaterialInstanceValidator::BuildLoadPlan(
     bool prerenderSkin,
     bool supportsTessellation)
 {
+    ValidateTerrainMigrationFields(materialInstanceJson, materialInstancePath);
     MaterialInstanceBuildPlan loadPlan;
     loadPlan.shaderVariantKey.shaderName =
         materialInstanceJson.at("shaderName").get<std::string>();

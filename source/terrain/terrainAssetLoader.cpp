@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
+#include "core/tracingIfstream.h"
 #include <iostream>
 #include <stdexcept>
 #include <string>
@@ -105,7 +106,8 @@ bool ValidateDetailMaterialInstanceFile(
     std::string& error)
 {
     error.clear();
-    std::ifstream file(physicalPath, std::ios::binary);
+    RuntimeFileTrace::TracingIfstream file(
+        physicalPath, std::ios::binary, "TerrainAssetLoader.DetailMI");
     if (!file)
     {
         error = "detailMaterialInstancePath cannot be opened: " + relative;
@@ -148,7 +150,8 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
     try
     {
         const std::string physicalPath = CommonFunction::Path(pathString);
-        std::ifstream file(physicalPath, std::ios::binary);
+        RuntimeFileTrace::TracingIfstream file(
+            physicalPath, std::ios::binary, "TerrainAssetLoader.TR");
         if (!file)
             throw std::runtime_error("Cannot open terrain asset");
 
@@ -173,6 +176,20 @@ TerrainBuildPlan TerrainAssetLoader::Prepare(std::string_view terrainAssetPath)
         desc.gridResolution = asset.at("gridResolution").get<uint32_t>();
         desc.chunkQuads = asset.at("chunkQuads").get<uint32_t>();
         desc.heightmapMargin = asset.value("heightmapMargin", 0u);
+        {
+            const auto& composited = asset.at("compositedVT");
+            desc.compositedVT.enabled = composited.at("enabled").get<bool>();
+            desc.compositedVT.packagePath =
+                composited.at("packagePath").get<std::string>();
+            desc.compositedVT.productionSourcePath =
+                composited.value("productionSourcePath", std::string());
+            if (composited.contains("virtualResolution"))
+            {
+                desc.compositedVT.virtualResolution = Eigen::Vector2i(
+                    composited.at("virtualResolution")[0].get<int>(),
+                    composited.at("virtualResolution")[1].get<int>());
+            }
+        }
         // CPU 几何 LOD：validator 已保证级数与步长/距离表合法。旧 TR 不写时
         // lodLevels=1、距离表为空，网格生成与历史行为完全一致。
         desc.lodLevels = asset.value("lodLevels", 1u);

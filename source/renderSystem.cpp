@@ -35,6 +35,7 @@
 #include "render/skinning/skinDeformPass.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/frame/terrainCompositedQualityFrame.h"
 #include "render/resource/placementBindingResolver.h"
 #include "render/resource/rendererMaterialLoader.h"
 #include "render/resource/rendererMeshLoader.h"
@@ -42,7 +43,9 @@
 #include "render/resource/rendererTerrainLoader.h"
 #include "render/resource/terrainPageBakeGpu.h"
 #include "render/resource/terrainFeedbackGpu.h"
-#include "render/resource/terrainLayerFeedbackGpu.h"
+#include "render/resource/terrainCompositedFeedbackGpu.h"
+#include "render/resource/terrainCompositedService.h"
+#include "render/resource/terrainCompositedReloadRegistration.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/rendergraph/preparedRenderGraphState.h"
 #include "renderableObject.h"
@@ -202,6 +205,7 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     // package 的生命周期；新的连接必须重新按 generation/path 捕获目标。
     materialInstancePreviewAdapter.Reset();
     activeWorld = std::move(world);
+    UpdateTerrainProducerReloadRegistration();
     // 显式清空/关闭 World 时，CPU 包也不再由 RenderSystem 留存。
     activeOfflineWorldAssets.reset();
     offlineCameraMotionPolicy.Reset();
@@ -235,6 +239,25 @@ void RenderSystem::SetActiveWorld(std::shared_ptr<const VL::World> world)
     {
         windResponseProfiles.Reset();
     }
+}
+
+void RenderSystem::SetShaderReloadCoordinator(VL::ShaderReloadCoordinator* coordinator)
+{
+    shaderReloadCoordinator = coordinator;
+    UpdateTerrainProducerReloadRegistration();
+}
+
+void RenderSystem::UpdateTerrainProducerReloadRegistration()
+{
+    const auto resources =
+        VL::RendererResourceCache::GetInstance().CaptureActiveWorldLocalResources();
+    const auto streaming = resources ? resources->terrainStreaming : nullptr;
+    VL::RebindTerrainCompositedReloadRegistration(
+        registeredTerrainProducerService,
+        streaming ? streaming->composited : nullptr,
+        activeWorld ? activeWorld->GetGeneration() : 0,
+        resources ? resources->ownerGeneration : 0,
+        shaderReloadCoordinator);
 }
 
 bool RenderSystem::SetToneMappingMode(int mode, std::string& outMessage)
@@ -339,36 +362,6 @@ void RenderSystem::RequestTerrainResidentCapacity(uint32_t capacity)
     terrainFeedbackRuntime.RequestTerrainResidentCapacity(capacity);
 }
 
-void RenderSystem::RequestTerrainLayerResidentCapacity(uint32_t capacity)
-{
-    terrainFeedbackRuntime.RequestTerrainLayerResidentCapacity(capacity);
-}
-
-void RenderSystem::RequestTerrainLayerPreload()
-{
-    terrainFeedbackRuntime.RequestTerrainLayerPreload();
-}
-
-void RenderSystem::RequestTerrainLayerForceMip(int forceMip)
-{
-    terrainFeedbackRuntime.RequestTerrainLayerForceMip(forceMip);
-}
-
-void RenderSystem::ApplyTerrainLayerForceMip(
-    const std::shared_ptr<VL::TerrainStreamingState>& streaming)
-{
-    terrainFeedbackRuntime.ApplyTerrainLayerForceMip(streaming);
-}
-
-void RenderSystem::UpdateTerrainCameraPrefetch(
-    const std::shared_ptr<VL::TerrainStreamingState>& streaming)
-{
-    terrainFeedbackRuntime.UpdateTerrainCameraPrefetch(
-        streaming,
-        currentRenderScene.camera.position,
-        currentRenderScene.camera.forward);
-}
-
 void RenderSystem::PublishTerrainStreamingStats(
     const std::shared_ptr<VL::TerrainStreamingState>& streaming,
     uint64_t completedEpoch)
@@ -385,12 +378,6 @@ void RenderSystem::ReportTerrainFeedbackStatistics() const
 void RenderSystem::ReportTerrainStatistics() const
 {
     VL::TerrainFeedbackRuntime::ReportTerrainStatistics();
-}
-
-void RenderSystem::ReportTerrainLayerStatistics() const
-{
-    VL::TerrainFeedbackRuntime::ReportTerrainLayerStatistics(
-        GetSceneRenderExtent());
 }
 
 void RenderSystem::ReportTerrainLodStatistics() const
@@ -504,6 +491,8 @@ vk::Extent2D RenderSystem::GetSceneRenderExtent() const
 
 void RenderSystem::ReleaseSwapchainDependentResources()
 {
+    frameRecorder.CloseTerrainCaptureAfterDeviceIdle();
+    VL::TerrainCompositedQualityFrame::CloseAfterDeviceIdle("swapchain_teardown");
     if (offlineCoordinator) offlineCoordinator->Stop();
     offlineDisplay.Shutdown();
     uiOverlayRenderer.ReleaseSwapchainDependentResources();
@@ -1425,6 +1414,11 @@ void RenderSystem::AdvanceSceneWind()
 
 void RenderSystem::ShutdownRenderObject()
 {
+    frameRecorder.CloseTerrainCaptureAfterDeviceIdle();
+    VL::TerrainCompositedQualityFrame::CloseAfterDeviceIdle();
+    if (auto service = registeredTerrainProducerService.lock())
+        service->SetShaderReloadCoordinator(nullptr);
+    registeredTerrainProducerService.reset();
     // trace 可能还有 1..2 个 frame slot pending；这里显式等一次队列并写盘。
     // 调用方（EngineLoop::Shutdown）已停止渲染线程，且 backend 仍然有效。
     if (const auto& hairSimulation = RenderGraph::GetInstance().GetHairSimulation())

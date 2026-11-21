@@ -361,6 +361,51 @@ TEST(TerrainPaintSessionTest, SquareBrushCoversCornerOutsideCircleFootprint)
     EXPECT_GT(squareSession.PaintData()->weights[corner], 0.0f);
 }
 
+TEST(TerrainPaintSessionTest, PublishedSnapshotsRemainImmutableAcrossUndoRedoAndNewStamps)
+{
+    VL::Editor::TerrainPaintSession session;
+    std::string error;
+    ASSERT_TRUE(VL::Editor::TerrainPaintSession::Create(MakePaintInstance(), session, error))
+        << error;
+    const auto baseline = session.PaintData();
+    const auto originalWeights = baseline->weights;
+    const auto originalOpacity = baseline->opacity;
+    VL::Editor::TerrainPaintBrush brush;
+    brush.layerIndex = 0;
+    brush.centerUv = Eigen::Vector2f(0.5f, 0.5f);
+    brush.radiusUv = 0.25f;
+    brush.flow = 1.0f;
+    brush.opacity = 1.0f;
+    ASSERT_TRUE(session.BeginStroke());
+    ASSERT_TRUE(session.ApplyBrush(brush));
+    ASSERT_TRUE(session.EndStroke());
+    const auto painted = session.PaintData();
+    const auto paintedWeights = painted->weights;
+    const auto paintedOpacity = painted->opacity;
+    EXPECT_NE(painted.get(), baseline.get());
+    EXPECT_EQ(painted, session.PaintData());
+    EXPECT_EQ(baseline->weights, originalWeights);
+    EXPECT_EQ(baseline->opacity, originalOpacity);
+    ASSERT_TRUE(session.Undo());
+    const auto undone = session.PaintData();
+    EXPECT_NE(undone.get(), painted.get());
+    EXPECT_EQ(undone->weights, originalWeights);
+    EXPECT_EQ(undone->opacity, originalOpacity);
+    EXPECT_EQ(painted->weights, paintedWeights);
+    EXPECT_EQ(painted->opacity, paintedOpacity);
+    ASSERT_TRUE(session.Redo());
+    const auto redone = session.PaintData();
+    EXPECT_NE(redone.get(), undone.get());
+    EXPECT_EQ(redone->weights, paintedWeights);
+    EXPECT_EQ(redone->opacity, paintedOpacity);
+    brush.erase = true;
+    ASSERT_TRUE(session.BeginStroke());
+    ASSERT_TRUE(session.ApplyBrush(brush));
+    EXPECT_EQ(redone->weights, paintedWeights);
+    EXPECT_EQ(redone->opacity, paintedOpacity);
+    EXPECT_EQ(baseline->weights, originalWeights);
+}
+
 TEST(TerrainPaintSessionTest, DefaultOpacityFlowAndNoisePreserveLegacyAccumulation)
 {
     const VL::TerrainCollisionInstance instance = MakePaintInstance();

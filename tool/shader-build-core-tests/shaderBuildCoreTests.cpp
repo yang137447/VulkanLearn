@@ -373,6 +373,28 @@ TEST_F(ShaderFileMonitorPaths, CanonicalRootKeepsNestedRegularFileIdentity)
     EXPECT_EQ(batch->changedSources, (std::vector<std::string>{"nested/shared.glsl"}));
 }
 
+TEST_F(ShaderFileMonitorPaths, AtomicWriterDoesNotExtendLongDestinationFilename)
+{
+    const auto directory = root / "glsl" / "nested";
+    const auto directoryLength = directory.string().size() + 1;
+    ASSERT_LT(directoryLength, 220u);
+    const auto destination = directory /
+        (std::string(245u - directoryLength - 5u, 'a') + ".json");
+    ASSERT_EQ(destination.string().size(), 245u);
+    ASSERT_NO_THROW(VL::WriteTextFileAtomically(destination, "original"));
+    ASSERT_NO_THROW(VL::WriteTextFileAtomically(destination, "replacement"));
+    const auto content = VL::ReadBinaryFile(destination);
+    EXPECT_EQ(std::string(content.begin(), content.end()), "replacement");
+    const auto second = directory / "second.json";
+    ASSERT_NO_THROW(VL::WriteFileBatchAtomically({
+        {destination, {'f', 'i', 'n', 'a', 'l'}},
+        {second, {'s', 'e', 'c', 'o', 'n', 'd'}}}));
+    const auto updated = VL::ReadBinaryFile(destination);
+    EXPECT_EQ(std::string(updated.begin(), updated.end()), "final");
+    for (const auto& entry : std::filesystem::directory_iterator(directory))
+        EXPECT_NE(entry.path().filename().string().rfind(".vl-atomic.tmp.", 0), 0u);
+}
+
 TEST_F(ShaderFileMonitorPaths, FileAliasKeepsPhysicalTargetIdentity)
 {
     const auto file = root / "glsl" / "nested" / "shared.glsl";

@@ -27,6 +27,8 @@ namespace HostImageVulkan
             return vk::Format::eR16Sfloat;
         case HostImage::PixelFormat::R16_UNORM:
             return vk::Format::eR16Unorm;
+        case HostImage::PixelFormat::R32_FLOAT:
+            return vk::Format::eR32Sfloat;
         case HostImage::PixelFormat::RGBA32_FLOAT:
             return vk::Format::eR32G32B32A32Sfloat;
         // BC 块格式：sRGB 与 UNORM 复用同一组 128-bit 块，仅采样解码不同。

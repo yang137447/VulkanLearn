@@ -1042,7 +1042,7 @@ body {
     font-size: 10px;
 }
 .terrain-brush-mode:last-child { margin-right: 0; }
-#viewport-brush-settings { display: flex; flex-wrap: wrap; }
+#viewport-brush-settings { display: flex; flex-wrap: wrap; flex-shrink: 0; }
 #terrain-sculpt-settings {
     display: block;
     width: 100%;
@@ -1073,6 +1073,8 @@ body {
 }
 #viewport-paint-settings {
     display: none;
+    flex-direction: column;
+    flex-shrink: 0;
     width: 100%;
     margin-top: 2px;
 }
@@ -1456,10 +1458,13 @@ body {
 #viewport-brush-settings {
     display: none;
     flex-direction: column;
+    flex-shrink: 0;
     min-width: 0;
 }
 #viewport-paint-settings {
     display: none;
+    flex-direction: column;
+    flex-shrink: 0;
     margin-top: 7px;
 }
 #viewport-paint-settings button { width: 100%; }

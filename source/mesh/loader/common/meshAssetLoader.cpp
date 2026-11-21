@@ -12,6 +12,7 @@
 #include <string>
 
 #include "../../../commonFunction.h"
+#include "core/tracingIfstream.h"
 #include "../mesh/assimpModelImporter.h"
 #include "../hair/tressfxModelImporter.h"
 #include "../speedtree/speedTreeModelImporter.h"
@@ -62,7 +63,8 @@ private:
 nlohmann::json LoadJsonFile(const std::string& absolutePath, const std::string& logicalPath,
     std::string_view assetLabel, std::string& identity)
 {
-    std::ifstream file(absolutePath, std::ios::binary);
+    VL::RuntimeFileTrace::TracingIfstream file(
+        absolutePath, std::ios::binary, "MeshAssetLoader.Json");
     if (!file.is_open())
     {
         throw std::runtime_error(std::string(assetLabel) + " file not found: " + logicalPath);

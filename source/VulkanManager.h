@@ -231,7 +231,8 @@ private:
     void CreateVkDevice();
     void DestroyVkDevice();
 
-    void CreateVkSwapChain(VL::PresentTarget &target);
+    void CreateVkSwapChain(VL::PresentTarget &target,
+        std::shared_ptr<const VL::PresentSwapchainResources> oldOwner = {});
     void DestroyVkSwapChain(VL::PresentTarget &target);
 
     // 共享命令池：生命周期与设备一致，**不随 swapchain 重建**。

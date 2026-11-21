@@ -1,3 +1,4 @@
+#include "render/diagnostics/terrainCaptureHooks.h"
 #include "vulkanManager.h"
 #include "SDL3/SDL_vulkan.h"
 #include <algorithm>
@@ -133,9 +134,9 @@ void VulkanManager::ReCreateSwapChain(int newWidth, int newHeight)
     // 重建它们会连带影响别的窗口与正在进行的一次性命令。
     DestroyTargetSyncObjects(target);
     DestroyTargetCommandBuffers(target);
-    DestroyVkSwapChain(target);
+    auto oldOwner = target.DetachSwapchainForReplacement();
 
-    CreateVkSwapChain(target);
+    CreateVkSwapChain(target, std::move(oldOwner));
     CreateTargetCommandBuffers(target);
     CreateTargetSyncObjects(target);
 }
@@ -328,6 +329,13 @@ void VulkanManager::CreateVkDevice()
             fillModeNonSolidEnabled ? VK_TRUE : VK_FALSE)
         .setDualSrcBlend(
             dualSourceBlendEnabled ? VK_TRUE : VK_FALSE);
+    if ((VL::AcquireTerrainCaptureHooks() && VL::AcquireTerrainCaptureHooks()->RequiresTesVertexStores()))
+    {
+        if (!supportedFeatures.vertexPipelineStoresAndAtomics || !supportedFeatures.tessellationShader ||
+            physicalDevices[kGpuIndex].getProperties().limits.maxBoundDescriptorSets < 5)
+            throw std::runtime_error("Explicit TES capture unavailable: vertex stores/tessellation/set4");
+        deviceFeatures.setVertexPipelineStoresAndAtomics(VK_TRUE);
+    }
     vk::PhysicalDeviceVulkan12Features deviceVulkan12Features;
     deviceVulkan12Features
         .setDrawIndirectCount(
@@ -348,6 +356,7 @@ void VulkanManager::CreateVkDevice()
         .setEnabledLayerCount(0);
     
     device = physicalDevices[kGpuIndex].createDevice(deviceCreateInfo);
+    VL::PublishTerrainCaptureDeviceFeature((VL::AcquireTerrainCaptureHooks() && VL::AcquireTerrainCaptureHooks()->RequiresTesVertexStores()));
     assert(device);
 
     // Get the graphics queue
@@ -356,11 +365,18 @@ void VulkanManager::CreateVkDevice()
 
 void VulkanManager::DestroyVkDevice()
 {
+    VL::PublishTerrainCaptureDeviceFeature(false);
+    VL::ReleasePresentSwapchainsForDevice(device);
     device.destroy();
 }
 
-void VulkanManager::CreateVkSwapChain(VL::PresentTarget &target)
+void VulkanManager::CreateVkSwapChain(VL::PresentTarget &target,
+    std::shared_ptr<const VL::PresentSwapchainResources> oldOwner)
 {
+    if (target.swapchainOwner || target.swapChain)
+        throw std::runtime_error("Swapchain creation requires the previous target to be detached");
+    if (target.swapchainGeneration == UINT64_MAX)
+        throw std::runtime_error("Present-target generation exhausted");
     // 获取支持的表面格式
     std::vector<vk::SurfaceFormatKHR> surfaceFormats = physicalDevices[kGpuIndex].getSurfaceFormatsKHR(target.surface);
     assert(!surfaceFormats.empty());
@@ -467,11 +483,7 @@ void VulkanManager::CreateVkSwapChain(VL::PresentTarget &target)
         .setPreTransform(preTransform)
         .setCompositeAlpha(vk::CompositeAlphaFlagBitsKHR::eOpaque)
         .setPresentMode(presentMode)
-        .setClipped(VK_TRUE)
-        // Resize currently destroys the old swapchain before creating the new
-        // one. If we move to Vulkan oldSwapchain handoff, this becomes the
-        // previous handle and ownership must be updated in DestroyVkSwapChain.
-        .setOldSwapchain(nullptr);
+        .setClipped(VK_TRUE);
     if(graphicsQueueFamilyIndex.value() != target.presentQueueFamilyIndex.value())
     {
         //如果图形队列和呈现队列不是同一个队列族
@@ -482,50 +494,39 @@ void VulkanManager::CreateVkSwapChain(VL::PresentTarget &target)
             .setQueueFamilyIndexCount(2)
             .setPQueueFamilyIndices(queueFamilyIndices);
     }
-    target.swapChain = device.createSwapchainKHR(swapChainCreateInfo);
-    assert(target.swapChain);
+    auto owner = VL::PresentSwapchainResources::Create(device, swapChainCreateInfo, std::move(oldOwner));
+    assert(owner->swapchain);
 
     // 获取交换链中的图像数量
-    vk::Result result = device.getSwapchainImagesKHR(target.swapChain, &target.imageCount, nullptr);
-    assert(result == vk::Result::eSuccess);
+    vk::Result result = device.getSwapchainImagesKHR(owner->swapchain, &target.imageCount, nullptr);
+    if (result != vk::Result::eSuccess)
+        throw std::runtime_error("Failed to query swapchain image count");
     // 获取交换链中的图像
-    target.images.clear();
-    target.images.resize(target.imageCount);
-    result = device.getSwapchainImagesKHR(target.swapChain, &target.imageCount, target.images.data());
-    assert(result == vk::Result::eSuccess);
+    std::vector<vk::Image> images(target.imageCount);
+    result = device.getSwapchainImagesKHR(owner->swapchain, &target.imageCount, images.data());
+    if (result != vk::Result::eSuccess)
+        throw std::runtime_error("Failed to query swapchain images");
+    images.resize(target.imageCount);
     // 创建交换链图像视图
-    target.imageViews.resize(target.imageCount);
+    owner->imageViews.resize(target.imageCount);
     for (uint32_t i = 0; i < target.imageCount; i++)
     {
-        VulkanDebug::SetObjectName(device, target.images[i], vk::ObjectType::eImage, "SwapChainImage: Index " + std::to_string(i));
-        target.imageViews[i] = CommonFunction::Create2DImageView(
+        VulkanDebug::SetObjectName(device, images[i], vk::ObjectType::eImage, "SwapChainImage: Index " + std::to_string(i));
+        owner->imageViews[i] = CommonFunction::Create2DImageView(
             device,
-            target.images[i],
+            images[i],
             1,
             target.surfaceFormat.format,
             vk::ImageAspectFlagBits::eColor,
             "SwapChainImageView_Index_" + std::to_string(i));
-        assert(target.imageViews[i]);
+        assert(owner->imageViews[i]);
     }
+    target.PublishSwapchain(std::move(owner), std::move(images));
 }
 
 void VulkanManager::DestroyVkSwapChain(VL::PresentTarget &target)
 {
-    for(vk::ImageView& imageView : target.imageViews)
-    {
-        if (imageView)
-        {
-            device.destroyImageView(imageView);
-        }
-    }
-    target.imageViews.clear();
-
-    if (target.swapChain)
-    {
-        device.destroySwapchainKHR(target.swapChain);
-        target.swapChain = nullptr;
-    }
-    target.imageCount = 0;
+    target.DetachSwapchain();
 }
 
 void VulkanManager::CreateCommandPool()

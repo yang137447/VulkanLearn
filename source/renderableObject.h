@@ -1,4 +1,5 @@
 #pragma once
+#include "render/diagnostics/terrainCaptureHooks.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -177,6 +178,7 @@ public:
     size_t GetVertexCapacity() const { return vertexCapacity; }
     size_t GetIndexCapacity() const { return indexCapacity; }
     bool HasPatchIndices() const { return patchIndexCount != 0; }
+    VL::TerrainMeshDrawBindings DescribeDrawBindings(uint32_t frameSlot, bool usePatchIndices) const;
     const Eigen::Vector3f& GetBoundsMin() const { return boundsMin; }
     const Eigen::Vector3f& GetBoundsMax() const { return boundsMax; }
     const std::string& GetName() const { return name; }

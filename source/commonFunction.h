@@ -8,6 +8,7 @@
 #include <array>
 #include <filesystem>
 #include <fstream>
+#include "core/tracingIfstream.h"
 #include <nlohmann/json.hpp>
 #include <math.h>
 #include <optional>
@@ -233,7 +234,8 @@ namespace CommonFunction
         }
 
         std::string configFolderPath = GetConfigFolderPath();
-        std::ifstream configFile(configFolderPath + "/config.json");
+        VL::RuntimeFileTrace::TracingIfstream configFile(
+            configFolderPath + "/config.json", std::ios::in, "CommonFunction.InitConfigJson");
         configJson = nlohmann::json();
         configFile >> configJson.value();
         return configJson.value();
@@ -248,7 +250,8 @@ namespace CommonFunction
         }
 
         std::string configFolderPath = GetConfigFolderPath();
-        std::ifstream renderGraphFile(configFolderPath + "/renderGraphConfig.json");
+        VL::RuntimeFileTrace::TracingIfstream renderGraphFile(
+            configFolderPath + "/renderGraphConfig.json", std::ios::in, "CommonFunction.InitRenderGraphJson");
         renderGraphJson = nlohmann::json();
         renderGraphFile >> renderGraphJson.value();
         return renderGraphJson.value();
@@ -333,15 +336,15 @@ namespace CommonFunction
     inline std::string Path(const std::string& path)
     {
         std::string fullPath = (std::filesystem::path(GetResourcePath()) / path).string();
-        if( !std::filesystem::exists(fullPath) )
+        if( !VL::RuntimeFileTrace::TraceExists(fullPath, "CommonFunction.Path") )
         {
             fullPath = GetProjectPath() + "/shader/spv/" + path;
         }
-        if( !std::filesystem::exists(fullPath) )
+        if( !VL::RuntimeFileTrace::TraceExists(fullPath, "CommonFunction.Path") )
         {
             fullPath = GetProjectPath() + "/" + path;
         }
-        if( !std::filesystem::exists(fullPath) )
+        if( !VL::RuntimeFileTrace::TraceExists(fullPath, "CommonFunction.Path") )
         {
             throw std::runtime_error("Failed to find file: " + path);
         }
@@ -350,7 +353,8 @@ namespace CommonFunction
 
     inline std::string ReadFile(const std::string& absFilePath)
     {
-        std::ifstream file(absFilePath.data(), std::ios::ate | std::ios::binary);
+        VL::RuntimeFileTrace::TracingIfstream file(absFilePath.data(),
+            std::ios::ate | std::ios::binary, "CommonFunction.ReadFile");
         if (!file.is_open())
         {
             throw std::runtime_error("Failed to open file: " + std::string(absFilePath));

@@ -59,6 +59,9 @@ struct RendererResourceLoadContext
     bool prerenderSkin = false;
     // 增量异步资产保留既有 MI 身份，但新 MI 的 JSON 只消费 worker 已冻结版本。
     const std::map<std::filesystem::path, nlohmann::json>* preparedMaterialSources = nullptr;
+    // V2 地形在 MI 读取前注入已恢复的生产输入；存在该项时禁止打开作者纹理描述。
+    std::map<std::string, std::map<std::string, std::shared_ptr<Texture>>> preboundMaterialTextures;
+    std::map<std::string, nlohmann::json> runtimeMaterialSources;
 
     void QueueGeneratedFile(
         std::filesystem::path path,

@@ -1,4 +1,5 @@
 #include "render/frontend/rendererFrontend.h"
+#include "render/diagnostics/terrainCaptureHooks.h"
 
 #include <string>
 #include <utility>
@@ -37,6 +38,11 @@ RenderDrawPacket BuildDrawPacket(const MeshDrawSnapshot& drawSnapshot)
     packet.terrainFeedbackEligible =
         drawSnapshot.terrainFeedbackEligible;
     packet.isTerrain = drawSnapshot.isTerrain;
+    if (packet.isTerrain && AcquireTerrainCaptureHooks())
+    {
+        packet.lodGroupId = drawSnapshot.lodGroupId;
+        packet.lodLevel = drawSnapshot.lodLevel;
+    }
     packet.windResponseProfileKey = drawSnapshot.windResponseProfileKey;
     packet.tressfxPointsPerGuide = drawSnapshot.tressfxPointsPerGuide;
     packet.tressfxSelectedGroup = drawSnapshot.tressfxSelectedGroup;

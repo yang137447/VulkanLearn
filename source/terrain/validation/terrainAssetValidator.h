@@ -5,6 +5,7 @@
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
+#include <limits>
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -68,6 +69,66 @@ inline uint32_t OptionalBoundedInteger(
     return static_cast<uint32_t>(value);
 }
 
+inline void ValidateCompositedVT(
+    const nlohmann::json& composited,
+    const std::string& assetPath)
+{
+    const std::string context = "Terrain compositedVT in " + assetPath;
+    if (!composited.is_object())
+        throw std::invalid_argument(context + " must be an object");
+    for (const auto& entry : composited.items())
+    {
+        if (entry.key() != "enabled" && entry.key() != "packagePath" &&
+            entry.key() != "virtualResolution" && entry.key() != "productionSourcePath")
+            throw std::invalid_argument(context + " has unknown field: " + entry.key());
+    }
+    if (!composited.contains("enabled") || !composited.at("enabled").is_boolean() ||
+        !composited.at("enabled").get<bool>())
+        throw std::invalid_argument(context + " requires explicit enabled=true; retired terrain rendering is unsupported");
+    if (!composited.contains("packagePath"))
+        throw std::invalid_argument(context + " requires packagePath; generate and Cook the terrain scene before rendering");
+    // 这里只校验作者路径，不要求 manifest 已存在；Editor cook 可以从无包状态开始。
+    for (const char* field : {"packagePath", "productionSourcePath"})
+    {
+        if (!composited.contains(field))
+            continue;
+        const auto& value = composited.at(field);
+        if (!value.is_string())
+            throw std::invalid_argument(context + " packagePath must be a string");
+        std::string packagePath = value.get<std::string>();
+        if (packagePath.empty() || packagePath.size() > 1024 ||
+            packagePath.find('\0') != std::string::npos ||
+            packagePath.find(':') != std::string::npos)
+            throw std::invalid_argument(context + " packagePath requires a resource-root-relative file");
+        std::replace(packagePath.begin(), packagePath.end(), '\\', '/');
+        const std::filesystem::path parsed(packagePath);
+        if (parsed.is_absolute() || parsed.has_root_name() ||
+            parsed.has_root_directory() || parsed.filename().empty() ||
+            parsed.filename() == ".")
+            throw std::invalid_argument(context + " packagePath must be resource-root-relative");
+        for (const auto& part : parsed)
+            if (part == "..")
+                throw std::invalid_argument(context + " packagePath must not contain traversal");
+    }
+    if (composited.contains("virtualResolution"))
+    {
+        const auto& resolution = composited.at("virtualResolution");
+        if (!resolution.is_array() || resolution.size() != 2)
+            throw std::invalid_argument(context + " virtualResolution requires [width, height]");
+        for (const auto& component : resolution)
+        {
+            if (!component.is_number_integer() ||
+                (component.is_number_unsigned()
+                    ? component.get<uint64_t>() > 8192
+                    : component.get<int64_t>() < 128 || component.get<int64_t>() > 8192))
+                throw std::invalid_argument(context + " virtualResolution requires integers in 128..8192");
+            const uint32_t dimension = component.get<uint32_t>();
+            if (dimension < 128 || (dimension & (dimension - 1)) != 0)
+                throw std::invalid_argument(context + " virtualResolution requires powers of two >= 128");
+        }
+    }
+}
+
 // 与 Scene/Texture 共享同一条作者数据校验入口；不读高度图、不生成网格。
 inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
 {
@@ -87,7 +148,7 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
             entry.key() != "pageOrigin" && entry.key() != "pageTilesPerSide" &&
             entry.key() != "materialInstancePath" &&
             entry.key() != "detailMaterialInstancePath" &&
-            entry.key() != "layers")
+            entry.key() != "layers" && entry.key() != "compositedVT")
         {
             throw std::invalid_argument(
                 "Unknown terrain field: " + entry.key() + " in " + assetPath);
@@ -102,6 +163,9 @@ inline void Validate(const nlohmann::json& asset, const std::string& assetPath)
         throw std::invalid_argument("Terrain requires non-empty name: " + assetPath);
     if (asset.contains("description") && !asset.at("description").is_string())
         throw std::invalid_argument("Terrain description must be string: " + assetPath);
+    if (!asset.contains("compositedVT"))
+        throw std::invalid_argument("Terrain requires compositedVT.enabled=true and packagePath; migrate and Cook before rendering: " + assetPath);
+    ValidateCompositedVT(asset.at("compositedVT"), assetPath);
     for (const char* field : {"heightmapPath", "materialInstancePath"})
     {
         if (!asset.contains(field) || !asset.at(field).is_string() ||

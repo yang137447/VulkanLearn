@@ -166,6 +166,7 @@ RenderSystem::CommitPreparedRuntimeBinding(
     VL::PreparedRuntimeBinding prepared) noexcept
 {
     activeWorld.swap(prepared.world);
+    UpdateTerrainProducerReloadRegistration();
     activeOfflineWorldAssets.swap(prepared.offlineWorldAssets);
     worldSnapshotBuilder.Swap(
         prepared.snapshotBuilder);

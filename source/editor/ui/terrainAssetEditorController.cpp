@@ -381,6 +381,10 @@ void TerrainAssetEditorController::Build(
             "<div class=\"terrain-asset-header\"><h3>" +
             Text(payload->document.value("name", std::string("Terrain"))) + "</h3>" +
             "<span>TR asset</span></div>" +
+            "<p class=\"notice\">Composited VT and resident tiling height are required. "
+            "Import terrain assets with tool/terrain-ue-import/build_vulkanlearn_assets.py, "
+            "then Cook the generated scene with main_editor --terrain-vt-cook before loading it in 3D. "
+            "This asset page previews the authored heightmap; it does not Cook or render an uncooked terrain.</p>" +
             (payload->heightmapPreviewPath.empty()
                 ? "<p class=\"terrain-empty\">Heightmap preview unavailable (missing, EXR, or unsupported format).</p>"
                 : "<div class=\"terrain-heightmap-preview\"><img src=\"" +

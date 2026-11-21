@@ -184,6 +184,8 @@ void MaterialInstance::ClearParameterValues(const std::string& parameterName)
 void MaterialInstance::SetTexture(const std::string& textureName, const std::shared_ptr<Texture>& texture)
 {
     std::unique_lock<std::shared_mutex> lock(stateMutex);
+    if (textures[textureName] != texture)
+        textureBindingVersion.fetch_add(1, std::memory_order_release);
     textures[textureName] = texture;
     textureBindingIdentities.erase(textureName);
 }
@@ -193,6 +195,8 @@ void MaterialInstance::SetTextureKeepingIdentity(
     const std::shared_ptr<Texture>& texture)
 {
     std::unique_lock<std::shared_mutex> lock(stateMutex);
+    if (textures[textureName] != texture)
+        textureBindingVersion.fetch_add(1, std::memory_order_release);
     textures[textureName] = texture;
 }
 
@@ -203,6 +207,8 @@ void MaterialInstance::SetTexture(
     std::optional<std::string> textureCacheIdentity)
 {
     std::unique_lock<std::shared_mutex> lock(stateMutex);
+    if (textures[textureName] != texture)
+        textureBindingVersion.fetch_add(1, std::memory_order_release);
     textures[textureName] = texture;
     if (textureAssetIdentity)
     {

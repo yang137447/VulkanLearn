@@ -21,6 +21,7 @@
 | `pwsh -File tool/architecture-final-validation.ps1` | 已构建 | 边界审计 + 最终验证矩阵（它调用上面的审计脚本） | 提交前 |
 | `cmake --build build --target <target> -j8` | 已 configure | 编译该目标 | 改任何被它编译的源码后 |
 | `ctest --test-dir build -R <regex> --output-on-failure` | 已构建对应目标 | 模块测试 | 见下"改动 → 验证" |
+| `cmake --build build --target terrain_production_priority_tests -j4` 后运行 `build/bin/terrain_production_priority_tests.exe` | 已 configure 地形 GTest | source-owned selector 的实际 Runtime 页表/slot/fence、公平推进、候选提交、status/Abort，以及 Service 唯一路径接线；同时执行所包含的候选回归 | 修改 Service 生产选页或 `terrainCompositedProductionPriority.h` 后；不替代实机 10 秒画质及性能验收 |
 | `.\build\bin\main_editor.exe --dev-ui` | 已构建、`config/config.json` 可解析 | 端到端渲染/交互 | UI 或渲染路径改动后（见"手工与像素验证"） |
 | `<blender-python> tool/blender-terrain-import/terrain_erosion_tests.py -v` | Blender 5.2 Python（含 numpy） | MFD/D8 汇流差异、沉积质量账、抬升耦合、沉积长度尺度 | 改 `tool/blender-terrain-import/terrain_erosion.py` 后；也可通过 `VULKANLEARN_TERRAIN_EROSION_PYTHON` 注册为 CTest 项 |
 
@@ -2156,13 +2157,21 @@ Houdini 导出。决定与数据映射见
 - 截图：`artifacts/houdini_ingest/houdini_far.png`、
   `houdini_top.png`；层语义检查 `artifacts/houdini_ingest/houdini_layers.png`。
 
-2026-11-17 之前 `config/config.json` 指向
-`Generated/HoudiniPegasusIsland/SC_terrain_pegasus_4x4.json`（20 objects，
-含独立水面 `SeaSurface`）；该目录已删除，默认场景改为
-`Maps/SC_fracture_playground/SC_fracture_playground.json`。下方 4 km 的驻留/帧率
-数字是在已退役的 `HoudiniPegasus4km` 参考资产上测的，只作为历史证据，
-不代表当前资产。GN 资产 `Generated/BlenderPegasusGN*` 暂时保留为对照，
-不再作为出货路径，也不进入默认启动。
+`config/config.json` 当前指向
+`Generated/HoudiniPegasusIsland/SC_terrain_pegasus_4x4.json`（21 objects，
+16 个 terrain、独立水面 `SeaSurface`、Echo 角色、灯光/相机/环境）。
+2026-11-17 当天该目录曾被误删、默认场景临时切到
+`Maps/SC_fracture_playground/SC_fracture_playground.json`；随后按
+`tool/houdini-terrain-import/README.md` 的「Pegasus 岛屿」链路从
+`D:\YYBWorkSpace\Pegasus\decoded\island2k` 重建（16 tile、7 层、
+`Global/T_global_colour|masks`、独立水面），默认场景已恢复。
+重建后的实测：`resident=591/595`、`globalLayers=7`、`visibleLayers=7`、
+`bodies=16 proxies=16 patches=1`；LOD0 通过
+`MI_terrain_pegasus_island_tess.json` 开启
+`VL_TERRAIN_TESSELLATION=1`，碰撞/脚 IK 仍只读宏高度场。
+下方 4 km 的驻留/帧率数字是在已退役的 `HoudiniPegasus4km` 参考资产上测的，
+只作为历史证据，不代表当前资产。GN 资产 `Generated/BlenderPegasusGN*`
+暂时保留为对照，不再作为出货路径，也不进入默认启动。
 
 ### 构建类型对帧率的影响（2026-11-09 实测）
 
@@ -2200,3 +2209,82 @@ Houdini 导出。决定与数据映射见
 
 修复前两者都是单一 mip（远景全 mip3、驻留 5 页）。截图
 `artifacts/river_stage/river_far.png`（远景，细节恢复）。
+
+### 合成 VT 历史快照收据（2026-11-20）
+
+下列收据属于此前 2×2 weighted/V1 快照，不能作为本轮 V2/gen3 RVT 验收结果。
+当时的证据索引为
+[最终证据](../rationale/terrain-composited-vt-final-evidence.md)，
+交付操作见 [验收入口](../reference/rendering/terrain-composited-vt-acceptance.md)。
+固定几何的真实 R8192 远中近基础色/光照 ROI 门禁通过；
+S3 两线程/低预算/World 换代和 S4 实际 EditorHost 编辑闭环均有运行收据。
+最终 weighted shader 的新 Cook、新包、原十八次质量门禁、
+正常 LOD/TES 三视角与 S4 worker2 重验通过。
+新包变更相关版本/filter 拒绝与恢复及官方 validator 通过，
+其余未变故障类别显式链接上版七类完整收据。
+真实四地块产品的 1,800 帧近景成本采样已完成；CPU 含 60 Hz 等待，
+GPU query 为部分 pass，不作为完整地形帧耗时。
+模块测试数量、条件跳过及逐项证据见最终索引；不以 CPU 模块通过替代画面检查。
+
+### RVT V2/gen3 当前验证入口（2026-11-21）
+
+当前实现边界见 [RVT 契约](terrain-composited-vt.md)，操作见
+[作者与验收入口](../reference/rendering/terrain-composited-vt-acceptance.md)。
+P0 基线 PASS、P6 不采用 BC5/BC7 的决策有独立收据；
+P1/P2 中审 pending，P3 性能、Full16 Game、P4 真实编辑均未完整通过。
+当前 active仅World/WorldPadding，旧五个compute及旧quality capture pass已删除。
+编译/ABI检查不能代替实际GPU验收；
+[P3 中审](../rationale/terrain-rvt-p3-independent-audit.md) 的 Repeat129末页反例及
+设备能力准入缺口保留原失败及追加整改复核。
+有限Top4候选数值/validation-off性能子项已独立接受，
+不是source-controlled promotion后真实10936页或Full16Game通过；
+Clamp支持域证明不能推广为Repeat裁剪等价，P3整体pending。
+
+| 改动 | 验证边界 |
+| --- | --- |
+| V2 Store/Production/Adjacency | `terrain_tests` 的 TerrainComposited 选择集；严格稀疏、根索引、真实输入摘要、路径/链接替换、发布失败保旧等负例 |
+| World pool/预算/调度 | TerrainRvtBudget/TerrainRvtScheduler/Residency CPU 回归；实际 allocation、同池竞争、旧帧退休/迟到任务另需 GPU 集成证据 |
+| 双权重/高度/overlay | ProductionGpu/WeightOverlay/HeightAtlas 模块；真实 Game 两种权重各 worker1/2、TES 生效和独立数值证据不能互相替代 |
+| 编辑 dirty/监控/Sculpt | `terrain_composited_refresh_tests`、`editor_ui_tests` 相关选择集；真实 CommandBus/EditorHost 编辑、冲突、保存→Cook→重开另验 |
+| quality frame/winner/readback | 原反馈7MRT的两张128² RGBA32_UINT完整winner+同次final depth，单次compute导入/解析；真实提交epoch/owner/可见identity/有效mip/ROI和interactive分别验证，不使用旧depth replay |
+| exporter/独立包 | `game_export_tests` 与 `vl_export_game --verify-package` 全闭包校验；离线只读 Game、未访问生产、损坏恢复、整进程成本另验 |
+
+已有构建目录的针对性入口（本轮文档任务未执行这些测试或构建）：
+
+```powershell
+.\build-vt-release\bin\terrain_tests.exe --gtest_filter="TerrainComposited*:TerrainRvt*:TerrainHeightAtlas*:TerrainVertexUpdateQueue*:TerrainChunkStreamer*"
+.\build-vt-release\bin\terrain_composited_refresh_tests.exe
+.\build-vt-release\bin\editor_ui_tests.exe --gtest_filter="TerrainCompositedSculptApply.*"
+.\build-vt-release\bin\game_export_tests.exe
+py -3 tool\validate-docs.py
+```
+
+以当前 `--gtest_list_tests`、CMake 注册目标和实际执行日志为准，不冻结并行修改中的
+测试数量。CPU helper、源码接线、glslc/spirv-val PASS 不计为阶段 PASS。
+`rvt_delivery.py`/`run_rvt_case.py` 消费绑定二进制、shader、输入与冻结 hash 的真实收据；
+缺 native events/quality/readiness 证据时报告 incomplete，不接受人工 gate=true。
+
+固定 P0Frozen SHA256 为
+`43fba0dd79a60a4a8b740598c7975d743ace9d32215adb35d8cab213e088e0dd`；
+JSON 原 pending 字段保持，独立审计见 [P0 收据](../rationale/terrain-rvt-p0-independent-audit.md)。
+同条件至少1000 raw帧，GPU逐帧 timestamp 而非滚动均值；
+geometry 含 TES 不是独立 TES 计时，pass sum 不是未计时工作在内的完整 GPU 帧。
+固定槽/输入/工作区/CPU/外层terrain额度、生产4ms/组合6ms、10s收敛、
+目标+bias可见就绪比例/identity、启动与PID/WDDM阈值均按原冻结文件，
+不为失败增预算、降低画质或改变分母。
+当前细页磁盘缓存 disabled，相关删除/损坏case只记 not-applicable，
+不算实际执行通过；新进程/新物理驻留及未访问区域生产仍必须验证。
+
+当前winner的两份actual capture complete=true/duplicate=0、validation错误0、
+workspace约27.396 MB是模块收据；complete不自动意味着
+validAtTargetPlusBias比例达标、interactive或完整P3通过。
+ABI version2与raw duplicate appendix保留，不清除旧replay失败证据；
+旧 `terrainQualityCapturePass.cpp` 不在运行/路由中。
+RawAuthorSource kind3回归须分别检查raw对象bytes摘要、作者投影digest与监控基线绑定，
+确认它不混入generator或基础页hash；不能用改变raw摘要冒充基础参数发生变化。
+
+Full16 的16块近景、24内部边、9交点和4外角，双权重/双worker、正常LOD/TES、
+根payload损坏恢复与输入损坏拒绝、candidate/active/retiring峰值，
+以及无显式场景参数的默认启动均需绑定最终源码/包证据。
+当前默认 config 尚未切换至新 RVTv2；历史入口存在不是迁移通过。
+本轮文档 gate 只验证分层、链接、路由和已声明规则名，不证明上述运行行为。

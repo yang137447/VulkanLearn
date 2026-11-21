@@ -330,6 +330,7 @@ TEST_F(TerrainHeightmapIOTest, TerrainAssetLoaderUsesSixteenBitHeightmapPath)
     nlohmann::json asset = {
         {"name", "TR_terrain16"},
         {"type", "terrain"},
+        {"compositedVT", {{"enabled", true}, {"packagePath", "Generated/Validation/TerrainIO/Cooked/manifest.json"}}},
         {"heightmapPath", heightmapPath.string()},
         {"size", {1000.0, 1000.0}},
         {"heightScale", 100.0},

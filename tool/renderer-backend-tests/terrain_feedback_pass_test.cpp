@@ -81,10 +81,10 @@ TEST(TerrainFeedbackGraph, CompilesDedicatedColorAndDepthPass)
         "terrainFeedback");
     EXPECT_EQ(
         feedbackPass->outputResources[1].resource,
-        "terrainLayerFeedback0");
+        "terrainCompositedFeedback0");
     EXPECT_EQ(
         feedbackPass->outputResources[4].resource,
-        "terrainLayerFeedback3");
+        "terrainCompositedFeedback3");
     EXPECT_EQ(
         feedbackPass->outputResources[5].resource,
         "terrainFeedbackDepth");
@@ -211,4 +211,19 @@ TEST(TerrainFeedbackGraph, RequiresWorldTextureInputAndMaterial)
         FeedbackPass(graph)["needCreateMaterial"] = false;
         EXPECT_TRUE(VL::RenderGraphCompiler{}.Compile(graph).IsFailure());
     }
+}
+
+TEST(TerrainFeedbackGraph, SupportsCompositedSurfaceMapAndRejectsExtraBindings)
+{
+    auto graph = LoadGraph();
+    auto& inputs = FeedbackPass(graph)["input"];
+    ASSERT_EQ(inputs.size(), 5u);
+    EXPECT_EQ(inputs[4]["resource"], "terrainCompositedSurfaceMap");
+    EXPECT_EQ(inputs[4]["binding"], 4);
+    EXPECT_TRUE(VL::RenderGraphCompiler{}.Compile(graph).IsSuccess());
+    inputs.push_back({
+        {"resource", "unexpected"},
+        {"source", "worldTexture"},
+        {"binding", 5}});
+    EXPECT_TRUE(VL::RenderGraphCompiler{}.Compile(graph).IsFailure());
 }

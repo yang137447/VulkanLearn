@@ -44,11 +44,6 @@ def _parse_args() -> argparse.Namespace:
         "100 km sea plane reaches past the top of the frame)",
     )
     parser.add_argument(
-        "--shared-material-name",
-        default="MI_terrain_pegasus_island",
-        help="shared terrain MI basename (default: %(default)s)",
-    )
-    parser.add_argument(
         "--character-blueprint",
         default="Maps/SC_valley_echo/Blueprints/BP_echo_character.json",
         help="C# player character blueprint placed in the merged scene; "
@@ -95,59 +90,30 @@ def _load_converter():
     return module
 
 
-def _rewrite_shared_material(
+def _prepare_composited_materials(
     resource_root: Path,
     tile_entries: list[dict[str, Any]],
-    shared_material_name: str,
     verbose: bool,
 ) -> None:
-    if Path(shared_material_name).name != shared_material_name:
-        raise RuntimeError(
-            "--shared-material-name must be a basename without path separators")
-    first_output = Path(tile_entries[0]["outputRelative"])
-    shared_relative = (
-        first_output.parent / f"{shared_material_name}.json").as_posix()
-    shared_path = resource_root / shared_relative
-
-    # 全局（非平铺）图对所有 tile 相同：宏观色 + AO/湿度。打包脚本见
-    # tool/houdini-terrain-import/bake_global_maps.py。
-    global_textures = {
-        "globalColour": "Generated/HoudiniPegasusIsland/Global/T_global_colour.json",
-        "globalMasks": "Generated/HoudiniPegasusIsland/Global/T_global_masks.json",
-    }
-    first = tile_entries[0]
-    first_root = resource_root / first["outputRelative"]
-    first_mi_path = first_root / f"MI_terrain_{first['assetName']}.json"
-    # --skip-convert 复用已转换 tile 时，per-tile MI 已被上一次装配删除；
-    # 此时以现有共享 MI 为基底，保证重跑幂等。
-    source_mi_path = first_mi_path if first_mi_path.is_file() else shared_path
-    shared_mi = _load_json(source_mi_path)
-    textures = shared_mi.get("textures")
-    if not isinstance(textures, dict):
-        raise RuntimeError(f"MI has no textures object: {source_mi_path}")
-    for key in ("layerTable", "layerIds", "layerWeights", "pageTable",
-                "layerAlbedo", "layerNormal", "layerPbr"):
-        value = textures.get(key)
-        if not isinstance(value, str) or not value:
-            raise RuntimeError(f"MI is missing texture {key}: {source_mi_path}")
-    textures.update(global_textures)
-    shared_mi["name"] = shared_material_name
-    _write_json(shared_path, shared_mi)
-    if verbose:
-        print(f"shared terrain material -> {shared_path}")
-
+    material_paths: set[Path] = set()
     for tile in tile_entries:
         output_root = resource_root / tile["outputRelative"]
-        tr_path = output_root / f"TR_terrain_{tile['assetName']}.json"
-        tr = _load_json(tr_path)
-        if tr.get("materialInstancePath") != shared_relative:
-            tr["materialInstancePath"] = shared_relative
-            _write_json(tr_path, tr)
-            if verbose:
-                print(f"terrain material -> {shared_relative}: {tr_path}")
-        per_tile_mi = output_root / f"MI_terrain_{tile['assetName']}.json"
-        if per_tile_mi.is_file():
-            per_tile_mi.unlink()
+        terrain = _load_json(output_root / f"TR_terrain_{tile['assetName']}.json")
+        if terrain.get("compositedVT", {}).get("enabled") is not True:
+            raise RuntimeError(
+                "Terrain assembly requires compositedVT.enabled=true; regenerate and Cook every tile")
+        material_path = resource_root / terrain["materialInstancePath"]
+        if material_path.resolve() in material_paths:
+            raise RuntimeError("Composited surfaces require independent material instances; regenerate tiles")
+        material_paths.add(material_path.resolve())
+        material = _load_json(material_path)
+        material.setdefault("textures", {}).update({
+            "globalColour": "Generated/HoudiniPegasusIsland/Global/T_global_colour.json",
+            "globalMasks": "Generated/HoudiniPegasusIsland/Global/T_global_masks.json",
+        })
+        _write_json(material_path, material)
+        if verbose:
+            print(f"independent composited terrain material -> {material_path}")
 
 
 def main() -> int:
@@ -194,8 +160,7 @@ def main() -> int:
                 args.verbose,
             )
 
-    _rewrite_shared_material(
-        resource_root, tiles, args.shared_material_name, args.verbose)
+    _prepare_composited_materials(resource_root, tiles, args.verbose)
 
     scenes: list[dict[str, Any]] = []
     for tile in tiles:
@@ -218,6 +183,32 @@ def main() -> int:
             "scene": scene,
             "terrain": terrain,
         })
+
+    output_scene = (args.output_scene or layout_path.parent / "SC_terrain_pegasus_4x4.json").resolve()
+    recipe_directory = output_scene.parent
+    if not recipe_directory.is_relative_to(resource_root):
+        raise RuntimeError("World output escapes resources")
+    validation_tools = Path(__file__).resolve().parents[1] / "validation/terrain"
+    specification = importlib.util.spec_from_file_location(
+        "terrain_world_authoring", validation_tools / "build_composited_fixture.py")
+    authoring = importlib.util.module_from_spec(specification)
+    specification.loader.exec_module(authoring)
+    cells = {(tile["gridX"], tile["gridZ"]): f"terrain|Landscape_{tile['index']:02d}"
+             for tile in tiles}
+    if len(cells) != len(tiles):
+        raise RuntimeError("Duplicate tile grid coordinates")
+    recipe = authoring.world_author_recipe(list(cells.values()), cells)
+    recipe_name = (recipe_directory / "world.author.json").relative_to(resource_root).as_posix()
+    package_name = (recipe_directory / "Published/manifest.json").relative_to(resource_root).as_posix()
+    for entry in scenes:
+        terrain_path = resource_root / entry["terrain"]["terrainPath"]
+        descriptor = _load_json(terrain_path)
+        settings = descriptor["compositedVT"]
+        if set(settings) != {"enabled", "virtualResolution", "packagePath", "productionSourcePath"}:
+            raise RuntimeError("Retired terrain schema; regenerate tiles before assembly")
+        settings.update({"packagePath": package_name, "productionSourcePath": recipe_name})
+        _write_json(terrain_path, descriptor)
+    _write_json(resource_root / recipe_name, recipe)
 
     template = scenes[0]["scene"]
     merged_objects = [
@@ -294,6 +285,13 @@ def main() -> int:
         "scene": str(output_scene),
         "tiles": len(tiles),
         "objects": len(merged_objects),
+        "renderReady": False,
+        "requiredCookIdentity": {
+            "generatorVersion": 3,
+            "filterRule": "mip0-center-coarse-area-local-normal-rvt-adjacency-padding-v3",
+            "encoding": "gpu-rvt-adjacency-area4-rgba8-v3",
+        },
+        "nextStep": "Cook the complete World recipe before 3D loading; budgets come from P0.",
     }, ensure_ascii=False, indent=2))
     return 0
 

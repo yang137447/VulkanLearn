@@ -31,22 +31,25 @@ void main()
     const float w1 = u * (1.0 - v);
     const float w2 = u * v;
     const float w3 = (1.0 - u) * v;
+    const vec4 macroWeights = u + v <= 1.0
+        ? vec4(1.0 - u - v, u, 0.0, v)
+        : vec4(0.0, 1.0 - v, u + v - 1.0, 1.0 - u);
 
     vec3 worldPosition =
-        v2fIn[0].worldPosition * w0 +
-        v2fIn[1].worldPosition * w1 +
-        v2fIn[2].worldPosition * w2 +
-        v2fIn[3].worldPosition * w3;
+        v2fIn[0].worldPosition * macroWeights.x +
+        v2fIn[1].worldPosition * macroWeights.y +
+        v2fIn[2].worldPosition * macroWeights.z +
+        v2fIn[3].worldPosition * macroWeights.w;
     vec3 worldNormal = normalize(
         v2fIn[0].worldNormal * w0 +
         v2fIn[1].worldNormal * w1 +
         v2fIn[2].worldNormal * w2 +
         v2fIn[3].worldNormal * w3);
     const vec4 previousClipPosition =
-        v2fIn[0].previousClipPosition * w0 +
-        v2fIn[1].previousClipPosition * w1 +
-        v2fIn[2].previousClipPosition * w2 +
-        v2fIn[3].previousClipPosition * w3;
+        v2fIn[0].previousClipPosition * macroWeights.x +
+        v2fIn[1].previousClipPosition * macroWeights.y +
+        v2fIn[2].previousClipPosition * macroWeights.z +
+        v2fIn[3].previousClipPosition * macroWeights.w;
     const vec4 vertexColor =
         v2fIn[0].vertexColor * w0 +
         v2fIn[1].vertexColor * w1 +
@@ -86,10 +89,10 @@ void main()
     // 所有层采样都走显式 LOD，并跳过 fragment 专用的 height-blend。
     MaterialFunctionContext ctx;
     ctx.clipPosition =
-        v2fIn[0].clipPosition * w0 +
-        v2fIn[1].clipPosition * w1 +
-        v2fIn[2].clipPosition * w2 +
-        v2fIn[3].clipPosition * w3;
+        v2fIn[0].clipPosition * macroWeights.x +
+        v2fIn[1].clipPosition * macroWeights.y +
+        v2fIn[2].clipPosition * macroWeights.z +
+        v2fIn[3].clipPosition * macroWeights.w;
     ctx.previousClipPosition = previousClipPosition;
     ctx.worldPosition = worldPosition;
     ctx.worldNormal = worldNormal;

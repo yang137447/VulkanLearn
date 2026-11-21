@@ -1,4 +1,10 @@
 file(GLOB_RECURSE sources CONFIGURE_DEPENDS "*.h" "*.cpp")
+list(APPEND sources
+    "${CMAKE_CURRENT_SOURCE_DIR}/terrain/terrainFaultInjection.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/engine/testing/terrainRvtFaultTests.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render/backend/frameAbandonVulkan.cpp"
+    "${CMAKE_CURRENT_SOURCE_DIR}/render/frame/frameSubmitFault.cpp")
+list(REMOVE_DUPLICATES sources)
 # 纯 CPU 离线核心由独立静态库拥有，不能随递归源文件再次编进运行时。
 list(FILTER sources EXCLUDE REGEX "/render/offline/core/")
 # 纯 CPU 破碎核心由独立静态库拥有，不依赖 Vulkan/Jolt，也不重复编进运行时。

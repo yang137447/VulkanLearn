@@ -129,6 +129,16 @@ const std::vector<vk::ImageView>& RendererBackendVulkan::GetSwapchainImageViews(
     return rhiDevice->GetSwapchainImageViews(rhiDevice->GetPresentTarget());
 }
 
+std::shared_ptr<const void> RendererBackendVulkan::CapturePresentTargetLifetime() const
+{
+    return rhiDevice->CapturePresentTargetLifetime(rhiDevice->GetPresentTarget());
+}
+
+uint64_t RendererBackendVulkan::GetPresentTargetGeneration() const
+{
+    return rhiDevice->GetPresentTargetGeneration(rhiDevice->GetPresentTarget());
+}
+
 float RendererBackendVulkan::GetTimestampPeriodNanoseconds()
 {
     return rhiDevice->GetTimestampPeriodNanoseconds();
@@ -142,6 +152,11 @@ uint32_t RendererBackendVulkan::GetGraphicsTimestampValidBits()
 bool RendererBackendVulkan::SupportsTimestampQueries()
 {
     return rhiDevice->SupportsTimestampQueries();
+}
+
+vk::PhysicalDeviceLimits RendererBackendVulkan::GetSelectedDeviceLimits() const
+{
+    return rhiDevice->GetPhysicalDevice().getProperties().limits;
 }
 
 bool RendererBackendVulkan::SupportsDualSourceBlend() const

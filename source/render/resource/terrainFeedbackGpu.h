@@ -7,6 +7,7 @@
 #include <vulkan/vulkan.hpp>
 
 #include "terrain/terrainFeedback.h"
+#include "terrain/terrainRvtBudget.h"
 
 namespace VL
 {
@@ -18,7 +19,8 @@ class RendererBackendVulkan;
 class TerrainFeedbackGpuRing
 {
 public:
-    explicit TerrainFeedbackGpuRing(RendererBackendVulkan& rendererBackend);
+    explicit TerrainFeedbackGpuRing(RendererBackendVulkan& rendererBackend,
+        std::shared_ptr<TerrainRvtBudgetOwner> budget = {});
     ~TerrainFeedbackGpuRing();
 
     TerrainFeedbackGpuRing(const TerrainFeedbackGpuRing&) = delete;
@@ -54,6 +56,7 @@ private:
     std::vector<vk::DeviceMemory> memories;
     std::vector<void*> mapped;
     TerrainFeedbackRingState ringState;
+    std::optional<TerrainRvtBudgetLease> lease;
 };
 
 } // namespace VL

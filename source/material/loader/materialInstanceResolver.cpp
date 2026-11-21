@@ -2,6 +2,7 @@
 
 #include <filesystem>
 #include <fstream>
+#include "core/tracingIfstream.h"
 #include <stdexcept>
 #include <string>
 #include <vector>
@@ -172,7 +173,8 @@ namespace
 
 nlohmann::json MaterialInstanceResolver::LoadDefinition(std::string_view materialPath)
 {
-    std::ifstream materialFile(CommonFunction::Path(std::string(materialPath)));
+    VL::RuntimeFileTrace::TracingIfstream materialFile(
+        CommonFunction::Path(std::string(materialPath)), std::ios::in, "MaterialInstanceResolver.MDefinition");
     if (!materialFile.is_open())
     {
         throw std::runtime_error("Failed to open material definition: " + std::string(materialPath));

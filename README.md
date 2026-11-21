@@ -1,7 +1,18 @@
 # VulkanLearn
 
 ## 简介
-这是一个基于 Vulkan 的渲染学习项目，支持阴影映射、后处理、场景加载和 CPU 高度图地形网格等功能。地形已包含 CPU 几何 LOD/边界缝合、运行时 LOD 选择、异步 CPU chunk 构建 + GT 上传/卸载、加载期驻留和 Play 模式 Jolt heightfield 碰撞；运行时异步 GPU 上传、地形笔刷编辑和编辑后碰撞重建仍未完成。项目集成了 Tracy Profiler 和 NVIDIA Nsight Systems 用于性能分析。
+这是一个基于 Vulkan 的渲染学习项目，支持阴影映射、后处理、场景加载和 CPU 高度图地形网格等功能。地形包含 CPU 几何 LOD/边界缝合、运行时 chunk 构建与驻留、Landscape Paint/Sculpt；材质运行时统一使用 compositedVT + 常驻 tiling height。碰撞来自宏高度，编辑后的更新边界见 [地形合同](documents/contracts/terrain.md)，材质资源与 Cook 规则见 [合成 VT 合同](documents/contracts/terrain-composited-vt.md)。项目集成了 Tracy Profiler 和 NVIDIA Nsight Systems 用于性能分析。
+
+当前 `config/config.json` 的默认地形入口是
+`Generated/Validation/TerrainCompositedVT/Variants/Full4x4_R8192_Default/SC_composited_vt_4x4.json`。
+当前工作树采用 V2 稀疏 World 发布/gen3 按需生产、共享物理池和独立 R16 高度。
+生产入口仅 World/WorldPadding；quality 从原反馈7MRT取得完整winner与final depth，
+旧五compute和depth-replay capture pass已退出。有限模块/候选收据不表示interactive。
+TR 必须声明 `compositedVT.enabled=true` 与共享 `packagePath`；
+Editor/Cook 另需共享 `productionSourcePath` 配方。旧 TR 预算字段和 V1 自动回退已拒绝。
+上述默认入口尚未切到新 RVTv2 场景；P3 性能、Full16 Game、P4 真实编辑未完整通过。
+固定 P0Frozen 预算不可放宽；操作、默认切换条件与证据范围见
+[验收入口](documents/reference/rendering/terrain-composited-vt-acceptance.md)。
 
 ## 文档分工
 
@@ -38,6 +49,8 @@
 - `documents/contracts/game-ui-stack.md`
 - `documents/contracts/texture-asset-json-v1.md`
 - `documents/contracts/terrain.md`
+- [合成地形 VT 当前实现](documents/contracts/terrain-composited-vt.md)
+- [合成地形 VT 验收入口](documents/reference/rendering/terrain-composited-vt-acceptance.md)
 - `documents/contracts/asset-modify-api.md`
 - `documents/contracts/material-param-authoring-and-reflection.md`
 - `documents/contracts/descriptor-imageinfo-management.md`

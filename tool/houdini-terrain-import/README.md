@@ -32,8 +32,13 @@ SourceContent\Pegasus\Landscape\Landscape Heightfield Layers\
 **不使用 UE 的 `T_Terrain_IDMAP.png`**。层权重由我们自己的
 `prepare_pegasus_4km.py` 从 Houdini 的体积派生（water/debris/sediment 深度、
 坡度百分位出岩石、`height<3 m` 出海面），需要改层语义时改 Houdini 导出或该
-脚本，而不是去解 UE 的 bitpack。当前 6 层：`Gravel Ground / Rock Face /
-River Water / Scree Debris / River Silt / Sea`。
+脚本，而不是去解 UE 的 bitpack。当前 7 层：`Gravel Ground / Rock Face /
+River Water / Scree Debris / River Silt / Sea / Beach Sand`。
+
+> **Python 依赖。** 下面 2)–4) 都是普通 Python 3 脚本，只需要
+> `numpy` + `Pillow`，**不需要 Blender**。示例里的 `$py` 指向 Blender 自带的
+> `python.exe`，只是因为本机 `py -3` 没有装这两个包；它被当作 Python
+> 解释器使用，不会启动 Blender，也不加载任何 .blend 场景。
 
 ```powershell
 $py = "D:\YYBWorkSpace\Tools\blender-5.2.3-windows-x64\5.2\python\bin\python.exe"

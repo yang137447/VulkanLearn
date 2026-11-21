@@ -223,6 +223,11 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             options.forceShaderRebuild = true;
             continue;
         }
+        if (argument == "--terrain-vt-cook")
+        {
+            options.terrainVtCook = true;
+            continue;
+        }
 
         if (argument == "--worker-thread-count")
         {
@@ -430,6 +435,7 @@ void PrintLaunchUsage()
         << "       main.exe [--shader-compute-reload-test --exit-after-tests]\n"
         << "       main.exe [--world-graph-transaction-test --exit-after-tests]\n"
         << "       main.exe [--shader-force-rebuild]\n"
+        << "       main_editor.exe --terrain-vt-cook --initial-scene <scene-path> --exit-after-frames 2\n"
         << "       main.exe [--initial-scene <scene-path>]\n"
         << "       main.exe [--worker-thread-count <1|2>]\n"
         << "       main.exe [--frame-limit <hz>]\n"

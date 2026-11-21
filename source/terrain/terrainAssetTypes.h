@@ -211,6 +211,16 @@ struct TerrainLayerPaintData
     bool HasPaint(uint32_t layer, float u, float v) const;
 };
 
+// 生产 TR 必须显式启用并指定 packagePath；默认 disabled 用于识别未初始化的内部配置。
+// 资产预检不要求包已存在，实际渲染前必须先 Cook。
+struct TerrainCompositedVTDesc
+{
+    bool enabled = false;
+    std::string packagePath;
+    std::string productionSourcePath;
+    Eigen::Vector2i virtualResolution = Eigen::Vector2i(1024, 1024);
+};
+
 // TR_*.json 解析后的几何/材质描述。size、heightScale、heightOffset 的单位都是 cm，
 // 与世界单位一致；heightmap 是资源根相对路径，不套材质纹理的 V 翻转。
 struct TerrainAssetDesc
@@ -249,6 +259,7 @@ struct TerrainAssetDesc
     // 最粗一级永远驻留，不进入该表。为空时由 TerrainChunkResidencyDistancesCm
     // 从 lodDistances 推导（×1.1 覆盖滞回带上沿）。
     std::vector<float> chunkResidencyDistancesCm;
+    TerrainCompositedVTDesc compositedVT;
 };
 
 // 按 LOD 选择材质实例路径：只有 LOD0 且作者显式设置 detail 时使用细分 MI。

@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include "render/backend/rendererDescriptorWriter.h"
+#include "render/resource/terrainCompositedWorldBindings.h"
 #include "render/backend/rendererDescriptorPlan.h"
 #include "render/rendergraph/renderGraphCompiler.h"
 #include "render/rhi/rhiResourceHandles.h"
@@ -127,6 +128,9 @@ struct Renderpass
     vk::DescriptorPool descriptorPool;
     VL::RHIDescriptorPoolHandle descriptorPoolHandle;
     std::vector<std::vector<vk::DescriptorImageInfo>> inputDescriptorImageInfos;
+    std::shared_ptr<const VL::WorldBindingRegistryLease> worldBindingRegistryLease;
+    std::vector<VL::WorldBindingImageOwner> worldBindingImageOwners;
+    std::vector<std::vector<vk::WriteDescriptorSet>> worldBindingWrites;
     VL::RHIDescriptorSetLayoutHandle emptyDescriptorSetLayoutHandle;
     vk::DescriptorSetLayout emptyDescriptorSetLayout;
     VL::RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle;
@@ -260,6 +264,13 @@ public:
     void RefreshRuntimeDescriptors(
         VL::RendererBackendVulkan& rendererBackend,
         const VL::RendererDescriptorContext& descriptorContext);
+    void SafeUpdateCurrentImageWorldBindings(
+        VL::RendererBackendVulkan& rendererBackend,
+        VL::RendererResourceCache& resourceCache, uint32_t imageIndex) const;
+    void SafeUpdateCurrentImageWorldBindings(
+        VL::RendererResourceCache& resourceCache, uint32_t imageIndex,
+        void (*writer)(void*, const std::vector<vk::WriteDescriptorSet>&),
+        void* writerContext) const;
     // Pass materials are world-local in the current bridge. Capture/restore is
     // used to roll back a failed world load without leaving passes bound to the
     // partially loaded world's material instances.

@@ -100,7 +100,7 @@ bool TerrainPaintSession::Create(
     {
         // 已持久化快照是会话的起点，不能再用空白层覆盖；尺寸与层数必须与
         // TR 完全一致，否则笔画索引会写到错误的 layer/texel。
-        if (loaded->width != loaded->height ||
+        if (loaded->width < 2 || loaded->width != loaded->height ||
             loaded->layerCount != candidate.layerCount_)
         {
             error =
@@ -138,13 +138,38 @@ void TerrainPaintSession::MarkChanged()
     strokeChanged_ = true;
 }
 
+void TerrainPaintSession::EnsureWritable()
+{
+    if (!paint_.unique())
+        paint_ = std::make_shared<TerrainLayerPaintData>(*paint_);
+}
+
+void TerrainPaintSession::IncludeChangedTexel(uint32_t horizontal, uint32_t vertical)
+{
+    const double width = paint_->width - 1;
+    const double height = paint_->height - 1;
+    compositedDirty_.Include({
+        std::max(0., (double(horizontal) - 1) / width),
+        std::max(0., (double(vertical) - 1) / height),
+        std::min(1., (double(horizontal) + 1) / width),
+        std::min(1., (double(vertical) + 1) / height)}, revision_);
+}
+
 void TerrainPaintSession::Restore(TerrainLayerPaintData data)
 {
     if (data.width != paint_->width || data.height != paint_->height ||
         data.layerCount != paint_->layerCount)
         throw std::invalid_argument("Terrain paint restore dimensions changed");
-    *paint_ = std::move(data);
     ++revision_;
+    const size_t pixels = size_t(paint_->width) * paint_->height;
+    for (size_t index = 0; index < data.weights.size(); ++index)
+        if (data.weights[index] != paint_->weights[index] ||
+            data.opacity[index] != paint_->opacity[index])
+        {
+            const size_t pixel = index % pixels;
+            IncludeChangedTexel(uint32_t(pixel % paint_->width), uint32_t(pixel / paint_->width));
+        }
+    paint_ = std::make_shared<TerrainLayerPaintData>(std::move(data));
 }
 
 bool TerrainPaintSession::BeginStroke()
@@ -197,6 +222,7 @@ bool TerrainPaintSession::ApplyBrush(const TerrainPaintBrush& brush)
     const size_t layerBase =
         static_cast<size_t>(brush.layerIndex) * width * height;
     bool changed = false;
+    TerrainCompositedVTUVRect changedRect{1, 1, 0, 0};
     const float opacity = std::clamp(brush.opacity, 0.0f, 1.0f);
     const float flow = std::clamp(brush.flow, 0.0f, 1.0f);
     const float noise = std::clamp(brush.noise, 0.0f, 1.0f);
@@ -236,6 +262,7 @@ bool TerrainPaintSession::ApplyBrush(const TerrainPaintBrush& brush)
                 const uint8_t value = static_cast<uint8_t>(std::clamp(
                     static_cast<int>(std::round(next * 255.0f)), 0, 255));
                 if (value == paint_->opacity[index]) continue;
+                EnsureWritable();
                 paint_->opacity[index] = value;
                 changed = true;
             }
@@ -256,15 +283,21 @@ bool TerrainPaintSession::ApplyBrush(const TerrainPaintBrush& brush)
                 if (value == paint_->opacity[index] &&
                     std::abs(nextWeight - paint_->weights[index]) < 1.0e-6f)
                     continue;
+                EnsureWritable();
                 paint_->opacity[index] = value;
                 paint_->weights[index] = std::clamp(nextWeight, 0.0f, 1.0f);
                 changed = true;
             }
+            changedRect.minU = std::min(changedRect.minU, std::max(0., (double(x) - 1) / (width - 1)));
+            changedRect.minV = std::min(changedRect.minV, std::max(0., (double(y) - 1) / (height - 1)));
+            changedRect.maxU = std::max(changedRect.maxU, std::min(1., (double(x) + 1) / (width - 1)));
+            changedRect.maxV = std::max(changedRect.maxV, std::min(1., (double(y) + 1) / (height - 1)));
         }
     }
     if (!changed)
         return false;
     MarkChanged();
+    compositedDirty_.Include(changedRect, revision_);
     return true;
 }
 

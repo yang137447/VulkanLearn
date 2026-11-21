@@ -1,3 +1,4 @@
+#include "render/diagnostics/terrainCaptureHooks.h"
 #include "graphicsPipeline.h"
 #include "../vertexDataStruct.h"
 #include <cstdint>
@@ -116,10 +117,22 @@ void GraphicsPipeline::CreateDescriptorSetLayouts(
     // Keep shaderBindings as reflection truth and apply overrides only to layout creation.
     descriptorLayoutBindings =
         BuildPipelineLayoutBindings(shaderBindings, pipelineLayoutDesc);
+    uint32_t diagnosticSetCount = MAX_DESCRIPTOR_SETS;
+    for (const auto& binding : descriptorLayoutBindings)
+    {
+        if (binding.set < MAX_DESCRIPTOR_SETS)
+            continue;
+        if (!(VL::AcquireTerrainCaptureHooks() && VL::AcquireTerrainCaptureHooks()->RequiresTesVertexStores()) || !VL::TerrainCaptureDeviceFeatureEnabled() ||
+            binding.set != 4 || binding.binding != 0 ||
+            binding.type != vk::DescriptorType::eStorageBuffer || binding.descriptorCount != 1 ||
+            binding.stageFlags != vk::ShaderStageFlagBits::eTessellationEvaluation ||
+            binding.name != "terrainTestTesCapture" ||
+            rendererBackend->GetSelectedDeviceLimits().maxBoundDescriptorSets < 5)
+            throw std::runtime_error("Unexpected set4 outside explicit TES diagnostic pipeline");
+        diagnosticSetCount = 5;
+    }
     descriptorSetLayouts = PipelineLayoutBuilder::CreateDescriptorSetLayouts(
-        *rendererBackend,
-        descriptorLayoutBindings,
-        shaderDisplayName);
+        *rendererBackend, descriptorLayoutBindings, shaderDisplayName, diagnosticSetCount);
 }
 
 void GraphicsPipeline::DestroyDescriptorSetLayouts()

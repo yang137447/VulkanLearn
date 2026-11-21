@@ -39,8 +39,7 @@ std::vector<TerrainLayerCatalogEntry> TerrainLayerTable::BuildEntries(
         entry.uvScale = source.uvScale;
         entry.uvRotationRadians =
             source.uvRotation * 3.14159265358979323846f / 180.0f;
-        // row2 的 pagesPerSide 固定写 mip0；逐 mip 的页数由
-        // TerrainLayerPageManager 的静态 helper 推导。
+        // row2 保留源纹理 mip0 的尺寸元数据，不表示层源 VT 驻留页。
         entry.pagesPerSide = TerrainLayerPagesPerSide(source.sourceResolution, 0);
         entry.pageTableBase = pageTableBase;
         entry.sourceSet = source.sourceSet;

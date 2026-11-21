@@ -40,6 +40,20 @@ TEST(LaunchOptions, GpuStatsIsOffByDefault)
     EXPECT_FALSE(options.perfJsonlPath.has_value());
 }
 
+TEST(LaunchOptions, TerrainVtCookIsExplicitAndKeepsSceneOverride)
+{
+    EXPECT_FALSE(Parse({"main_editor.exe"}).terrainVtCook);
+    const auto options = Parse({
+        "main_editor.exe", "--terrain-vt-cook", "--initial-scene",
+        "Generated/Validation/TerrainCompositedVT/SC_composited_vt_2x2.json",
+        "--exit-after-frames", "2"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_TRUE(options.terrainVtCook);
+    EXPECT_EQ(options.exitAfterFrames, 2);
+    EXPECT_EQ(options.initialSceneOverride,
+        "Generated/Validation/TerrainCompositedVT/SC_composited_vt_2x2.json");
+}
+
 TEST(LaunchOptions, PerfJsonlRequiresAPath)
 {
     const LaunchOptions missing = Parse({"main.exe", "--perf-jsonl"});

@@ -1,13 +1,23 @@
+#include "render/diagnostics/terrainLitCaptureHooks.h"
 #include "render/frame/renderFrameRecorder.h"
+#include "render/frame/terrainCaptureFrameBridge.h"
+#include "render/frame/terrainCompositedQualityFrame.h"
+#include "render/frame/frameSubmitFault.h"
+#include "render/backend/frameTimingEvidence.h"
+#include "render/frame/terrainCompositedLoading.h"
+#include "render/rendergraph/renderGraphDepthOwner.h"
 #include "render/lightCulling/lightCullingRenderer.h"
 #include "render/volumetricFog/volumetricFogRenderer.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <cstdlib>
 #include <iostream>
 #include <map>
+#include <set>
 #include <sstream>
+#include <string_view>
 #include <utility>
 #include <vector>
 
@@ -27,6 +37,7 @@
 #include "render/skinning/skinDeformPass.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
+#include "render/backend/rendererObjectResourceManager.h"
 #include "render/pass/passRuntime.h"
 #include "render/offline/offlineWorldAssets.h"
 #include "render/offline/offlineDisplayExposure.h"
@@ -38,9 +49,11 @@
 #include "render/postprocess/postProcessControls.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/terrainPageBakeGpu.h"
+#include "render/resource/terrainCompositedService.h"
 #include "render/resource/terrainFeedbackGpu.h"
-#include "render/resource/terrainLayerFeedbackGpu.h"
+#include "render/resource/terrainCompositedFeedbackGpu.h"
 #include "render/resource/rendererTerrainLoader.h"
+#include "terrain/terrainVertexUpdateQueue.h"
 #include "render/shadow/csmRuntime.h"
 #include "render/terrain/terrainFeedbackRuntime.h"
 #include "render/hair/hairRuntime.h"
@@ -48,6 +61,46 @@
 
 namespace VL
 {
+void RenderFrameRecorder::CloseTerrainCaptureAfterDeviceIdle()
+{
+    if (terrainCaptureBridge)
+    {
+        terrainCaptureBridge->CloseAfterDeviceIdle();
+        terrainCaptureBridge.reset();
+        return;
+    }
+    if (const auto hooks = AcquireTerrainCaptureHooks())
+        hooks->CloseAfterDeviceIdle();
+}
+
+namespace
+{
+struct FrameAbortIntent
+{
+    FrameSubmitFault fault;
+};
+
+std::optional<FrameBindingIdentity> CurrentImageBindingIdentity(const RenderGraph& graph, uint32_t image)
+{
+    std::optional<FrameBindingIdentity> identity;
+    for (const auto& entry : graph.GetRenderpasses())
+    {
+        const auto& pass = entry.second;
+        const bool consumesWorld = std::any_of(pass.inputDescriptorPlan.begin(), pass.inputDescriptorPlan.end(),
+            [](const auto& input) { return input.source == "worldTexture"; });
+        if (!consumesWorld)
+            continue;
+        if (image >= pass.worldBindingImageOwners.size() || !pass.worldBindingImageOwners[image].Snapshot())
+            return {};
+        const auto& snapshot = pass.worldBindingImageOwners[image].Snapshot();
+        if (identity && (identity->worldGeneration != snapshot->worldGeneration ||
+            identity->revision != snapshot->revision))
+            return {};
+        identity = FrameBindingIdentity{snapshot->worldGeneration, snapshot->revision};
+    }
+    return identity;
+}
+}
 
 // RT-only CPU accounting for pass recording. Only consumed when --gpu-stats is
 // enabled; it separates "which pass is expensive to record" from the GPU
@@ -279,6 +332,13 @@ void RenderFrameRecorder::UpdateGlobalUBOWithProjectionTransform(
 void RenderFrameRecorder::UpdateExposureFrameTiming(
     VL::GpuPassTimer& gpuPassTimer)
 {
+    UpdateExposureFrameTiming(gpuPassTimer, nullptr, nullptr, nullptr);
+}
+
+void RenderFrameRecorder::UpdateExposureFrameTiming(
+    VL::GpuPassTimer& gpuPassTimer, const RenderFrameRecorderContext* ctx,
+    const RendererFrameContext* frame, const RenderFrameIdentity* identity)
+{
     const auto now = std::chrono::steady_clock::now();
     if (!exposureClockInitialized)
     {
@@ -293,6 +353,38 @@ void RenderFrameRecorder::UpdateExposureFrameTiming(
     const double elapsed = std::chrono::duration<double>(
         now - exposureLastFrameTime).count();
     exposureLastFrameTime = now;
+    if (FrameTimingEvidenceRequested())
+    {
+        const bool available = ctx && frame && identity;
+        RuntimeEvidence::Record("CPU_RAW", CpuFrameTimingPayload(available ? identity : nullptr,
+            available ? std::optional<uint32_t>(frame->frameIndex) : std::nullopt,
+            available ? std::optional<bool>(frame->ready) : std::nullopt,
+            available ? frame->completedEpoch : 0,
+            !available ? "identity-unavailable" : ctx->offlineMode ? "offline-none" :
+                gpuPassTimer.WantsFrameQueries(frame->frameIndex) ? "planned" : "disabled-or-unsupported",
+            elapsed * 1000.0, std::chrono::duration_cast<std::chrono::nanoseconds>(
+                now.time_since_epoch()).count()));
+    }
+    static const bool rawTimingEnabled = std::getenv("VL_GPU_TIMING_RAW") != nullptr;
+    if (rawTimingEnabled)
+    {
+        std::cout << "[CPU_RAW] {\"event\":\"frame-timing\",\"renderFrameIntervalMs\":" << elapsed * 1000.0 << ',';
+        if (ctx && frame && identity)
+        {
+            WriteRawFrameIdentity(std::cout, *identity);
+            std::cout << ",\"frameSlot\":" << frame->frameIndex << ",\"completedEpoch\":" << frame->completedEpoch
+                << ",\"acquiredReady\":" << (frame->ready ? "true" : "false")
+                << ",\"gpuQueryState\":\"" << (ctx->offlineMode ? "offline-none" :
+                    gpuPassTimer.WantsFrameQueries(frame->frameIndex) ? "planned" : "disabled-or-unsupported")
+                << "\",\"sampleMonotonicNs\":" << std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count()
+                << ",\"phase\":\"record-begin\",\"submitEpochPlanned\":true}\n";
+        }
+        else
+            std::cout << "\"identityVersion\":2,\"renderFrame\":null,\"frame\":null,\"worldGeneration\":null"
+                << ",\"submitEpoch\":null,\"frameSlot\":null,\"acquiredReady\":null"
+                << ",\"gpuQueryState\":\"identity-unavailable\",\"phase\":\"identity-unavailable\",\"sampleMonotonicNs\":"
+                << std::chrono::duration_cast<std::chrono::nanoseconds>(now.time_since_epoch()).count() << "}\n";
+    }
     // 眼适应不应因断点、窗口拖拽或首帧长暂停瞬间跳到目标值。
     exposureDeltaSeconds = static_cast<float>(
         std::clamp(elapsed, 1.0 / 240.0, 0.1));
@@ -476,11 +568,33 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
         PROFILE_SCOPE("RT.BeginFrame");
         frameContext = ctx.backend.BeginFrame(ctx.currentFrame);
     }
+    ObservePostAbortCompletedFrame(frameContext.completedEpoch);
+    if (terrainCaptureBridge)
+        terrainCaptureBridge->ConsumeCompleted(frameContext.completedEpoch);
+    const auto terrainCaptureHooks = AcquireTerrainCaptureHooks();
+    const auto frameIdentity = RenderFrameIdentity::FromContext(ctx);
     if (!frameContext.ready)
     {
+        if (FrameTimingEvidenceRequested())
+            RuntimeEvidence::Record("CPU_RAW", CpuFrameTimingPayload(&frameIdentity, std::nullopt,
+                false, frameContext.completedEpoch, "none", std::nullopt,
+                std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count(), true));
+        static const bool rawTimingEnabled = std::getenv("VL_GPU_TIMING_RAW") != nullptr;
+        if (rawTimingEnabled)
+        {
+            std::cout << "[CPU_RAW] {\"event\":\"frame-skipped\",\"renderFrameIntervalMs\":null,";
+            WriteRawFrameIdentity(std::cout, frameIdentity);
+            std::cout << ",\"acquiredReady\":false,\"frameSlot\":null,\"gpuQueryState\":\"none\""
+                << ",\"reason\":\"acquire-not-ready\",\"submitEpochPlanned\":true,\"sampleMonotonicNs\":"
+                << std::chrono::duration_cast<std::chrono::nanoseconds>(
+                    std::chrono::steady_clock::now().time_since_epoch()).count() << "}\n";
+        }
         // acquire 失败没有提交；保留帧号和截图请求，等待 GT 重建 swapchain。
         return;
     }
+    try
+    {
     // 相机历史同样绑定真实提交，不能使用可能未被渲染的 GT 快照历史。
     ctx.renderScene.camera.previousViewProjection =
         ctx.submittedViewProjection && ctx.submittedCameraGeneration == ctx.renderScene.worldGeneration
@@ -497,6 +611,26 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
     // Apply it to this image's slot before any pass records a draw.
     {
         PROFILE_SCOPE("RT.ApplyDynamicMesh");
+        const auto terrain = RendererResourceCache::GetInstance().GetTerrainStreaming();
+        if (terrain && terrain->terrainVertices)
+        {
+            std::set<std::string> resolvedKeys;
+            for (const auto& material : ctx.resolvedScene.materialGroups)
+                for (const auto& instance : material.materialInstances)
+                    for (const auto& draw : instance.draws)
+                        if (draw.renderableObject &&
+                            draw.drawPacketIndex < ctx.renderScene.drawPackets.size())
+                            resolvedKeys.insert(
+                                ctx.renderScene.drawPackets[draw.drawPacketIndex].mesh.key);
+            terrain->terrainVertices->Replay(ctx.renderScene.worldGeneration,
+                ctx.swapChainImageIndex % RenderableObject::DynamicMeshFrameSlotCount,
+                [&ctx, &resolvedKeys](const std::string& key, const std::vector<Vertex>& vertices) {
+                    if (!resolvedKeys.count(key))
+                        return false;
+                    ctx.dynamicMeshQueue.QueueVertices(key, vertices);
+                    return true;
+                });
+        }
         ApplyQueuedDynamicMeshUpdates(
             ctx.dynamicMeshQueue,
             ctx.renderScene,
@@ -519,6 +653,16 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
     // BeginFrame 消费和帧末回读之间时出现两份 ring/page table。
     const std::shared_ptr<VL::TerrainStreamingState> terrainFeedbackStreaming =
         VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+    static const bool qualityDepthResolverInstalled = [] {
+        TerrainCompositedQualityFrame::SetDepthOwnerResolver(
+            [](const RenderResource& depth) {
+                return CaptureRenderGraphDepthOwner(depth.image);
+            });
+        return true;
+    }();
+    (void)qualityDepthResolverInstalled;
+    auto terrainQualityTransaction = TerrainCompositedQualityFrame::BeginFrame(
+        ctx, frameContext, terrainFeedbackStreaming ? terrainFeedbackStreaming->composited : nullptr);
     // 本帧提交 epoch 必须与 SubmitFrame 记录的 epoch 相同（ctx.currentFrame + 1），
     // feedback frameTag 也由它推导。先把 GPU 上下文回灌给 page manager，
     // 新驻留页才能以“本帧提交”而不是过期 feedback epoch 起算安全窗。
@@ -548,41 +692,12 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                 frameContext.completedEpoch);
         }
 
-        // L4a 层页预算/命令：与覆盖页相同，只在渲染线程消费 atomic。
-        const uint32_t requestedLayerCapacity =
-            terrainFeedbackStreaming->requestedLayerResidentCapacity.exchange(
-                0, std::memory_order_relaxed);
-        if (requestedLayerCapacity != 0)
-        {
-            terrainFeedbackStreaming->layerPageManager
-                .SetResidentCapacityAtEpoch(
-                    requestedLayerCapacity, frameContext.completedEpoch);
-        }
-        if (terrainFeedbackStreaming->requestedLayerPreload.exchange(
-                false, std::memory_order_relaxed))
-        {
-            VL::RequestTerrainLayerPreload(*terrainFeedbackStreaming);
-        }
     }
     // epoch 上下文必须先于 ApplyFeedback：ApplyFeedback 内新驻留的页要用
     // “本帧即将提交”的 epoch 作为安全窗起点，而不是上一帧已消费的旧值。
     if (terrainFeedbackStreaming)
     {
-        // L4e：相机位移只在本帧提交时推进，确保预取方向与真正渲染的帧一致。
-        ctx.terrainRuntime.UpdateTerrainCameraPrefetch(
-            terrainFeedbackStreaming,
-            ctx.renderScene.camera.position,
-            ctx.renderScene.camera.forward);
-        // console 的强制 mip 在 feedback 消费之前写进材质，feedback 与
-        // M_terrain 才会在同帧使用同一个目标 mip。
-        ctx.terrainRuntime.ApplyTerrainLayerForceMip(terrainFeedbackStreaming);
         terrainFeedbackStreaming->pageManager.SetGpuEpochContext(
-            feedbackSubmittedEpoch,
-            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
-            ctx.backend.GetFrameFenceCount());
-        // 层页页表/atlas 的物理槽位复用也走同一安全窗；feedback 命中与
-        // RequestPageAtEpoch 都在本函数之后发生。
-        terrainFeedbackStreaming->layerPageManager.SetGpuEpochContext(
             feedbackSubmittedEpoch,
             terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
             ctx.backend.GetFrameFenceCount());
@@ -603,17 +718,23 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
             feedbackSubmittedEpoch,
             terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
             ctx.backend.GetFrameFenceCount());
-        terrainFeedbackStreaming->layerPageManager.SetGpuEpochContext(
-            feedbackSubmittedEpoch,
-            terrainFeedbackStreaming->lastConsumedFeedbackEpoch,
-            ctx.backend.GetFrameFenceCount());
     }
     const uint8_t feedbackFrameTag =
         VL::TerrainFeedbackFrameTagForEpoch(feedbackSubmittedEpoch);
     // 本帧上传事务：只有 SubmitFrame 成功后才 Commit；任何提前返回/异常
     // 都会在析构里 Abort，保留 dirty 与 pin，避免 GPU 与 CPU 内容错位。
     VL::TerrainUploadTransaction terrainUploadTransaction;
-    VL::TerrainLayerUploadTransaction terrainLayerUploadTransaction;
+    struct CompositedFrameTransaction
+    {
+        std::shared_ptr<TerrainCompositedService> service;
+        bool committed = false;
+        ~CompositedFrameTransaction()
+        {
+            if (service && !committed)
+                service->Abort();
+        }
+    } compositedTransaction{
+        terrainFeedbackStreaming ? terrainFeedbackStreaming->composited : nullptr};
     uint32_t terrainUploadPageCount = 0;
     uint32_t terrainGpuBakeJobCount = 0;
     const bool renderToViewport = ctx.currentUiSnapshot && ctx.currentUiSnapshot->sceneViewportEnabled;
@@ -622,8 +743,9 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
     if (renderToViewport && viewportOutput == nullptr)
         throw std::runtime_error("Editor scene viewport has no graph-owned output target.");
     // 自动曝光按帧推进：它读上一帧的直方图并产出本帧的 EV，因此必须在录制之前更新。
-    UpdateExposureFrameTiming(ctx.gpuTimer);
+    UpdateExposureFrameTiming(ctx.gpuTimer, &ctx, &frameContext, &frameIdentity);
 
+    try
     {
         VulkanDebug::ScopedRegion frameRegion(
             commandBuffer,
@@ -652,7 +774,7 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
         {
         // 读回发生在这里：backend BeginFrame 已等待本 frame slot 的 fence，上一批查询必然就绪。
         // 随后在命令缓冲里重置该槽位的查询范围，早于本帧任何被计时命令。
-        ctx.gpuTimer.BeginFrame(commandBuffer, frameIndex);
+        ctx.gpuTimer.BeginFrame(commandBuffer, frameIndex, frameIdentity, frameContext.completedEpoch);
         ctx.advanceSceneWind();
         // shadowSlice/shadowFar 必须在 geometry/forward 的 UploadLightsForPass
         // 之前写回冻结快照；LocalShadow pass 也消费同一份选灯结果。
@@ -696,6 +818,24 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
         }
 
         // scene pass 之前提交本帧地形页：Build -> 打包进 staging ring ->
+        if (compositedTransaction.service)
+        {
+            const bool uploadTimed =
+                ctx.gpuTimer.BeginPass(commandBuffer, "terrainCompositedProductionAndCopy");
+            compositedTransaction.service->RecordUploads(
+                commandBuffer, frameIndex, frameContext.completedEpoch, frameIdentity.renderFrame);
+            ctx.gpuTimer.EndPass(commandBuffer, uploadTimed);
+        }
+        renderGraph.SafeUpdateCurrentImageWorldBindings(
+            ctx.backend, RendererResourceCache::GetInstance(), ctx.swapChainImageIndex);
+        RendererObjectResourceManager materialDescriptors;
+        for (const auto& materialGroup : ctx.resolvedScene.materialGroups)
+            for (const auto& instanceGroup : materialGroup.materialInstances)
+                for (const auto& draw : instanceGroup.draws)
+                    if (draw.objectResourceEntry)
+                        materialDescriptors.RefreshMaterialTexturesForImage(
+                            ctx.backend, *instanceGroup.materialInstance,
+                            ctx.swapChainImageIndex, draw.objectResourceEntry->GetResources());
         // 同一个主帧 command buffer 录制。剩余 dirty 页下一帧继续。
         if (terrainFeedbackStreaming &&
             terrainFeedbackStreaming->uploadRing)
@@ -744,46 +884,6 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                     // 录制失败时 batch 仍持有 pin；必须回滚，不能留给下一帧。
                     terrainFeedbackStreaming->pageManager.AbortUploadBatch(
                         uploadBatch);
-                    throw;
-                }
-            }
-        }
-
-        // L4a：层页上传与覆盖页上传同一时机（scene pass 之前）。页表 texel
-        // 走 staging ring；albedo/normal/pbr atlas 是 GPU→GPU copy，不需要
-        // staging。剩余 dirty 页下一帧继续，Commit 在 SubmitFrame 之后。
-        if (terrainFeedbackStreaming &&
-            terrainFeedbackStreaming->layerVTRequested &&
-            terrainFeedbackStreaming->layerUploadRing)
-        {
-            VL::TerrainLayerUploadBatch layerBatch =
-                terrainFeedbackStreaming->layerPageManager.BuildUploadBatch(
-                    terrainFeedbackStreaming->maxLayerPageUploadsPerFrame);
-            if (!layerBatch.Empty())
-            {
-                try
-                {
-                    const vk::DeviceSize stagingOffset =
-                        terrainFeedbackStreaming->layerUploadRing->Write(
-                            frameIndex, layerBatch);
-                    VL::RecordTerrainLayerPageUploads(
-                        commandBuffer,
-                        terrainFeedbackStreaming->layerPageManager,
-                        terrainFeedbackStreaming->layerResources,
-                        terrainFeedbackStreaming->layerSources,
-                        layerBatch,
-                        terrainFeedbackStreaming->layerUploadRing->Buffer(
-                            frameIndex),
-                        stagingOffset);
-                    terrainLayerUploadTransaction.Begin(
-                        terrainFeedbackStreaming,
-                        std::move(layerBatch));
-                }
-                catch (...)
-                {
-                    // 录制失败时 batch 仍持有 pin；必须回滚，不能留给下一帧。
-                    terrainFeedbackStreaming->layerPageManager
-                        .AbortUploadBatch(layerBatch);
                     throw;
                 }
             }
@@ -856,6 +956,7 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                     volumetricFog->Record(
                         commandBuffer, ctx.swapChainImageIndex, renderPass);
                 }
+                ctx.gpuTimer.EndPass(commandBuffer, passTimed);
                 continue;
             }
             if (renderPass.type ==
@@ -867,6 +968,7 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                     passIndex,
                     ctx.swapChainImageIndex);
                 ctx.recordParticleSoftDepth(commandBuffer, renderPass);
+                ctx.gpuTimer.EndPass(commandBuffer, passTimed);
                 continue;
             }
             // tile 光照聚类：compute 只写帧拥有的 SSBO，没有 framebuffer。
@@ -885,6 +987,7 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                     lightCulling->Record(
                         commandBuffer, ctx.swapChainImageIndex, renderPass);
                 }
+                ctx.gpuTimer.EndPass(commandBuffer, passTimed);
                 continue;
             }
             VL::PassRuntimeContext passContext{
@@ -905,7 +1008,26 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
             {
                 passContext.shadowCasterCullStats = &shadowCasterCullStats;
             }
+            const bool captureGeometry = terrainCaptureHooks &&
+                renderPass.type == VL::RenderGraphPassType::Geometry;
+            if (captureGeometry)
+            {
+                if (!terrainCaptureBridge)
+                    terrainCaptureBridge = std::make_shared<TerrainCaptureFrameBridge>();
+                if (auto* lit = dynamic_cast<ITerrainLitCaptureHooks*>(terrainCaptureHooks.get()))
+                {
+                    if (!compositedTransaction.service)
+                        throw std::logic_error("Lit capture requires an actual recording terrain World");
+                    lit->SetReferencePoolOwner(compositedTransaction.service->DiagnosticReferencePoolOwner());
+                }
+                terrainCaptureBridge->BeforeGeometry(passContext, ctx, frameContext,
+                    compositedTransaction.service, terrainCaptureHooks);
+            }
             ctx.passRuntime.RecordPass(renderPassName, passContext);
+            if (terrainCaptureHooks)
+                RecordOptionalTerrainLitAfterPass(passContext);
+            if (captureGeometry)
+                terrainCaptureBridge->AfterGeometry(commandBuffer);
             if (renderPass.type == VL::RenderGraphPassType::Shadow &&
                 shadowCasterCullStats.cascadeIndex <
                     VL::CsmSettings::MaxCascadeCount)
@@ -914,6 +1036,13 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                     shadowCasterCullStats;
             }
             ctx.gpuTimer.EndPass(commandBuffer, passTimed);
+            if (renderPass.type == VL::RenderGraphPassType::TerrainFeedback)
+            {
+                const bool qualityTimed =
+                    ctx.gpuTimer.BeginPass(commandBuffer, "terrainQualityAfterFeedback");
+                terrainQualityTransaction.RecordAfterFeedback(passContext);
+                ctx.gpuTimer.EndPass(commandBuffer, qualityTimed);
+            }
         }
 
         // 与 GPU 表同周期（120 帧）输出；只有 --gpu-stats 打开时才打印。
@@ -937,6 +1066,28 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
         ctx.logLocalShadowCasterStatistics();
         }
 
+        if (!ctx.offlineMode && viewportOutput)
+        {
+            TerrainCompositedLoadingTarget loadingTarget;
+            loadingTarget.view = viewportOutput->GetShaderDescriptorView();
+            loadingTarget.format = viewportOutput->format;
+            loadingTarget.extent = vk::Extent2D(viewportOutput->width, viewportOutput->height);
+            loadingTarget.layout = vk::ImageLayout::eColorAttachmentOptimal;
+            loadingTarget.owner = CaptureRenderGraphDepthOwner(viewportOutput->image);
+            loadingTarget.ownerGeneration = renderGraph.GetOwnerGeneration();
+            terrainQualityTransaction.RecordLoading(ctx, commandBuffer, loadingTarget);
+        }
+        else if (!ctx.offlineMode)
+        {
+            TerrainCompositedLoadingTarget loadingTarget;
+            loadingTarget.view = ctx.backend.GetSwapchainImageViews().at(ctx.swapChainImageIndex);
+            loadingTarget.format = ctx.backend.GetSwapchainImageFormat();
+            loadingTarget.extent = ctx.backend.GetSwapchainExtent();
+            loadingTarget.layout = vk::ImageLayout::ePresentSrcKHR;
+            loadingTarget.owner = ctx.backend.CapturePresentTargetLifetime();
+            loadingTarget.ownerGeneration = ctx.backend.GetPresentTargetGeneration();
+            terrainQualityTransaction.RecordLoading(ctx, commandBuffer, loadingTarget);
+        }
         if (ctx.uiOverlayRenderer.IsInitialized() && ctx.currentUiSnapshot != nullptr)
         {
             if (viewportOutput != nullptr)
@@ -972,11 +1123,46 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
             if (debugDepth) PassBarrier::EndSceneDepthRead(commandBuffer, renderGraph, ctx.swapChainImageIndex);
         }
     }
+    catch (const WorldBindingDescriptorRetry& retry)
+    {
+        if (retry.imageIndex != frameContext.swapchainImageIndex ||
+            std::string_view(retry.operation) == "unbound")
+            throw std::logic_error("Descriptor retry has no matching acquired-image operation");
+        // Debug/render scope 已结束，先弃录制再让外层事务 Abort；尚未登记 feedback/screenshot。
+        ctx.backend.DiscardFrameCommands(frameContext);
+        ctx.gpuTimer.AbortFrame();
+        if (terrainCaptureBridge)
+            terrainCaptureBridge->AbortProvenUnsubmitted(frameContext.disposition.Phase());
+        throw;
+    }
+    catch (...)
+    {
+        if (terrainCaptureBridge && terrainCaptureBridge->HasCurrent() &&
+            !terrainCaptureBridge->SubmitWasAttempted())
+        {
+            // helper/实际 draw 异常也先弃命令，再展开外层 Service/Terrain 事务。
+            ctx.backend.DiscardFrameCommands(frameContext);
+            ctx.gpuTimer.AbortFrame();
+            terrainCaptureBridge->AbortProvenUnsubmitted(frameContext.disposition.Phase());
+        }
+        throw;
+    }
 
     if (!ctx.offlineMode)
     {
-        if (terrainFeedbackStreaming &&
-            terrainFeedbackStreaming->feedbackRing)
+        auto fault = TakeFrameSubmitFault(
+            compositedTransaction.service, ctx.renderScene.worldGeneration, feedbackSubmittedEpoch,
+            frameIdentity.renderFrame);
+        if (fault)
+        {
+            // 所有 render/debug scope 已闭合；先废弃命令，再展开 terrain/quality RAII。
+            ctx.backend.DiscardFrameCommands(frameContext);
+            ctx.gpuTimer.AbortFrame();
+            if (terrainCaptureBridge)
+                terrainCaptureBridge->AbortProvenUnsubmitted(frameContext.disposition.Phase());
+            throw FrameAbortIntent{std::move(*fault)};
+        }
+        if (terrainFeedbackStreaming)
         {
             // terrainFeedback 是 graph-owned 的 per-swapchain-image RT；
             // 帧末把当前 image 拷进该 frameIndex 的 host-visible ring 槽。
@@ -984,7 +1170,8 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                 renderGraph.GetResourcesResolve();
             const auto feedbackIt =
                 resolveResources.find("terrainFeedback");
-            if (feedbackIt != resolveResources.end() &&
+            if (terrainFeedbackStreaming->feedbackRing &&
+                feedbackIt != resolveResources.end() &&
                 ctx.swapChainImageIndex < feedbackIt->second.size())
             {
                 terrainFeedbackStreaming->feedbackRing->RecordCopy(
@@ -996,18 +1183,19 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
             }
             // L4b：4 张层页 attachment 与覆盖页 RT 在同一次录制里回读。
             // 只有真正使用 layer mode 1 时才记录，mode 0 不产生额外拷贝。
-            if (terrainFeedbackStreaming->layerVTRequested &&
-                terrainFeedbackStreaming->layerFeedbackRing)
+            if (terrainFeedbackStreaming->composited &&
+                terrainFeedbackStreaming->composited->HasSurfaces() &&
+                terrainFeedbackStreaming->compositedFeedbackRing)
             {
-                std::array<vk::Image, VL::TerrainLayerFeedbackSlotCount>
+                std::array<vk::Image, VL::TerrainCompositedFeedbackSlotCount>
                     layerImages{};
                 bool allPresent = true;
                 for (uint32_t slot = 0;
-                     slot < VL::TerrainLayerFeedbackSlotCount;
+                     slot < VL::TerrainCompositedFeedbackSlotCount;
                      ++slot)
                 {
                     const auto layerIt = resolveResources.find(
-                        "terrainLayerFeedback" + std::to_string(slot));
+                        "terrainCompositedFeedback" + std::to_string(slot));
                     if (layerIt == resolveResources.end() ||
                         ctx.swapChainImageIndex >= layerIt->second.size())
                     {
@@ -1019,7 +1207,7 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                 }
                 if (allPresent)
                 {
-                    terrainFeedbackStreaming->layerFeedbackRing->RecordCopy(
+                    terrainFeedbackStreaming->compositedFeedbackRing->RecordCopy(
                         commandBuffer,
                         layerImages,
                         frameIndex,
@@ -1058,11 +1246,28 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
     // swapchain, present, and retire epoch details stay backend-owned.
     {
         PROFILE_SCOPE("RT.SubmitPresent");
+        if (terrainCaptureBridge)
+            terrainCaptureBridge->SubmitAttempted();
         ctx.backend.SubmitFrame(frameContext, ctx.currentFrame);
+        if (terrainCaptureBridge)
+        {
+            terrainCaptureBridge->Submitted(frameContext.disposition.Phase(), feedbackSubmittedEpoch);
+            terrainCaptureBridge->DetachCurrent();
+        }
+        ctx.gpuTimer.FrameSubmitted();
+        terrainQualityTransaction.Submitted(feedbackSubmittedEpoch);
     }
     // 提交成功后才确认 dirty：失败路径由 TerrainUploadTransaction 析构 Abort。
     terrainUploadTransaction.Commit();
-    terrainLayerUploadTransaction.Commit();
+    if (compositedTransaction.service)
+        compositedTransaction.service->Commit(feedbackSubmittedEpoch);
+    if (compositedTransaction.service && feedbackSubmittedEpoch % 120 == 0)
+    {
+        const char* qualityOutput = std::getenv("VULKANLEARN_RVT_QUALITY_DIR");
+        if (qualityOutput && *qualityOutput)
+            compositedTransaction.service->ReportStats();
+    }
+    compositedTransaction.committed = true;
     if (terrainFeedbackStreaming)
     {
         terrainFeedbackStreaming->uploadedPagesTotal += terrainUploadPageCount;
@@ -1104,7 +1309,57 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
         }
     }
 
+    ObservePostAbortSubmittedFrame(ctx.renderScene.worldGeneration, feedbackSubmittedEpoch, frameIdentity.renderFrame);
+    if (NeedsDescriptorRecoveryWitness())
+    {
+        const auto bindings = CurrentImageBindingIdentity(renderGraph, ctx.swapChainImageIndex);
+        ObserveDescriptorRecoverySubmittedFrame(frameIdentity, bindings ? &*bindings : nullptr);
+    }
     ctx.currentFrame = ctx.currentFrame + 1;
+    }
+    catch (const WorldBindingDescriptorRetry& retry)
+    {
+        if (frameContext.disposition.Phase() != AcquiredFramePhase::Discarded)
+            throw std::logic_error("Descriptor retry escaped protected pre-submit discard scope");
+        const auto result = ctx.backend.FrameAbandonAfterAcquire(frameContext, ctx.currentFrame);
+        ++ctx.currentFrame;
+        ObserveRecoveredDescriptorFrame(frameIdentity, result,
+            {retry.worldGeneration, retry.bindingRevision}, retry.operation, retry.originalResult,
+            static_cast<uint32_t>(retry.cause));
+        if (taskFrameWorkerActive)
+            throw DescriptorFrameSkipped(result);
+        return;
+    }
+    catch (const FrameAbortIntent& intent)
+    {
+        // 到此三个事务已析构，未发生 ServiceCommit；恢复失败的 Vulkan 异常保持 fatal。
+        const auto result = ctx.backend.FrameAbandonAfterAcquire(frameContext, ctx.currentFrame);
+        ++ctx.currentFrame;
+        ObserveRecoveredFrameAbort(intent.fault, result, frameIdentity.renderFrame);
+        if (taskFrameWorkerActive)
+            throw TaskFrameAborted(result, intent.fault.failure.faultId);
+        return;
+    }
+    catch (...)
+    {
+        if (terrainCaptureBridge && terrainCaptureBridge->HasCurrent())
+        {
+            const auto original = std::current_exception();
+            if (frameContext.disposition.Phase() == AcquiredFramePhase::Submitted)
+                terrainCaptureBridge->Submitted(frameContext.disposition.Phase(),
+                    uint64_t(ctx.currentFrame) + 1);
+            else if (!terrainCaptureBridge->SubmitWasAttempted())
+            {
+                if (frameContext.disposition.Phase() == AcquiredFramePhase::Recording)
+                    ctx.backend.DiscardFrameCommands(frameContext);
+                terrainCaptureBridge->AbortProvenUnsubmitted(frameContext.disposition.Phase());
+            }
+            // 不确定的 queue 结果保持 owner 至真实退休/设备关闭，原始错误仍 fatal。
+            terrainCaptureBridge->DetachCurrent();
+            std::rethrow_exception(original);
+        }
+        throw;
+    }
 }
 
 } // namespace VL

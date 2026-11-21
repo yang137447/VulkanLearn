@@ -9,6 +9,19 @@
 #include <limits>
 #include <stdexcept>
 
+DeviceTextureAllocationRequirements DeviceTextureFactory::QueryAllocationRequirements(
+    VL::RendererBackendVulkan& rendererBackend, const HostImage& image,
+    const DeviceTextureCreateOptions& options)
+{
+    if (!image.data.empty())
+        image.ValidateStorage();
+    const auto info = ImageCreateInfo(image, options);
+    return {
+        rendererBackend.QueryImageMemoryRequirements(info),
+        rendererBackend.QueryBufferMemoryRequirements(
+            image.GetTotalBytes(), vk::BufferUsageFlagBits::eTransferSrc)};
+}
+
 DeviceTextureResource DeviceTextureFactory::CreateResourceFromHostImage(
     VL::RendererBackendVulkan& rendererBackend,
     const HostImage& image,
@@ -16,68 +29,26 @@ DeviceTextureResource DeviceTextureFactory::CreateResourceFromHostImage(
     const DeviceTextureCreateOptions& options)
 {
     if (image.width == 0 || image.height == 0 || image.data.empty())
-    {
         throw std::runtime_error("Invalid HostImage for DeviceTextureFactory::CreateFromHostImage");
-    }
     image.ValidateStorage();
-
-    const bool blockCompressed = HostImage::IsBlockCompressed(image.format);
-    if (blockCompressed && options.generateMipmapsOnDevice)
-    {
-        // 块格式的 mip 必须离线编码；Texture 在调用本函数前会把该标志清掉。
-        throw std::invalid_argument(
-            "Block-compressed textures cannot generate mips on the device; "
-            "provide an offline mip chain in the container");
-    }
-
-    vk::Format format = HostImageVulkan::ToVulkanFormat(image.format);
+    const auto imageCreateInfo = ImageCreateInfo(image, options);
+    const auto format = imageCreateInfo.format;
+    const auto mipLevels = imageCreateInfo.mipLevels;
+    const bool generateMipmaps = !HostImage::IsBlockCompressed(image.format) &&
+        image.mipLevels == 1 && options.generateMipmapsOnDevice;
     const vk::DeviceSize imageSize = static_cast<vk::DeviceSize>(image.data.size());
-    vk::DeviceSize stagingSize = imageSize;
-    vk::BufferUsageFlags stagingUsage = vk::BufferUsageFlagBits::eTransferSrc;
-    vk::MemoryPropertyFlags stagingMemFlags = vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent;
-    auto [stagingBuffer, stagingMemory] = rendererBackend.CreateBuffer(
-        stagingSize,
-        stagingUsage,
-        stagingMemFlags,
+    const auto stagingAllocation = rendererBackend.CreateBuffer(imageSize,
+        vk::BufferUsageFlagBits::eTransferSrc,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
         "StagingBuffer_Texture: " + debugName);
-
+    const auto stagingBuffer = stagingAllocation.first;
+    const auto stagingMemory = stagingAllocation.second;
     void* mapped = rendererBackend.MapMemory(stagingMemory, imageSize);
     std::memcpy(mapped, image.data.data(), static_cast<size_t>(imageSize));
     rendererBackend.UnmapMemory(stagingMemory);
-
-    // 容器自带 mip 链时直接使用；只有单 mip 的非块格式才在设备端生成。
-    const bool generateMipmaps =
-        !blockCompressed && image.mipLevels == 1 && options.generateMipmapsOnDevice;
-    uint32_t mipLevels = image.mipLevels;
-    if (generateMipmaps)
-    {
-        mipLevels = static_cast<uint32_t>(std::floor(std::log2(std::max(image.width, image.height)))) + 1;
-    }
-
-    // TransferSrc 始终保留：层 atlas 需要在 GPU 内从源层纹理切页，
-    // 而源图在创建时无法预知是否会被 L2 消费。该 flag 不额外分配显存。
-    vk::ImageUsageFlags usageFlags =
-        vk::ImageUsageFlagBits::eTransferDst |
-        vk::ImageUsageFlagBits::eTransferSrc |
-        vk::ImageUsageFlagBits::eSampled;
-
-    vk::ImageTiling tiling = vk::ImageTiling::eOptimal;
-    vk::MemoryPropertyFlags imageMemoryFlags = vk::MemoryPropertyFlagBits::eDeviceLocal;
-    vk::ImageCreateInfo imageCreateInfo;
-    imageCreateInfo
-        .setImageType(vk::ImageType::e2D)
-        .setExtent(vk::Extent3D{ image.width, image.height, 1 })
-        .setMipLevels(mipLevels)
-        .setArrayLayers(image.arrayLayers)
-        .setSamples(vk::SampleCountFlagBits::e1)
-        .setFormat(format)
-        .setTiling(tiling)
-        .setUsage(usageFlags)
-        .setSharingMode(vk::SharingMode::eExclusive)
-        .setInitialLayout(vk::ImageLayout::eUndefined);
     auto [deviceImage, deviceImageMemory] = rendererBackend.CreateImage(
         imageCreateInfo,
-        imageMemoryFlags,
+        vk::MemoryPropertyFlagBits::eDeviceLocal,
         "Texture: " + debugName);
 
     rendererBackend.TransitionImageLayout(

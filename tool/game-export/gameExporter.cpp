@@ -12,6 +12,12 @@
 #include <sstream>
 #include <stdexcept>
 #include "shader/build/contentHash.h"
+#include "terrainPackageClosure.h"
+#include "terrain/terrainPaintSha256.h"
+#include "terrain/validation/terrainAssetValidator.h"
+#include "material/loader/materialInstanceResolver.h"
+#include "material/materialDescriptorSchema.h"
+#include "material/generator/materialParameterIncludeGenerator.h"
 
 namespace VL
 {
@@ -26,6 +32,39 @@ constexpr const char* kBuildFlavorMarker = "vl_build_flavor.json";
 constexpr const char* kGameBuildMarker = "main_game.exe";
 constexpr const char* kShaderCachePath = "shader/spv/shader-build-cache.json";
 constexpr const char* kRuntimeShaderManifest = "shader/runtime-shader.manifest.json";
+constexpr const char* kTerrainFrozenPath = "config/terrainRvtP0Frozen.json";
+constexpr const char* kTerrainFrozenShaPath = "config/terrainRvtP0Frozen.json.sha256";
+constexpr const char* kTerrainFrozenSha256 =
+    "43fba0dd79a60a4a8b740598c7975d743ace9d32215adb35d8cab213e088e0dd";
+
+void ValidateTerrainRuntimeMaterial(
+    const fs::path& resourceRoot, const fs::path& projectRoot, const std::string& material)
+{
+    std::ifstream input(TerrainPackageClosure::Resolve(resourceRoot, material));
+    const auto instance = Json::parse(input);
+    const auto definitionName = TerrainPackageClosure::Relative(
+        TerrainPackageClosure::Text(instance.at("material"))).generic_string();
+    std::ifstream definitionInput(TerrainPackageClosure::Resolve(projectRoot, definitionName));
+    const auto definition = Json::parse(definitionInput);
+    const auto resolved = MaterialInstanceResolver::ResolveWithDefinition(material, instance, definition);
+    const auto schema = MaterialDescriptorSchema::Build(resolved.materialJson, resolved.materialPath);
+    schema.ValidateInstanceValues(resolved.effectiveMaterialInstanceJson.at("parameters"),
+        resolved.effectiveMaterialInstanceJson.at("textures"), {}, material);
+}
+
+void ValidateTerrainFrozenConfig(const fs::path& root)
+{
+    std::ifstream input(root / kTerrainFrozenPath, std::ios::binary);
+    if (!input) throw std::runtime_error("Missing frozen terrain P0 configuration");
+    const std::vector<uint8_t> bytes{std::istreambuf_iterator<char>(input), std::istreambuf_iterator<char>()};
+    if (TerrainPaintSha256Hex(bytes) != kTerrainFrozenSha256)
+        throw std::runtime_error("Frozen terrain P0 configuration differs from approved SHA256");
+    std::ifstream sidecar(root / kTerrainFrozenShaPath);
+    std::string recorded;
+    sidecar >> recorded;
+    if (!sidecar || recorded != kTerrainFrozenSha256)
+        throw std::runtime_error("Frozen terrain P0 SHA256 sidecar differs from approved SHA256");
+}
 
 // 运行时 Play 会直接使用这份裂纹覆盖层默认材质；它没有出现在
 // SC_fracture_playground 的 scene JSON 里，所以导出器必须显式补进闭包。
@@ -37,6 +76,9 @@ constexpr const char* kGameplayDefaultMaterials[] = {
 constexpr const char* kRuntimeComputeShaders[] = {
     "engine/skinnedDeform.comp",
     "terrain/terrainPageBake.comp",
+    "terrain/terrainCompositedBakeWorld.comp",
+    "terrain/terrainCompositedBakeWorldPadding.comp",
+    "terrain/terrainCompositedQuality.comp",
     "pass/autoExposureHistogram.comp",
     "pass/autoExposureAdapt.comp",
     "generator/brfdLut.comp",
@@ -222,6 +264,7 @@ public:
 
     void Asset(const std::string& name, bool modelSource = false)
     {
+        if (runtimeTerrainOutputs.count(name)) return;
         const auto source = ResolveContent(resourceRoot, name);
         const auto relative = source.lexically_relative(resourceRoot);
         Copy(source, fs::path("resources") / relative);
@@ -231,14 +274,158 @@ public:
             Tree(source.parent_path(), fs::path("resources") / relative.parent_path());
         }
         if (source.extension() == ".json" && parsedAssets.insert(source).second)
-            Scan(ReadJson(staging / "resources" / relative));
+        {
+            auto value = ReadJson(staging / "resources" / relative);
+            if (value.is_object() && value.value("type", std::string()) == "terrain")
+            {
+                throw std::runtime_error("Terrain export requires a scene placement identity: " + name);
+            }
+            if (value.is_object() && value.contains("kind") && value.at("kind") == "terrain-composited-vt")
+            {
+                Terrain(relative.generic_string());
+            }
+            else
+            {
+                RewriteTerrainPlacements(value);
+                WriteJson(staging / "resources" / relative, value);
+                Scan(value);
+            }
+        }
+    }
+
+    std::string RuntimeTerrain(const std::string& name, const std::string& surfaceId)
+    {
+        const auto source = ResolveContent(resourceRoot, name);
+        const auto relative = source.lexically_relative(resourceRoot).generic_string();
+        const auto key = relative + "\n" + surfaceId;
+        const auto existing = runtimeTerrainPaths.find(key);
+        if (existing != runtimeTerrainPaths.end()) return existing->second;
+        auto value = ReadJson(source);
+        TerrainAssetValidator::Validate(value, relative);
+        const auto& settings = value.at("compositedVT");
+        const auto manifestName = TerrainPackageClosure::Text(settings.at("packagePath"));
+        const auto relocated = Terrain(manifestName);
+        const auto store = TerrainCompositedVTStore::Open(staging / "resources" / relocated);
+        const auto& surfaces = store.Production().surfaces;
+        const auto surface = std::find_if(surfaces.begin(), surfaces.end(),
+            [&](const auto& entry) { return entry.surfaceId == surfaceId; });
+        if (surface == surfaces.end())
+            throw std::runtime_error("Terrain placement has no published surface: " + surfaceId);
+        const auto manifestParent = fs::path(relocated).parent_path();
+        value["materialInstancePath"] =
+            (manifestParent / TerrainPackageClosure::Relative(surface->runtimeMaterialInstancePath)).generic_string();
+        if (surface->runtimeDetailMaterialInstancePath.empty())
+            value.erase("detailMaterialInstancePath");
+        else
+            value["detailMaterialInstancePath"] =
+                (manifestParent / TerrainPackageClosure::Relative(surface->runtimeDetailMaterialInstancePath)).generic_string();
+        const auto height = ResolveContent(resourceRoot, value.at("heightmapPath").get<std::string>());
+        const auto heightName = fs::path("Runtime/Terrain") /
+            ("height_" + ContentHasher::HashFile(height).ToHex() + height.extension().generic_string());
+        if (runtimeHeightPaths.insert(heightName.generic_string()).second)
+            Copy(height, fs::path("resources") / heightName);
+        value["heightmapPath"] = heightName.generic_string();
+        value.erase("paintPath");
+        value["compositedVT"]["packagePath"] = relocated;
+        value["compositedVT"].erase("productionSourcePath");
+        std::string output = relative;
+        if (!runtimeTerrainSources.insert(relative).second)
+        {
+            output = "Runtime/Terrain/tr_" + ContentHasher::HashString(key).ToHex() + ".json";
+            if (value.contains("layers"))
+                for (auto& layer : value["layers"])
+                    if (layer.value("key", std::string()).empty())
+                        layer["key"] = relative + "#" + layer.at("name").get<std::string>();
+        }
+        TerrainAssetValidator::Validate(value, output);
+        WriteJson(staging / "resources" / output, value);
+        runtimeTerrainPaths.emplace(key, output);
+        runtimeTerrainOutputs.insert(output);
+        return output;
+    }
+
+    void RewriteTerrainPlacements(Json& value)
+    {
+        if (value.is_object())
+        {
+            if (value.value("type", std::string()) == "terrain" && value.contains("terrainPath"))
+            {
+                const auto name = value.at("terrainPath").get<std::string>();
+                const auto identity = value.value("name", std::string());
+                if (identity.empty())
+                    throw std::runtime_error("Terrain scene placement requires its native object name: " + name);
+                value["terrainPath"] = RuntimeTerrain(name, "terrain|" + identity);
+            }
+            for (auto& child : value.items()) RewriteTerrainPlacements(child.value());
+        }
+        else if (value.is_array())
+            for (auto& child : value) RewriteTerrainPlacements(child);
+    }
+
+    std::string Terrain(const std::string& manifestName)
+    {
+        const auto sourceManifest = TerrainPackageClosure::Resolve(resourceRoot, manifestName);
+        const auto manifestKey = Lower(fs::canonical(sourceManifest).generic_string());
+        const auto existing = terrainPackages.find(manifestKey);
+        if (existing != terrainPackages.end())
+            return existing->second;
+        const auto manifest = sourceManifest.lexically_relative(fs::canonical(resourceRoot));
+        const auto closure = TerrainPackageClosure::Open(resourceRoot, manifest.generic_string());
+        std::vector<std::string> materialErrors;
+        for (const auto& material : closure.materialInstances)
+        {
+            try { ValidateTerrainRuntimeMaterial(resourceRoot, projectRoot, material); }
+            catch (const std::exception& error)
+            { materialErrors.push_back(material + ": " + error.what()); }
+        }
+        if (!materialErrors.empty())
+        {
+            std::ostringstream errors;
+            errors << "Terrain runtime MI semantic validation failed (" << materialErrors.size()
+                << "/" << closure.materialInstances.size() << "):";
+            for (const auto& error : materialErrors) errors << "\n" << error;
+            throw std::runtime_error(errors.str());
+        }
+        for (const auto& material : closure.materialInstances)
+            Scan(ReadJson(TerrainPackageClosure::Resolve(resourceRoot, material)));
+        const auto inputRoot = fs::canonical(resourceRoot / manifest.parent_path());
+        const bool shorten = std::any_of(closure.files.begin(), closure.files.end(),
+            [&](const fs::path& file)
+            {
+                return (staging / "resources" / file.lexically_relative(resourceRoot)).wstring().size() > 259;
+            });
+        const auto directory = shorten
+            ? fs::path("VT") / ContentHasher::HashString(manifest.generic_string()).ToHex().substr(0, 16)
+            : manifest.parent_path();
+        for (const auto& file : closure.files)
+        {
+            const auto relative = file.lexically_relative(inputRoot);
+            TerrainPackageClosure::Relative(relative.generic_string());
+            Copy(file, fs::path("resources") / directory / relative);
+        }
+        const auto relocated = (directory / manifest.filename()).generic_string();
+        TerrainPackageClosure::Open(staging / "resources", relocated);
+        terrainPackages.emplace(manifestKey, relocated);
+        return relocated;
     }
 
     void Scan(const Json& value, const std::string& field = {},
         const std::string& parentField = {})
     {
+        if (field == "compositedVT")
+        {
+            if (!value.is_object() || !value.contains("enabled") ||
+                !value.at("enabled").is_boolean() || !value.at("enabled").get<bool>())
+                throw std::runtime_error("Terrain export requires explicit compositedVT.enabled=true");
+            const auto manifest = TerrainPackageClosure::Relative(
+                TerrainPackageClosure::Text(value.at("packagePath"))).generic_string();
+            Asset(manifest);
+            return;
+        }
         if (value.is_object())
         {
+            if (value.value("type", std::string()) == "glassPane")
+                requiresGlassCrack = true;
             if (value.contains("type") && value.at("type").is_string() &&
                 (value.at("type") == "blueprint" || value.at("type") == "blueprintInstance"))
                 requiresScripts = true;
@@ -277,6 +464,7 @@ public:
     }
 
     bool RequiresScripts() const { return requiresScripts; }
+    bool RequiresGlassCrack() const { return requiresGlassCrack; }
     const fs::path& Staging() const { return staging; }
     const fs::path& ResourceRoot() const { return resourceRoot; }
     const fs::path& ProjectRoot() const { return projectRoot; }
@@ -286,8 +474,14 @@ private:
     fs::path resourceRoot;
     fs::path staging;
     std::map<std::string, fs::path> destinations;
+    std::map<std::string, std::string> terrainPackages;
     std::set<fs::path> parsedAssets;
+    std::map<std::string, std::string> runtimeTerrainPaths;
+    std::set<std::string> runtimeTerrainSources;
+    std::set<std::string> runtimeTerrainOutputs;
+    std::set<std::string> runtimeHeightPaths;
     bool requiresScripts = false;
+    bool requiresGlassCrack = false;
 };
 
 fs::path SelectVersion(const fs::path& directory, const std::string& prefix)
@@ -517,6 +711,86 @@ struct ShaderClosure
     Json manifest;
 };
 
+void ValidateTerrainShaderIdentity(
+    const TerrainCompositedProductionClosure& production, const Json& cache)
+{
+    production.Validate();
+    const auto shaderDigest = [&](const std::string& id, TerrainCompositedProductionObjectKind kind)
+    {
+        const auto& object = production.Object(id);
+        if (object.kind != kind)
+            throw std::runtime_error("Terrain generator references a non-shader production object");
+        return object.digest.ToHex();
+    };
+    const auto& generator = production.generator;
+    if (generator.version != 3 ||
+        generator.filterRule != "mip0-center-coarse-area-local-normal-rvt-adjacency-padding-v3" ||
+        generator.encoding != "gpu-rvt-adjacency-area4-rgba8-v3")
+        throw std::runtime_error("Terrain publication requires gen3 adjacency-padding identity; recook old pages");
+    if (generator.compilePolicy != cache.at("compilePolicy").get<std::string>())
+        throw std::runtime_error("Terrain producer compile policy differs from game shader cache");
+    const auto mainDigest = shaderDigest(generator.computeSource, TerrainCompositedProductionObjectKind::ShaderSource);
+    std::set<std::string> includes;
+    for (const auto& id : generator.includeSources)
+        includes.insert(shaderDigest(id, TerrainCompositedProductionObjectKind::ShaderSource));
+    std::set<std::string> binaries;
+    for (const auto& id : generator.compiledArtifacts)
+        binaries.insert(shaderDigest(id, TerrainCompositedProductionObjectKind::ShaderArtifact));
+    const std::set<std::string> required = {
+        "terrain/terrainCompositedBakeWorld.comp", "terrain/terrainCompositedBakeWorldPadding.comp"};
+    const std::set<std::string> requiredIncludes = {
+        "terrain/terrainCompositedBakeWorldEvaluator.glsl", "terrain/terrainCompositedBakeWorldTypes.glsl",
+        "terrain/terrainCompositedBakeRoute.glsl"};
+    std::set<std::string> matched, expectedSources, expectedBinaries;
+    std::set<std::string> matchedIncludes;
+    std::set<std::string> primaryIdentities, outputPaths;
+    bool mainMatches = false;
+    for (const auto& artifact : cache.at("artifacts"))
+    {
+        if (artifact.at("kind") != "StageEntry") continue;
+        const auto path = ExtractNormalizedField(
+            artifact.at("normalizedKey").get<std::string>(), "path");
+        if (!path || !required.count(*path)) continue;
+        if (!matched.insert(*path).second)
+            throw std::runtime_error("Ambiguous terrain producer compute artifact");
+        if (artifact.at("primarySources").size() != 1)
+            throw std::runtime_error("Terrain producer requires one distinct primary source per pipeline");
+        for (const auto& source : artifact.at("primarySources"))
+        {
+            if (source.at("identity") != *path ||
+                !primaryIdentities.insert(source.at("identity").get<std::string>()).second)
+                throw std::runtime_error("Terrain producer primary GLSL identity differs from pipeline path");
+            if (source.at("identity") == "terrain/terrainCompositedBakeWorld.comp" && source.at("digest") == mainDigest)
+                mainMatches = true;
+            else
+                expectedSources.insert(source.at("digest").get<std::string>());
+        }
+        for (const auto& dependency : artifact.at("dependencies"))
+        {
+            const auto dependencyPath = dependency.at("path").get<std::string>();
+            if (requiredIncludes.count(dependencyPath))
+                matchedIncludes.insert(dependencyPath);
+            if (dependencyPath != "terrain/terrainCompositedBakeWorld.comp")
+                expectedSources.insert(dependency.at("digest").get<std::string>());
+        }
+        const auto& outputs = artifact.at("outputs");
+        if (!outputs.contains("runtimeCompute"))
+            throw std::runtime_error("Terrain producer compute runtime output missing");
+        for (const auto& output : outputs)
+        {
+            if (!outputPaths.insert(output.at("path").get<std::string>()).second)
+                throw std::runtime_error("Terrain producer pipelines alias a compiled output path");
+            expectedBinaries.insert(output.at("digest").get<std::string>());
+        }
+    }
+    if (matched == required && mainMatches && matchedIncludes == requiredIncludes &&
+        includes == expectedSources && binaries == expectedBinaries)
+        return;
+    throw std::runtime_error("Terrain producer main/include/SPV identity differs from game shader cache");
+}
+
+void ValidateRuntimeComputeClosure(const fs::path& root, const Json& cache, const Json& manifest);
+
 ShaderClosure BuildGameShaderClosure(
     const fs::path& project,
     const fs::path& staging,
@@ -544,6 +818,12 @@ ShaderClosure BuildGameShaderClosure(
             const Json value = ReadJson(entry.path());
             if (value.is_object() && value.contains("material") && value.at("material").is_string())
                 materialInstances.insert(entry.path().lexically_relative(staging / "resources").generic_string());
+            if (value.is_object() && value.value("kind", std::string()) == "terrain-composited-vt")
+            {
+                const auto terrain = TerrainPackageClosure::Open(staging / "resources",
+                    entry.path().lexically_relative(staging / "resources").generic_string());
+                ValidateTerrainShaderIdentity(terrain.store.Production(), cache);
+            }
         }
 
     std::set<std::string> materialSources;
@@ -553,7 +833,11 @@ ShaderClosure BuildGameShaderClosure(
     for (const auto& pass : graph.value("passes", Json::array()))
     {
         const std::string type = pass.value("type", std::string());
-        if (type == "shadow") graphicsShaders.insert("shadow");
+        if (type == "shadow")
+        {
+            graphicsShaders.insert("shadow");
+            graphicsShaders.insert("shadowLocal");
+        }
         if (type == "autoExposure")
         {
             computeShaders.insert("pass/autoExposureHistogram.comp");
@@ -602,6 +886,10 @@ ShaderClosure BuildGameShaderClosure(
         else if (kind == "GraphicsPair")
         {
             const auto shaderName = ExtractNormalizedField(normalizedKey, "shaderName");
+            if (shaderName.has_value() &&
+                (shaderName->rfind("particle/", 0) == 0 || shaderName->rfind("decal/", 0) == 0 ||
+                    *shaderName == "pass/fogComposite"))
+                graphicsShaders.insert(*shaderName);
             if (shaderName.has_value() && graphicsShaders.count(*shaderName) != 0)
             {
                 retained.insert(logicalBuildId);
@@ -611,6 +899,12 @@ ShaderClosure BuildGameShaderClosure(
         else if (kind == "StageEntry")
         {
             const auto shaderPath = ExtractNormalizedField(normalizedKey, "path");
+            if (shaderPath.has_value() &&
+                (shaderPath->rfind("particle/", 0) == 0 ||
+                    *shaderPath == "hair/tressfxSimFollowInterpolation.comp" ||
+                    *shaderPath == "pass/volumetricFog.comp" ||
+                    *shaderPath == "pass/lightCulling.comp"))
+                computeShaders.insert(*shaderPath);
             if (shaderPath.has_value() && computeShaders.count(*shaderPath) != 0)
             {
                 retained.insert(logicalBuildId);
@@ -675,19 +969,11 @@ ShaderClosure BuildGameShaderClosure(
                     if (existing.at("path") == relative) recorded = true;
                 if (!recorded)
                     manifestGenerated.push_back({{"path", relative}, {"derivedFrom", materialIt->second}});
-                // MI-referenced M_ assets are regenerated by the runtime at startup, so
-                // shipping them would invalidate the package digest. Pass materials
-                // (deferredLighting, terrainFeedback) are outside that generation set;
-                // their includes must ship with the exact digest or the first frame
-                // reports a cache miss.
-                if (materialDefinitions.find(materialIt->second) == materialDefinitions.end())
-                {
-                    const auto generatedSource = project / "shader/glsl" / relative;
-                    if (Digest(generatedSource) != expected)
-                        throw std::runtime_error("Generated shader source digest mismatch: " + relative);
-                    copy(generatedSource, fs::path("shader/glsl") / relative);
-                    copiedSources.emplace(relative, expected);
-                }
+                const auto generatedSource = project / "shader/glsl" / relative;
+                if (Digest(generatedSource) != expected)
+                    throw std::runtime_error("Generated shader source digest mismatch: " + relative);
+                copy(generatedSource, fs::path("shader/glsl") / relative);
+                copiedSources.emplace(relative, expected);
                 continue;
             }
             const auto source = project / "shader/glsl" / relative;
@@ -738,6 +1024,31 @@ ShaderClosure BuildGameShaderClosure(
         }
     }
 
+    std::vector<fs::path> shippedDefinitions;
+    for (const auto& entry : fs::recursive_directory_iterator(staging / "shader/glsl"))
+        if (entry.is_regular_file() && entry.path().extension() == ".json" &&
+            entry.path().filename().string().rfind("M_", 0) == 0)
+            shippedDefinitions.push_back(entry.path());
+    for (const auto& definitionPath : shippedDefinitions)
+    {
+        const auto definition = ReadJson(definitionPath);
+        const auto materialPath = definitionPath.lexically_relative(staging / "shader/glsl");
+        const auto generated = (materialPath.parent_path() / "generate" /
+            (definition.at("name").get<std::string>() + "Paramter.glsl")).generic_string();
+        const auto source = project / "shader/glsl" / generated;
+        const auto native = MaterialParameterIncludeGenerator::BuildGeneratedIncludeContent(
+            project / "shader/glsl" / materialPath);
+        const auto digest = Digest(source);
+        if (native.outputPath.lexically_normal() != source.lexically_normal() ||
+            ContentHasher::HashString(native.generatedBytes).ToHex() != digest)
+            throw std::runtime_error("Stage material include differs from native deterministic generator: " + generated);
+        const auto existing = copiedSources.find(generated);
+        if (existing != copiedSources.end() && existing->second != digest)
+            throw std::runtime_error("Generated material include conflicts with cache identity: " + generated);
+        copy(source, fs::path("shader/glsl") / generated);
+        copiedSources.emplace(generated, digest);
+    }
+
     copy(cachePath, fs::path("shader/spv/shader-build-cache.json"));
     const std::string cacheDigest = Digest(cachePath);
 
@@ -767,7 +1078,51 @@ ShaderClosure BuildGameShaderClosure(
         {"materials", std::move(materials)},
         {"sourceFiles", std::move(sourceFiles)},
         {"generatedAtStartup", std::move(manifestGenerated)}};
+    ValidateRuntimeComputeClosure(staging, cache, closure.manifest);
     return closure;
+}
+
+void ValidateRuntimeComputeClosure(const fs::path& root, const Json& cache, const Json& manifest)
+{
+    for (const auto* required : kRuntimeComputeShaders)
+    {
+        size_t matched = 0;
+        for (const auto& item : cache.at("artifacts").items())
+        {
+            const auto& artifact = item.value();
+            if (artifact.at("kind") != "StageEntry" ||
+                ExtractNormalizedField(artifact.at("normalizedKey").get<std::string>(), "path") != required)
+                continue;
+            ++matched;
+            if (!manifest.at("artifacts").contains(item.key()) ||
+                manifest.at("artifacts").at(item.key()).at("outputs") != artifact.at("outputs"))
+                throw std::runtime_error("Required runtime compute missing from retained closure: " + std::string(required));
+            for (const auto* role : {"runtimeCompute", "debugCompute"})
+                if (!artifact.at("outputs").contains(role))
+                    throw std::runtime_error("Required runtime compute output role missing: " + std::string(required));
+            bool primaryFound = false;
+            for (const auto& primary : artifact.at("primarySources"))
+            {
+                const auto name = primary.at("identity").get<std::string>();
+                if (name == required) primaryFound = true;
+                if (Digest(ResolveContent(root, "shader/glsl/" + name)) != primary.at("digest"))
+                    throw std::runtime_error("Runtime compute primary identity mismatch: " + name);
+            }
+            if (!primaryFound)
+                throw std::runtime_error("Runtime compute primary source is not its required entry: " + std::string(required));
+            for (const auto& dependency : artifact.at("dependencies"))
+            {
+                const auto name = dependency.at("path").get<std::string>();
+                if (Digest(ResolveContent(root, "shader/glsl/" + name)) != dependency.at("digest"))
+                    throw std::runtime_error("Runtime compute include identity mismatch: " + name);
+            }
+            for (const auto& output : artifact.at("outputs"))
+                if (Digest(ResolveContent(root, "shader/" + output.at("path").get<std::string>())) != output.at("digest"))
+                    throw std::runtime_error("Runtime compute output identity mismatch: " + std::string(required));
+        }
+        if (matched != 1)
+            throw std::runtime_error("Required runtime compute must have one cached entry: " + std::string(required));
+    }
 }
 
 void ValidateGameBuildMarker(const fs::path& binaries)
@@ -869,12 +1224,17 @@ GameExportResult ExportGame(const GameExportOptions& options)
             if (fs::is_directory(project / "shader/spv")) files.Tree(project / "shader/spv", "shader/spv");
         }
         CopyUiClosure(files, project, config, gameFlavor);
+        fs::create_directories(staging / "resources/Maps");
         files.Asset(options.initialScene);
         for (const auto& asset : options.dynamicAssets) files.Asset(asset);
         if (gameFlavor)
         {
-            for (const auto* material : kGameplayDefaultMaterials)
-                files.Asset(material);
+            ValidateTerrainFrozenConfig(project);
+            files.Copy(project / kTerrainFrozenPath, kTerrainFrozenPath);
+            files.Copy(project / kTerrainFrozenShaPath, kTerrainFrozenShaPath);
+            if (files.RequiresGlassCrack())
+                for (const auto* material : kGameplayDefaultMaterials)
+                    files.Asset(material);
         }
 
         auto graph = ReadJson(project / "config/renderGraphConfig.json");
@@ -909,6 +1269,7 @@ GameExportResult ExportGame(const GameExportOptions& options)
             {"flavor", FlavorName(options.flavor)}, {"uiFallback", !gameFlavor},
             {"initialScene", config.at("initScene")}, {"dynamicAssets", options.dynamicAssets},
             {"files", Json::array()}};
+        if (gameFlavor) result.manifest["terrainRvtFrozenSha256"] = kTerrainFrozenSha256;
         std::map<std::string, fs::path> ordered;
         for (const auto& entry : fs::recursive_directory_iterator(staging))
             if (entry.is_regular_file()) ordered.emplace(entry.path().lexically_relative(staging).generic_string(), entry.path());
@@ -936,9 +1297,14 @@ void VerifyGamePackage(const std::filesystem::path& packageDirectory)
 {
     const auto package = fs::canonical(packageDirectory);
     const Json exportManifest = ReadJson(package / "game-export-manifest.json");
+    ValidateTerrainFrozenConfig(package);
+    if (exportManifest.value("terrainRvtFrozenSha256", std::string()) != kTerrainFrozenSha256)
+        throw std::runtime_error("Package receipt lost approved terrain P0 SHA256");
+    std::set<std::string> listedFiles;
     for (const auto& file : exportManifest.at("files"))
     {
         const std::string relative = file.at("path").get<std::string>();
+        listedFiles.insert(relative);
         const auto path = ResolveContent(package, relative);
         if (fs::file_size(path) != file.at("size").get<uintmax_t>())
             throw std::runtime_error("Package file size mismatch: " + relative);
@@ -1014,10 +1380,6 @@ void VerifyGamePackage(const std::filesystem::path& packageDirectory)
         if (Digest(path) != material.at("digest").get<std::string>())
             throw std::runtime_error("Material digest mismatch: " + relative);
     }
-    // Pass-material generated includes ship with the package; the runtime only
-    // regenerates MI-referenced M_ assets, so rejecting every generated file
-    // here would force a first-frame recompile for deferredLighting and
-    // terrainFeedback.
     const auto cacheRecord = shaderManifest.at("cache");
     const auto cachePath = package / "shader" / cacheRecord.at("path").get<std::string>();
     if (Digest(cachePath) != cacheRecord.at("digest").get<std::string>())
@@ -1031,10 +1393,77 @@ void VerifyGamePackage(const std::filesystem::path& packageDirectory)
             throw std::runtime_error("shader/spv contains a file outside runtime-shader.manifest.json: " + relative);
     }
 
+    const Json shaderCache = ReadJson(cachePath);
+    ValidateRuntimeComputeClosure(package, shaderCache, shaderManifest);
+    for (const auto& entry : fs::recursive_directory_iterator(package / "shader/glsl"))
+    {
+        if (!entry.is_regular_file() || entry.path().extension() != ".json" ||
+            entry.path().filename().string().rfind("M_", 0) != 0)
+            continue;
+        const auto definition = ReadJson(entry.path());
+        const auto materialPath = entry.path().lexically_relative(package / "shader/glsl");
+        const auto generated = (materialPath.parent_path() / "generate" /
+            (definition.at("name").get<std::string>() + "Paramter.glsl")).generic_string();
+        const auto include = ResolveContent(package, "shader/glsl/" + generated);
+        const auto native = MaterialParameterIncludeGenerator::BuildGeneratedIncludeContent(entry.path());
+        if (ContentHasher::HashString(native.generatedBytes).ToHex() != Digest(include))
+            throw std::runtime_error("Installed material include differs from native generator: " + generated);
+        bool recorded = false;
+        for (const auto& source : shaderManifest.at("sourceFiles"))
+            if (source.at("path") == generated && source.at("digest") == Digest(include))
+                recorded = true;
+        if (!recorded)
+            throw std::runtime_error("Startup material include missing from installed source identity: " + generated);
+    }
+    std::set<std::string> verifiedTerrainPackages;
     for (const auto& entry : fs::recursive_directory_iterator(package / "resources"))
     {
         if (!entry.is_regular_file() || entry.path().extension() != ".json") continue;
         const Json value = ReadJson(entry.path());
+        auto verifyTerrain = [&package, &listedFiles, &shaderCache, &verifiedTerrainPackages](
+            const std::string& manifest)
+        {
+            const auto manifestKey = Lower(fs::canonical(
+                TerrainPackageClosure::Resolve(package / "resources", manifest)).generic_string());
+            if (verifiedTerrainPackages.count(manifestKey)) return;
+            const auto closure = TerrainPackageClosure::Open(package / "resources", manifest);
+            ValidateTerrainShaderIdentity(closure.store.Production(), shaderCache);
+            auto files = closure.files;
+            for (const auto& material : closure.materialInstances)
+            {
+                ValidateTerrainRuntimeMaterial(package / "resources", package, material);
+                files.push_back(TerrainPackageClosure::Resolve(package / "resources", material));
+            }
+            for (const auto& file : files)
+            {
+                const auto relative = file.lexically_relative(package).generic_string();
+                if (!listedFiles.count(relative))
+                    throw std::runtime_error("Terrain VT dependency missing from export manifest: " + relative);
+            }
+            verifiedTerrainPackages.insert(manifestKey);
+        };
+        if (value.is_object() && value.contains("kind") && value.at("kind") == "terrain-composited-vt")
+            verifyTerrain(entry.path().lexically_relative(package / "resources").generic_string());
+        if (value.is_object() && value.value("type", std::string()) == "terrain" &&
+            !value.contains("compositedVT"))
+            throw std::runtime_error("Packaged terrain requires compositedVT; migrate and Cook before export");
+        if (value.is_object() && value.contains("compositedVT"))
+        {
+            TerrainAssetValidator::Validate(value, entry.path().generic_string());
+            for (const auto* field : {"heightmapPath", "materialInstancePath", "detailMaterialInstancePath"})
+            {
+                if (!value.contains(field)) continue;
+                const auto dependency = TerrainPackageClosure::Resolve(
+                    package / "resources", value.at(field).get<std::string>());
+                if (!listedFiles.count(dependency.lexically_relative(package).generic_string()))
+                    throw std::runtime_error("Packaged terrain dependency missing from inventory: " + dependency.string());
+            }
+            const auto& terrain = value.at("compositedVT");
+            if (!terrain.is_object() || !terrain.contains("enabled") ||
+                !terrain.at("enabled").is_boolean() || !terrain.at("enabled").get<bool>())
+                throw std::runtime_error("Packaged terrain requires explicit compositedVT.enabled=true");
+            verifyTerrain(TerrainPackageClosure::Text(terrain.at("packagePath")));
+        }
         if (!value.is_object() || !value.contains("material") || !value.at("material").is_string()) continue;
         const std::string material =
             NormalizeShaderGlslRelativePath(value.at("material").get<std::string>());

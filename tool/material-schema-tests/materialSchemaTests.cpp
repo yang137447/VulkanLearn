@@ -14,6 +14,7 @@
 #include "material/materialDescriptorSchema.h"
 #include "material/loader/materialInstanceResolver.h"
 #include "material/validation/materialAssetValidator.h"
+#include "materialInstanceValidator.h"
 
 namespace
 {
@@ -316,7 +317,7 @@ TEST(MaterialSchema, TextureArrayUsesSampler2DArrayBinding)
         std::exception);
 }
 
-TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
+TEST(MaterialSchema, TerrainMaterialDeclaresCompositedCoverageAndResidentHeightBindings)
 {
     const std::filesystem::path materialPath =
         std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() /
@@ -332,8 +333,7 @@ TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
             material,
             "shader/glsl/M_terrain.json");
 
-    // M_terrain 当前声明 21 张纹理（含 7 张层页表）。
-    ASSERT_EQ(schema.GetTextures().size(), 21u);
+    ASSERT_EQ(schema.GetTextures().size(), material.at("textures").size());
     bool sawLayerTable = false;
     bool sawPageTable = false;
     bool sawLayerIds = false;
@@ -374,7 +374,9 @@ TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
                 sawLayerPageTable4 = true;
         }
         else if (texture.name == "globalColour" ||
-                 texture.name == "globalMasks")
+                 texture.name == "globalMasks" ||
+                 texture.name == "terrainHeightLayerMap" ||
+                 texture.name == "terrainLayerSourceMap")
         {
             // 全局色/遮罩是单张 2D 平铺图。
             EXPECT_EQ(texture.glslType, "sampler2D");
@@ -398,11 +400,11 @@ TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
     EXPECT_TRUE(sawPageTable);
     EXPECT_TRUE(sawLayerIds);
     EXPECT_TRUE(sawLayerWeights);
-    EXPECT_TRUE(sawLayerPageTable0);
-    EXPECT_TRUE(sawLayerPageTable4);
-    EXPECT_TRUE(sawLayerAlbedoAtlas);
-    EXPECT_TRUE(sawLayerNormalAtlas);
-    EXPECT_TRUE(sawLayerPbrAtlas);
+    EXPECT_FALSE(sawLayerPageTable0);
+    EXPECT_FALSE(sawLayerPageTable4);
+    EXPECT_FALSE(sawLayerAlbedoAtlas);
+    EXPECT_FALSE(sawLayerNormalAtlas);
+    EXPECT_FALSE(sawLayerPbrAtlas);
 
     bool sawTerrainLayerMode = false;
     bool sawLayerPageResolution = false;
@@ -453,23 +455,116 @@ TEST(MaterialSchema, TerrainMaterialDeclaresLegacyAndLayerVTBindings)
                 6.0f);
         }
     }
-    EXPECT_TRUE(sawTerrainLayerMode);
-    EXPECT_TRUE(sawLayerPageResolution);
-    EXPECT_TRUE(sawLayerMaxMip);
-    EXPECT_TRUE(sawLayerForceMip);
-    // VT 纹理默认必须是可加载的占位资源，否则使用旧 MI（未覆盖新 binding）
-    // 时 ValidateInstanceValues 会因“shader 使用但 MI 未提供纹理”失败。
+    EXPECT_FALSE(sawTerrainLayerMode);
+    EXPECT_FALSE(sawLayerPageResolution);
+    EXPECT_FALSE(sawLayerMaxMip);
+    EXPECT_FALSE(sawLayerForceMip);
     for (const char* textureName : {
-             "layerPageTable0",
-             "layerPageTable4",
-             "layerAlbedoAtlas",
-             "layerNormalAtlas",
-             "layerPbrAtlas"})
+             "compositedPageTable", "compositedAlbedo", "compositedNormal",
+             "compositedOrm", "terrainHeightAtlas", "terrainHeightLayerMap",
+             "terrainLayerSourceMap"})
     {
         ASSERT_TRUE(material["textures"].contains(textureName));
         EXPECT_FALSE(
             material["textures"][textureName]["default"].is_null());
     }
+}
+
+class TerrainMaterialMigration : public testing::Test
+{
+protected:
+    void SetUp() override
+    {
+        std::ifstream stream(std::string(VL_SOURCE_ROOT) + "/shader/glsl/M_terrain.json");
+        ASSERT_TRUE(stream.good());
+        stream >> definition;
+        const auto resolved = MaterialInstanceResolver::ResolveWithDefinition(
+            "MI_terrain_migration.json",
+            {{"type", "materialInstance"}, {"material", "shader/glsl/M_terrain.json"}},
+            definition);
+        effective = resolved.effectiveMaterialInstanceJson;
+    }
+
+    MaterialInstanceBuildPlan Plan(bool tessellation = true)
+    {
+        return MaterialInstanceValidator::BuildLoadPlan(
+            "MI_terrain_migration.json", {}, effective,
+            "shader/glsl/M_terrain.json", definition, false, false, tessellation);
+    }
+
+    void ExpectMigrationError(const std::string& field)
+    {
+        try
+        {
+            Plan();
+            FAIL() << "Accepted retired field " << field;
+        }
+        catch (const std::runtime_error& error)
+        {
+            const std::string message = error.what();
+            EXPECT_NE(message.find("Retired terrain material field"), std::string::npos);
+            EXPECT_NE(message.find(field), std::string::npos);
+            EXPECT_NE(message.find("recook"), std::string::npos);
+            EXPECT_NE(message.find("MI_terrain_migration.json"), std::string::npos);
+        }
+    }
+
+    nlohmann::json definition;
+    nlohmann::json effective;
+};
+
+TEST_F(TerrainMaterialMigration, RejectsEveryRetiredParameterIncludingDefaultAndNull)
+{
+    const auto baseline = effective;
+    for (const char* field : {
+        "u_terrainLayerMode", "u_layerForceMip", "u_layerPageResolution",
+        "u_layerAtlasResolution", "u_layerPagesPerAtlasSlice",
+        "u_layerTilesPerAtlasSide", "u_layerMaxMip", "u_heightBlendDistanceFade"})
+        for (const auto& value : {nlohmann::json(0), nlohmann::json(1), nlohmann::json(nullptr)})
+        {
+            effective = baseline;
+            effective["parameters"][field] = value;
+            ExpectMigrationError(field);
+        }
+}
+
+TEST_F(TerrainMaterialMigration, RejectsRetiredTextureSlotsEvenWhenNull)
+{
+    const auto baseline = effective;
+    for (const char* field : {
+        "layerPageTable0", "layerPageTable1", "layerPageTable2", "layerPageTable3",
+        "layerPageTable4", "layerPageTable5", "layerPageTable6",
+        "layerAlbedoAtlas", "layerNormalAtlas", "layerPbrAtlas"})
+        for (const auto& value : {nlohmann::json("Generated/Old/texture.json"), nlohmann::json(nullptr)})
+        {
+            effective = baseline;
+            effective["textures"][field] = value;
+            ExpectMigrationError(field);
+        }
+}
+
+TEST_F(TerrainMaterialMigration, KeepsDisplacementCoverageSourcesAndTessellationCapability)
+{
+    effective["parameters"]["u_layerDisplacementScale"] = 0.75;
+    effective["macros"]["VL_TERRAIN_TESSELLATION"] = 1;
+    const auto enabled = Plan(true);
+    const auto disabled = Plan(false);
+    EXPECT_TRUE(HasMaterialMacroValue(enabled.shaderVariantKey.macros, "VL_TERRAIN_TESSELLATION", "1"));
+    EXPECT_TRUE(HasMaterialMacroValue(disabled.shaderVariantKey.macros, "VL_TERRAIN_TESSELLATION", "0"));
+    EXPECT_NE(enabled.materialKey, disabled.materialKey);
+    EXPECT_TRUE(definition["parameters"].contains("u_layerDisplacementScale"));
+    for (const char* field : {"layerTable", "layerIds", "layerWeights", "pageTable",
+        "layerAlbedo", "layerNormal", "layerPbr", "layerHeight", "layerWeightMaps",
+        "terrainHeightAtlas", "terrainHeightLayerMap"})
+        EXPECT_TRUE(definition["textures"].contains(field));
+}
+
+TEST_F(TerrainMaterialMigration, DoesNotReserveRetiredNamesForUnrelatedShaders)
+{
+    effective["shaderName"] = "unrelated";
+    effective["parameters"]["u_terrainLayerMode"] = 0;
+    effective["textures"]["layerAlbedoAtlas"] = nullptr;
+    EXPECT_NO_THROW(Plan());
 }
 
 TEST(MaterialSchema, ParameterMetadataValidation)

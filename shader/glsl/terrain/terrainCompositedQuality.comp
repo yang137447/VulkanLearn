@@ -1,0 +1,144 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "../materialFunction/terrainCompositedFootprint.glsl"
+
+layout(local_size_x = 64) in;
+layout(set = 0, binding = 0, std430) buffer Capture { uint words[]; };
+layout(set = 0, binding = 1) uniform sampler2DArray qualityPageTable;
+layout(set = 0, binding = 2, std430) readonly buffer Selector { uint surfaceIndex; };
+layout(set = 0, binding = 3) uniform usampler2D qualityWinner0;
+layout(set = 0, binding = 4) uniform usampler2D qualityWinner1;
+layout(set = 0, binding = 5) uniform sampler2D qualityWinnerDepth;
+
+const uint SampleWord = 64u;
+const uint ResultWord = 131136u;
+const uint SurfaceWord = 401472u;
+
+ivec2 QualityExtent(vec2 resolution, int mip)
+{
+    return max(ivec2(floor(resolution / exp2(float(mip)))), ivec2(1));
+}
+
+vec2 QualityTexel(vec2 uv, ivec2 extent, bool repeatMode)
+{
+    vec2 addressed = repeatMode ? fract(uv) : clamp(uv, vec2(0.0), vec2(1.0));
+    return repeatMode ? addressed * vec2(extent) :
+        clamp(addressed * vec2(extent), vec2(0.5), vec2(extent) - 0.5);
+}
+
+uint QualityResult(uint entry, int mip, ivec2 page, bool anchored)
+{
+    if (entry > 512u || any(lessThan(page, ivec2(0))) ||
+        any(greaterThan(page, ivec2(63))))
+    {
+        atomicAdd(words[5], 1u);
+        return 0u;
+    }
+    return entry | (uint(mip) << 10) | (uint(page.x) << 14) |
+        (uint(page.y) << 20) | (1u << 26) | (anchored ? (1u << 27) : 0u);
+}
+
+uint QualityAddress(vec2 centerUv, vec2 tapUv, vec2 resolution,
+    int requested, int maximum, bool repeatMode)
+{
+    ivec2 lastPage = ivec2(0);
+    for (int mip = requested; mip <= maximum; ++mip)
+    {
+        ivec2 extent = QualityExtent(resolution, mip);
+        vec2 centerTexel = QualityTexel(centerUv, extent, repeatMode);
+        ivec2 centerPage = ivec2(floor(centerTexel / 128.0));
+        vec2 deltaUv = tapUv - centerUv;
+        deltaUv -= round(deltaUv);
+        vec2 tapTexel = repeatMode ? centerTexel + deltaUv * vec2(extent) :
+            QualityTexel(tapUv, extent, repeatMode);
+        vec2 local = tapTexel - vec2(centerPage) * 128.0;
+        if (all(greaterThanEqual(local, vec2(-3.5))) &&
+            all(lessThanEqual(local, vec2(131.5))))
+        {
+            uint entry = uint(texelFetch(qualityPageTable, ivec3(centerPage, mip), 0).r + 0.5);
+            if (entry != 0u)
+                return QualityResult(entry, mip, centerPage, true);
+        }
+        lastPage = ivec2(floor(QualityTexel(tapUv, extent, repeatMode) / 128.0));
+        uint entry = uint(texelFetch(qualityPageTable, ivec3(lastPage, mip), 0).r + 0.5);
+        if (entry != 0u)
+            return QualityResult(entry, mip, lastPage, false);
+    }
+    return QualityResult(0u, maximum, lastPage, false);
+}
+
+void main()
+{
+    uint pixel = gl_GlobalInvocationID.x;
+    if (pixel >= 16384u)
+        return;
+    uint sampleOffset = SampleWord + pixel * 8u;
+    if (surfaceIndex == 0u)
+    {
+        ivec2 position = ivec2(int(pixel % 128u), int(pixel / 128u));
+        uvec4 winner0 = texelFetch(qualityWinner0, position, 0);
+        uvec4 winner1 = texelFetch(qualityWinner1, position, 0);
+        float depth = texelFetch(qualityWinnerDepth, position, 0).r;
+        bool valid = (winner1.w & 0x80000000u) != 0u;
+        bool terrainDepth = depth < 1.0;
+        if (!valid && depth == 1.0)
+            return;
+        atomicAdd(words[3], 1u);
+        words[sampleOffset] = winner0.x;
+        words[sampleOffset + 1u] = winner0.y;
+        words[sampleOffset + 2u] = winner0.z;
+        words[sampleOffset + 3u] = winner0.w;
+        words[sampleOffset + 4u] = winner1.x;
+        words[sampleOffset + 5u] = winner1.y;
+        words[sampleOffset + 6u] = winner1.z;
+        words[sampleOffset + 7u] = 1u;
+        if (!valid || !terrainDepth || isnan(depth) || isinf(depth) || depth < 0.0 ||
+            (winner1.w & 0x7fffffffu) != floatBitsToUint(depth) ||
+            (winner1.z & 65535u) >= words[18])
+        {
+            atomicAdd(words[5], 1u);
+            if (!valid)
+                atomicAdd(words[21], 1u);
+            words[sampleOffset + 6u] = 65535u;
+            return;
+        }
+    }
+    if (words[sampleOffset + 7u] == 0u)
+        return;
+    uint packed = words[sampleOffset + 6u];
+    if ((packed & 65535u) != surfaceIndex)
+        return;
+    uint taps = packed >> 16;
+    float target = uintBitsToFloat(words[sampleOffset + 4u]);
+    float bias = uintBitsToFloat(words[sampleOffset + 5u]);
+    vec2 uv = vec2(uintBitsToFloat(words[sampleOffset]), uintBitsToFloat(words[sampleOffset + 1u]));
+    vec2 majorUv = vec2(uintBitsToFloat(words[sampleOffset + 2u]),
+        uintBitsToFloat(words[sampleOffset + 3u]));
+    uint surfaceOffset = SurfaceWord + surfaceIndex * 16u;
+    vec2 resolution = vec2(words[surfaceOffset + 1u], words[surfaceOffset + 2u]);
+    int maximum = int(words[surfaceOffset + 3u] & 255u);
+    bool repeatMode = (words[surfaceOffset + 3u] & 256u) != 0u;
+    if (taps < 1u || taps > 8u || isnan(target) || isinf(target) ||
+        isnan(bias) || isinf(bias) || bias < 0.0 || bias > 1.0 ||
+        bias != floor(bias) || target < 0.0 || target > float(maximum) ||
+        any(isnan(uv)) || any(isinf(uv)) || any(isnan(majorUv)) || any(isinf(majorUv)))
+    {
+        atomicAdd(words[5], 1u);
+        return;
+    }
+    TerrainCompositedFootprint footprint;
+    footprint.majorUv = majorUv;
+    footprint.targetMip = target;
+    footprint.tapCount = int(taps);
+    int low = min(maximum, int(floor(target)) + int(bias));
+    for (uint tap = 0u; tap < taps; ++tap)
+    {
+        vec2 tapUv = TerrainCompositedTapUv(uv, footprint, int(tap));
+        words[ResultWord + pixel * 16u + tap * 2u] =
+            QualityAddress(uv, tapUv, resolution, low, maximum, repeatMode);
+        words[ResultWord + pixel * 16u + tap * 2u + 1u] =
+            QualityAddress(uv, tapUv, resolution, min(low + 1, maximum), maximum, repeatMode);
+    }
+    atomicAdd(words[6], 1u);
+}

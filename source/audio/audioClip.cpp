@@ -6,6 +6,7 @@
 #include <cstdint>
 #include <cstring>
 #include <fstream>
+#include "core/tracingIfstream.h"
 #include <limits>
 #include <utility>
 #include <vector>
@@ -100,7 +101,8 @@ bool ReadWholeFile(
     std::vector<std::uint8_t>& bytes,
     std::string& error)
 {
-    std::ifstream file(path, std::ios::binary | std::ios::ate);
+    VL::RuntimeFileTrace::TracingIfstream file(
+        path, std::ios::binary | std::ios::ate, "AudioClip.Wav");
     if (!file)
     {
         error = "cannot open " + path.string();

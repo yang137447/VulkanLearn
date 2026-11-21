@@ -93,6 +93,8 @@ else()
     set(VL_RUNTIME_SLICE_COMMON_SOURCES
         "${VULKANLEARN_SOURCE_DIR}/source/material/validation/materialAssetValidator.cpp"
         "${VULKANLEARN_SOURCE_DIR}/source/shader/build/atomicFile.cpp"
+        "${VULKANLEARN_SOURCE_DIR}/source/core/runtimeFileTrace.cpp"
+        "${VULKANLEARN_SOURCE_DIR}/source/core/tracingIfstream.cpp"
         "${VULKANLEARN_SOURCE_DIR}/source/shader/build/contentHash.cpp"
         "${VULKANLEARN_SOURCE_DIR}/source/render/editorBridge/materialInstancePreviewTypes.cpp"
         "${VULKANLEARN_SOURCE_DIR}/source/render/editorBridge/materialInstancePreviewAdapter.cpp")

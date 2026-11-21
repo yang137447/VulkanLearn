@@ -1,0 +1,28 @@
+#version 450
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, set = 0, binding = 0) readonly buffer World
+{
+    uvec4 page;
+    uvec4 control;
+} world;
+layout(std430, set = 0, binding = 1) buffer Output
+{
+    uint words[];
+} outputPage;
+void main()
+{
+    const uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (world.control.y != 0u)
+        return;
+    if (any(greaterThanEqual(pixel, uvec2(136))))
+        return;
+    const uvec2 evaluationExtent = min(uvec2(128), world.page.xy - world.page.zw * 128u) + 8u;
+    if (all(lessThan(pixel, evaluationExtent)))
+        return;
+    const uvec2 source = min(pixel, evaluationExtent - 1u);
+    const uint targetTexel = pixel.y * 136u + pixel.x;
+    const uint sourceTexel = source.y * 136u + source.x;
+    for (uint channel = 0u; channel < 3u; ++channel)
+        outputPage.words[channel * 136u * 136u + targetTexel] =
+            outputPage.words[channel * 136u * 136u + sourceTexel];
+}

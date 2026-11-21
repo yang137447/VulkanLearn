@@ -61,10 +61,10 @@ void main()
         const float edge12 = TerrainTessFactorForEdge(p1, p2);
         const float edge23 = TerrainTessFactorForEdge(p2, p3);
         const float edge30 = TerrainTessFactorForEdge(p3, p0);
-        gl_TessLevelOuter[0] = edge01;
-        gl_TessLevelOuter[1] = edge12;
-        gl_TessLevelOuter[2] = edge23;
-        gl_TessLevelOuter[3] = edge30;
+        gl_TessLevelOuter[0] = edge30;
+        gl_TessLevelOuter[1] = edge01;
+        gl_TessLevelOuter[2] = edge12;
+        gl_TessLevelOuter[3] = edge23;
 
         // 内部因子不参与跨 patch 边界匹配；取四条边的最大值，避免内部比
         // 屏幕空间目标更稀。

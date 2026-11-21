@@ -123,6 +123,7 @@ protected:
         payload.document = {
             {"name", "TR_test"},
             {"type", "terrain"},
+            {"compositedVT", {{"enabled", true}, {"packagePath", "Generated/Validation/TerrainEditor/Cooked/manifest.json"}}},
             {"heightmapPath", "Maps/HM_test.png"},
             {"materialInstancePath", "Maps/MI_test.json"},
             {"size", {1000.0, 800.0}},
@@ -159,6 +160,8 @@ TEST_F(TerrainAssetEditorTest, BuildRendersTopLevelFieldsAndLayerCards)
     ASSERT_NE(Find("terrain-layer-0-noise"), nullptr);
     ASSERT_NE(Find("terrain-layer-1-noise"), nullptr);
     EXPECT_NE(Find("terrain-asset-editor")->QuerySelector("img"), nullptr);
+    EXPECT_NE(Find("terrain-asset-editor")->GetInnerRML().find(
+        "--terrain-vt-cook"), std::string::npos);
     EXPECT_EQ(dynamic_cast<Rml::ElementFormControl*>(
         Find("terrain-field-heightScale"))->GetValue(), "120.0");
 }

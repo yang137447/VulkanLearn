@@ -489,11 +489,11 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
             const auto& outputs = pass.outputResources;
             const auto& inputs = pass.inputDescriptors;
             bool invalidInputs = inputs.empty() ||
-                inputs.size() > 4 ||
+                inputs.size() > 5 ||
                 // 输出 = 1..5 张颜色附件 + 1 张深度；覆盖页 RT 不需要
                 // 对应的 worldTexture 输入，所以不能把颜色数钉在输入数上。
                 outputs.size() < 2 ||
-                outputs.size() > 6;
+                outputs.size() > 8;
             for (size_t inputIndex = 0;
                  !invalidInputs && inputIndex < inputs.size();
                  ++inputIndex)
@@ -514,8 +514,8 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
             {
                 return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                     "RenderGraphCompiler.InvalidTerrainFeedback",
-                    "TerrainFeedback requires 1..4 worldTexture inputs with bindings 0..N-1, "
-                    "1..5 fixed color outputs and one fixed depth output with depth test.",
+                    "TerrainFeedback requires 1..5 worldTexture inputs with bindings 0..N-1, "
+                    "1..5 feedback colors, optional two winner colors and one fixed depth output.",
                     pass.name));
             }
 
@@ -549,21 +549,25 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                     colorTargets.push_back(resource);
             }
             if (colorTargets.empty() ||
-                colorTargets.size() > 5 ||
+                (colorTargets.size() > 5 && colorTargets.size() != 7) ||
                 depthTarget == nullptr)
             {
                 return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                     "RenderGraphCompiler.InvalidTerrainFeedback",
-                    "TerrainFeedback requires 1..5 color outputs plus one depth output.",
+                    "TerrainFeedback requires 1..5 feedback colors or five plus two winner colors.",
                     pass.name));
             }
-            for (const CompiledRenderGraphResource* colorTarget :
-                 colorTargets)
+            for (size_t colorIndex = 0; colorIndex < colorTargets.size(); ++colorIndex)
             {
+                const auto* colorTarget = colorTargets[colorIndex];
+                const bool winner = colorIndex >= 5;
                 if (colorTarget == depthTarget ||
                     colorTarget->isSwapchain ||
                     colorTarget->type != "texture2D" ||
-                    colorTarget->format != "R8G8B8A8_UNORM" ||
+                    colorTarget->format != (winner ? "R32G32B32A32_UINT" : "R8G8B8A8_UNORM") ||
+                    (winner && (colorTarget->name !=
+                        (colorIndex == 5 ? "terrainQualityWinner0" : "terrainQualityWinner1") ||
+                        colorTarget->clearColor != std::array<float, 4>{0, 0, 0, 0})) ||
                     !colorTarget->hasFixedWidth ||
                     !colorTarget->hasFixedHeight ||
                     colorTarget->widthValue !=
@@ -577,11 +581,11 @@ RuntimeResult<CompiledRenderGraph> RenderGraphCompiler::Compile(const nlohmann::
                     std::find(
                         colorTarget->usage.begin(),
                         colorTarget->usage.end(),
-                        "transferSrc") == colorTarget->usage.end())
+                        winner ? "sampled" : "transferSrc") == colorTarget->usage.end())
                 {
                     return RuntimeResult<CompiledRenderGraph>::Failure(MakeCompileError(
                         "RenderGraphCompiler.InvalidTerrainFeedback",
-                        "TerrainFeedback color outputs must be fixed 128x128 R8G8B8A8_UNORM colorAttachment+transferSrc textures.",
+                        "TerrainFeedback requires fixed 128x128 RGBA8 feedback or zero-cleared RGBA32Uint winner targets.",
                         pass.name + ":" + colorTarget->name));
                 }
             }

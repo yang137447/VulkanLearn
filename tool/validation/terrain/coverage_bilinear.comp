@@ -1,0 +1,35 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "materialFunction/terrainCoverage.glsl"
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, set = 0, binding = 1) buffer Output { uint words[]; } outputPage;
+layout(set = 0, binding = 2) uniform sampler2D pages;
+layout(set = 0, binding = 3) uniform sampler2D layerIds;
+layout(set = 0, binding = 4) uniform sampler2D layerWeights;
+layout(set = 0, binding = 6) uniform sampler2D queries;
+
+void main()
+{
+    const uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (pixel.y != 0u || pixel.x >= 136u)
+        return;
+    const vec4 query = texelFetch(queries, ivec2(int(pixel.x), 0), 0);
+    const vec2 uv = query.xy;
+    uvec4 ids;
+    vec4 weights;
+    uint status;
+    if (query.z > 0.5)
+        status = TerrainCoverageBilinear(
+            pages, layerIds, layerWeights, uv, 2, ivec4(0, 0, 1, 3), ids, weights);
+    else
+        status = TerrainCoverageBilinear(
+            pages, layerIds, layerWeights, uv, 2, ids, weights);
+    const uint offset = pixel.x * 9u;
+    for (uint slot = 0u; slot < 4u; ++slot)
+    {
+        outputPage.words[offset + slot] = ids[slot];
+        outputPage.words[offset + 4u + slot] = floatBitsToUint(weights[slot]);
+    }
+    outputPage.words[offset + 8u] = status;
+}

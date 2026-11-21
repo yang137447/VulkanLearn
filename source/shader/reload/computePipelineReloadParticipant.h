@@ -63,6 +63,14 @@ public:
     virtual ComputeDescriptorReplacement PrepareReplacementDescriptors(
         const ComputeShaderArtifact& candidate,
         const std::shared_ptr<ComputePipeline>& replacementPipeline) const = 0;
+    virtual ComputeDescriptorReplacement PrepareReplacementDescriptors(
+        const ComputeShaderArtifact& candidate,
+        const std::shared_ptr<ComputePipeline>& replacementPipeline,
+        const ShaderBuildArtifact&,
+        const ShaderBuildRequest&) const
+    {
+        return PrepareReplacementDescriptors(candidate, replacementPipeline);
+    }
 
     // Swaps the live pipeline and descriptor resources after the caller has
     // already retained the old pipeline and descriptor package for epoch

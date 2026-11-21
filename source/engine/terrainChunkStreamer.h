@@ -4,6 +4,7 @@
 #include <cstdint>
 #include <deque>
 #include <map>
+#include <memory>
 #include <mutex>
 #include <set>
 #include <string>
@@ -33,6 +34,7 @@ struct TerrainChunkStreamingStats
     uint64_t uploadedChunks = 0;
     uint64_t evictedChunks = 0;
     uint64_t failedBuilds = 0;
+    uint64_t staleBuilds = 0;
 };
 
 // 运行时几何 chunk streaming 的第一版：
@@ -61,6 +63,7 @@ public:
     const TerrainChunkStreamingStats& Stats() const noexcept { return stats; }
 
 private:
+    friend struct TerrainChunkStreamerTestAccess;
     struct Placement
     {
         TerrainBuildPlan plan;
@@ -73,8 +76,9 @@ private:
         std::vector<float> residencyDistancesCm;
         std::vector<TerrainChunkBounds> chunkBounds;
         std::set<TerrainChunkId> resident;
-        std::set<TerrainChunkId> building;
+        std::map<TerrainChunkId, uint64_t> building;
         std::map<TerrainChunkId, uint32_t> absentFrames;
+        uint64_t heightRevision = 1;
     };
 
     struct BuildRequest
@@ -83,6 +87,7 @@ private:
         size_t placementIndex = 0;
         TerrainChunkId id;
         TerrainBuildPlan plan;
+        uint64_t heightRevision = 0;
     };
 
     struct BuildResult
@@ -92,15 +97,20 @@ private:
         TerrainChunkId id;
         std::vector<TerrainMeshChunk> chunks;
         std::string error;
+        std::shared_ptr<const HostImage> heightmap;
+        uint64_t heightRevision = 0;
     };
 
     void RebuildPlacements(World& world);
     bool RefreshPlacement(World& world, Placement& placement);
+    static void RefreshHeightSnapshot(Placement& placement, const TerrainBuildPlan& plan);
     const WorldMeshObject* FindTemplate(
         const World& world,
         const std::string& placementId) const;
     void RequestBuild(size_t placementIndex, const TerrainChunkId& id);
     void PollCompletedBuilds();
+    static bool FinishBuild(Placement& placement, const BuildResult& result);
+    static bool UsesDynamicVertices(const TerrainBuildPlan& plan, bool authoring);
     bool UploadChunk(
         World& world,
         RendererBackendVulkan& backend,

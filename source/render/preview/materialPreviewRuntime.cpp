@@ -1,4 +1,6 @@
 #include "render/preview/materialPreviewRuntime.h"
+#include "render/resource/rendererTerrainLoader.h"
+#include "render/resource/terrainCompositedService.h"
 
 #include <memory>
 #include <utility>
@@ -189,6 +191,11 @@ private:
             VL::ValidateOfflineTexturesStillCurrent(*preparedOfflineAssets);
             materialInstance->CommitNumericParameterValues(
                 restoreBaseline ? baselineParameters : *parsed.values);
+            const auto streaming =
+                VL::RendererResourceCache::GetInstance().GetTerrainStreaming();
+            if (streaming && streaming->composited)
+                streaming->composited->NotifyMaterialChanged(
+                    materialInstancePath.value, materialInstance);
         }
         catch (const std::exception& exception)
         {

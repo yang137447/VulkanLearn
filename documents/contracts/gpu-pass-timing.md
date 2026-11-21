@@ -33,6 +33,27 @@
 
 ## 时间戳写入位置
 
+`VL_GPU_TIMING_RAW=1` 环境变量使每次 fence 后成功读回的帧输出一条
+`[GPU_RAW]` JSON，保留逐帧的 pass 毫秒与 null；该通道不经过 120 帧平均。
+它依赖 `--gpu-stats`、`--perf-jsonl` 或控制台命令启用 query 采集。
+`[BAKE_GPU_RAW]` 由同步 `BakePageSync` 输出，独立测量生产区间和 GPU 到 host
+readback buffer 的 copy；前者包括 output 初始化、compute 及其 barrier，
+后者不是 runtime buffer 到 atlas image 的复制。两者均使用 GPU timestamp，
+不以 CPU 提交或 fence 等待耗时代替 GPU 时间。
+
+合成地形服务在主帧中的调用以 `terrainCompositedProductionAndCopy` 包围，
+包含该次调用录制的输入刷新、预览生产和页面上传；Game V1 稳态只有页上传。
+`geometry` 是包含基础地形采样与 TES 的完整绘制阶段，也包含其他 geometry
+对象，不能解释为独立 TES、独立材质采样或只属于地形的成本。
+`terrainQualityAfterFeedback` 独立包围原 `terrainFeedback` 计时结束后的
+`RecordAfterFeedback` 调用，包含实际 capture 的 buffer 初始化、winner/depth
+采样布局转换、QualityCompute 页表 resolve、query 与 readback copy，进入同一
+GPU pass 表和逐帧 instrumented sum。未录制 capture 的调用也保留这个区间，
+如实记录空区间的 timestamp 成本，不通过移除该行排除必要质量工作的成本。
+原 feedback 的七张 MRT 绘制成本仍归 `terrainFeedback`，不重复计入此行。
+`lightCulling`、`particleSoftDepth` 与 `volumetricFog` 的专用录制分支
+在返回 pass 循环前闭合 timestamp，后续 pass 因而继续得到有效查询。
+
 `RenderSystem::RecordAndSubmitCurrentRenderScene()` 在非 offline 路径中：
 
 1. backend `BeginFrame` 返回后调用 `GpuPassTimer::BeginFrame`：读回该 frame slot 上一批结果，

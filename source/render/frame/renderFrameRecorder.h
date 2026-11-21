@@ -35,6 +35,7 @@ class PassRuntimeServices;
 class TerrainFeedbackRuntime;
 class HairRuntime;
 class UiOverlayRendererVulkan;
+class TerrainCaptureFrameBridge;
 struct UiRenderSnapshotQueue;
 struct OfflinePublishedResult;
 
@@ -96,6 +97,7 @@ class RenderFrameRecorder
 public:
     void RecordAndSubmitCurrentRenderScene(
         RenderFrameRecorderContext& ctx);
+    void CloseTerrainCaptureAfterDeviceIdle();
 
     void ApplyQueuedDynamicMeshUpdates(
         VL::DynamicMeshUpdateQueue& queue,
@@ -104,6 +106,8 @@ public:
         uint32_t frameSlot);
 
     void UpdateExposureFrameTiming(VL::GpuPassTimer& gpuPassTimer);
+    void UpdateExposureFrameTiming(VL::GpuPassTimer& gpuPassTimer, const RenderFrameRecorderContext* ctx,
+        const struct RendererFrameContext* frame, const struct RenderFrameIdentity* identity);
     float ExposureDeltaSeconds() const noexcept { return exposureDeltaSeconds; }
 
     void UpdateGlobalUBO(
@@ -146,6 +150,7 @@ public:
         uint32_t cascadeIndex);
 
 private:
+    std::shared_ptr<TerrainCaptureFrameBridge> terrainCaptureBridge;
     // RT-only: one warning per mesh key, otherwise a missing object spams every
     // frame while its World entry is being torn down.
     std::unordered_set<std::string> reportedMissingDynamicMeshKeys;

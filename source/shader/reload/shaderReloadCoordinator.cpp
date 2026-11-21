@@ -1017,7 +1017,9 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
             ComputeDescriptorReplacement descriptors =
                 participant->PrepareReplacementDescriptors(
                     candidate.candidateArtifact,
-                    replacement);
+                    replacement,
+                    candidate.buildArtifact,
+                    candidate.plan.request);
             pendingComputeCommits.push_back({
                 &candidate,
                 candidate.candidateArtifact,

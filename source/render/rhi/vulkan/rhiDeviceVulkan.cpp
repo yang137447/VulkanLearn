@@ -377,6 +377,17 @@ const std::vector<vk::Image>& RHIDeviceVulkan::GetSwapchainImages(
     return target.images;
 }
 
+std::shared_ptr<const void> RHIDeviceVulkan::CapturePresentTargetLifetime(
+    const VL::PresentTarget& target) const
+{
+    return target.swapchainOwner;
+}
+
+uint64_t RHIDeviceVulkan::GetPresentTargetGeneration(const VL::PresentTarget& target) const
+{
+    return target.swapchainGeneration;
+}
+
 std::vector<vk::Fence>& RHIDeviceVulkan::GetTaskFinishedFences()
 {
     return VulkanManager::GetInstance().GetTaskFinishedFences();

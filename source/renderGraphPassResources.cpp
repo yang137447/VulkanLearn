@@ -9,6 +9,7 @@
 #include "render/backend/rendererDescriptorWriter.h"
 #include "render/rendergraph/renderGraphCompiler.h"
 #include "render/rendergraph/sceneViewportOutputValidation.h"
+#include "render/rendergraph/renderGraphDepthOwner.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/camera/autoExposureCompute.h"
@@ -190,6 +191,8 @@ struct RetiredRenderGraphImageResource
 
 struct RetiredRenderGraphPassResource
 {
+    std::shared_ptr<const VL::WorldBindingRegistryLease> worldBindingRegistryLease;
+    std::vector<VL::WorldBindingImageOwner> worldBindingImageOwners;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
     std::string name;
     std::vector<VL::RHIFramebufferHandle> framebufferHandles;
@@ -322,6 +325,9 @@ void ClearRenderpassResourceFields(Renderpass& renderpass)
     renderpass.descriptorSets.clear();
     renderpass.writeDescriptorSets.clear();
     renderpass.inputDescriptorImageInfos.clear();
+    renderpass.worldBindingImageOwners.clear();
+    renderpass.worldBindingWrites.clear();
+    renderpass.worldBindingRegistryLease.reset();
 }
 
 std::shared_ptr<RetiredRenderGraphPassResource> TakeRenderpassResource(
@@ -331,6 +337,8 @@ std::shared_ptr<RetiredRenderGraphPassResource> TakeRenderpassResource(
     auto retiredPass = std::make_shared<RetiredRenderGraphPassResource>();
     retiredPass->rendererBackend = &rendererBackend;
     retiredPass->name = renderpass.name;
+    retiredPass->worldBindingImageOwners = std::move(renderpass.worldBindingImageOwners);
+    retiredPass->worldBindingRegistryLease = std::move(renderpass.worldBindingRegistryLease);
     retiredPass->framebufferHandles = std::move(renderpass.framebufferHandles);
     retiredPass->framebuffers = std::move(renderpass.framebuffers);
     retiredPass->descriptorSetLayoutHandle = renderpass.descriptorSetLayoutHandle;
@@ -370,6 +378,12 @@ RenderResource RenderGraph::CreateRenderResource(
     try
     {
         resource.name = resourceDesc.name;
+        if (resource.name == "terrainQualityWinner0" || resource.name == "terrainQualityWinner1")
+        {
+            const auto limits = rendererBackend.GetSelectedDeviceLimits();
+            if (limits.maxColorAttachments < 7 || limits.maxFragmentOutputAttachments < 7)
+                throw std::runtime_error("Terrain quality winner requires seven actual device MRT slots");
+        }
         resource.type = resourceDesc.type;
         resource.arrayLayers =
             resourceDesc.arrayLayers;
@@ -521,12 +535,24 @@ RenderResource RenderGraph::CreateRenderResource(
                       .CreateDepthSampler(
                           "Sampler: " +
                           resource.name))
-            : rendererBackend.Create2DSampler(
-                  "Sampler: " +
-                  resource.name);
+            : ((resource.name == "terrainQualityWinner0" || resource.name == "terrainQualityWinner1")
+                ? rendererBackend.Create2DSampler(vk::Filter::eNearest,
+                    vk::SamplerAddressMode::eClampToEdge, false, "Sampler: " + resource.name)
+                : rendererBackend.Create2DSampler("Sampler: " + resource.name));
         resource.samplerHandle =
             rendererBackend.GetSamplerHandle(
                 resource.sampler);
+        if (resource.name == "terrainFeedbackDepth" ||
+            resource.name == "terrainQualityWinner0" || resource.name == "terrainQualityWinner1" ||
+            resource.name.rfind("sceneViewportOutput_", 0) == 0)
+        {
+            auto owner = std::make_shared<RetiredRenderGraphImageResource>();
+            RenderResource borrowed = resource;
+            VL::RegisterRenderGraphDepthOwner(resource.image, owner);
+            owner->rendererBackend = &rendererBackend;
+            owner->resource = std::move(resource);
+            resource = std::move(borrowed);
+        }
         return resource;
     }
     catch (...)
@@ -544,6 +570,16 @@ void RenderGraph::DestroyRenderResource(
     VL::RendererBackendVulkan& rendererBackend,
     VL::RenderGraphReleaseMode releaseMode)
 {
+    auto captureOwner = VL::ReleaseRenderGraphDepthOwner(resource.image);
+    if (captureOwner)
+    {
+        const auto debugName = "RenderGraphResource:" + resource.name;
+        ClearRenderResourceFields(resource);
+        if (releaseMode == VL::RenderGraphReleaseMode::Retire)
+            VL::ResourceRetireQueue::GetInstance().RetireShared(
+                debugName, 0, GetGraphResourceLastUsedEpoch(), std::move(captureOwner));
+        return;
+    }
     if (!HasRenderResourceHandles(resource))
     {
         return;

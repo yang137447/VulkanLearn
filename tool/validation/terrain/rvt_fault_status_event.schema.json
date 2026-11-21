@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "Native RVT status fault owner observations; never controller acceptance",
+  "type": "object",
+  "required": [
+    "protocol", "event", "runId", "sequence", "monotonicMs", "frame",
+    "worldGeneration", "faultId", "surfaceId", "mip", "x", "y", "revision",
+    "slot", "writeEpoch", "fenceCompletedEpoch"
+  ],
+  "properties": {
+    "protocol": {"const": 1},
+    "event": {"enum": ["fault-injection", "production-failure"]},
+    "runId": {"type": "string", "minLength": 1},
+    "sequence": {"type": "integer", "minimum": 0},
+    "monotonicMs": {"type": "number", "minimum": 0},
+    "frame": {"type": "integer", "minimum": 0},
+    "worldGeneration": {"type": "integer", "minimum": 1},
+    "faultId": {"type": "string", "minLength": 1, "maxLength": 96},
+    "surfaceId": {"type": "string", "pattern": "^terrain\\|.+", "maxLength": 256},
+    "mip": {"type": "integer", "minimum": 0, "maximum": 31},
+    "x": {"type": "integer", "minimum": 0, "maximum": 131071},
+    "y": {"type": "integer", "minimum": 0, "maximum": 131071},
+    "revision": {"type": "integer", "minimum": 0},
+    "slot": {"type": "integer", "minimum": 0},
+    "writeEpoch": {"type": "integer", "minimum": 1},
+    "fenceCompletedEpoch": {"type": "integer", "minimum": 1},
+    "hook": {"const": "statusNonzero"},
+    "originalStatus": {"const": 0},
+    "injectedStatus": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+    "status": {"type": "integer", "minimum": 1, "maximum": 4294967295},
+    "submitResult": {"type": "integer", "maximum": 0},
+    "publishedChannels": {"type": "integer", "minimum": 0, "maximum": 3},
+    "attempts": {"type": "integer", "minimum": 0},
+    "maxAttempts": {"type": "integer", "minimum": 0},
+    "backoffTicks": {"type": "integer", "minimum": 0}
+  },
+  "allOf": [
+    {
+      "if": {"properties": {"event": {"const": "fault-injection"}}},
+      "then": {"required": ["hook", "originalStatus", "injectedStatus"]}
+    },
+    {
+      "if": {"properties": {"event": {"const": "production-failure"}}},
+      "then": {"required": [
+        "status", "submitResult", "publishedChannels", "attempts", "maxAttempts", "backoffTicks"
+      ]}
+    }
+  ],
+  "additionalProperties": false,
+  "$comment": "Owner supplies real task/status/fence values. Consumer additionally checks completed>=write, observed failure publication count=0 and bounded actual retries. This schema neither emits events nor proves GPU execution."
+}

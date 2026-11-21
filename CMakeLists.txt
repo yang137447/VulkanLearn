@@ -172,6 +172,12 @@ if(VULKANLEARN_BUILD_TESTS)
     endif()
 endif()
 
+option(VULKANLEARN_BUILD_TERRAIN_CAPTURE_VALIDATION
+    "Build the explicit terrain native capture validation executable." OFF)
+if(VULKANLEARN_BUILD_TERRAIN_CAPTURE_VALIDATION)
+    include(tool/validation/terrain/native-capture/capture-targets.cmake)
+endif()
+
 option(VULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION
     "Build the optional SpeedTree SDK/VulkanLearn numeric wind validator."
     ON)

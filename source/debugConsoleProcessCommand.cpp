@@ -1,5 +1,6 @@
 #include "debugConsole.h"
 #include "engine/modelPreviewRequest.h"
+#include "engine/testing/terrainRvtFaultTests.h"
 
 #include <algorithm>
 #include <conio.h>
@@ -1690,6 +1691,41 @@ void DebugConsole::ProcessCommand(const std::string& line)
         return;
     }
 
+    if (command == "rvtfault")
+    {
+        std::string payload;
+        std::getline(commandStream, payload);
+        try
+        {
+            VL::RuntimeCommand request;
+            request.type = VL::RuntimeCommandType::RequestTerrainRvtFault;
+            request.terrainFaultRequest = VL::ParseTerrainRvtFaultCommand(payload);
+            request.sourceText = line;
+            commandBus.Queue(std::move(request));
+        }
+        catch (const std::exception& error)
+        {
+            std::cout << "rvtfault rejected: " << error.what() << std::endl;
+        }
+        return;
+    }
+
+    if (command == "terrainvt")
+    {
+        std::string action;
+        std::string extra;
+        if (!(commandStream >> action) || action != "stats" || (commandStream >> extra))
+        {
+            std::cout << "Usage: terrainvt stats" << std::endl;
+            return;
+        }
+        VL::RuntimeCommand request;
+        request.type = VL::RuntimeCommandType::ReportTerrainCompositedStatistics;
+        request.sourceText = line;
+        commandBus.Queue(std::move(request));
+        return;
+    }
+
     if (command == "terrainfeedback")
     {
         // P2 只读诊断：打印最近一次已完成 fence 的 feedback 页统计，
@@ -1698,80 +1734,6 @@ void DebugConsole::ProcessCommand(const std::string& line)
         runtimeCommand.type =
             VL::RuntimeCommandType::ReportTerrainFeedbackStatistics;
         runtimeCommand.sourceText = line;
-        commandBus.Queue(std::move(runtimeCommand));
-        return;
-    }
-
-    if (command == "terrainlayerstats" || command == "terrainlayer")
-    {
-        // L2/L4a：stats 只读；capacity 排队层页预算；preload 是 feedback
-        // 驱动驻留的全量对照路径。
-        VL::RuntimeCommand runtimeCommand;
-        runtimeCommand.sourceText = line;
-        if (command == "terrainlayer")
-        {
-            std::string action;
-            if (!(commandStream >> action))
-            {
-                std::cout
-                    << "Usage: terrainlayer <stats|capacity N|preload|forcemip N>"
-                    << std::endl;
-                return;
-            }
-            if (action == "stats")
-            {
-                runtimeCommand.type =
-                    VL::RuntimeCommandType::ReportTerrainLayerStatistics;
-            }
-            else if (action == "preload")
-            {
-                runtimeCommand.type =
-                    VL::RuntimeCommandType::RequestTerrainLayerPreload;
-            }
-            else if (action == "capacity")
-            {
-                int capacity = 0;
-                if (!(commandStream >> capacity) || capacity <= 0)
-                {
-                    std::cout
-                        << "Usage: terrainlayer capacity <positive page count>"
-                        << std::endl;
-                    return;
-                }
-                runtimeCommand.type =
-                    VL::RuntimeCommandType::SetTerrainLayerResidentCapacity;
-                runtimeCommand.intValue = capacity;
-            }
-            else if (action == "forcemip")
-            {
-                // L4e：调试用目标 mip 覆盖。-1 恢复自动；0..6 强制，用于在
-                // 页尚未驻留时复现粗 mip 回退与 avgColor 渐变。
-                int forceMip = 0;
-                if (!(commandStream >> forceMip) ||
-                    forceMip < -1 || forceMip > 6)
-                {
-                    std::cout
-                        << "Usage: terrainlayer forcemip <-1|0..6>"
-                        << std::endl;
-                    return;
-                }
-                runtimeCommand.type =
-                    VL::RuntimeCommandType::SetTerrainLayerForceMip;
-                runtimeCommand.intValue = forceMip;
-            }
-            else
-            {
-                std::cout
-                    << "Usage: terrainlayer <stats|capacity N|preload|forcemip N>"
-                    << std::endl;
-                return;
-            }
-        }
-        else
-        {
-            runtimeCommand.type =
-                VL::RuntimeCommandType::ReportTerrainLayerStatistics;
-        }
         commandBus.Queue(std::move(runtimeCommand));
         return;
     }

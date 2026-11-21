@@ -125,6 +125,8 @@ public:
     vk::Format GetSwapchainImageFormat(const VL::PresentTarget& target) const;
     const std::vector<vk::ImageView>& GetSwapchainImageViews(const VL::PresentTarget& target) const;
     const std::vector<vk::Image>& GetSwapchainImages(const VL::PresentTarget& target) const;
+    std::shared_ptr<const void> CapturePresentTargetLifetime(const VL::PresentTarget& target) const;
+    uint64_t GetPresentTargetGeneration(const VL::PresentTarget& target) const;
 
     RHIBufferHandle CreateBuffer(
         vk::DeviceSize size,

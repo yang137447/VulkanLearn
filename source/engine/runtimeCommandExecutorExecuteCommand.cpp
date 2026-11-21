@@ -1,4 +1,8 @@
 #include "engine/runtimeCommandExecutor.h"
+#include "render/resource/rendererResourceCache.h"
+#include "render/resource/rendererTerrainLoader.h"
+#include "render/resource/terrainCompositedService.h"
+#include "render/frame/terrainCompositedReadiness.h"
 
 #include <algorithm>
 #include "engine/destructibleRuntime.h"
@@ -34,6 +38,7 @@
 #include "animation/skeletalPlayback.h"
 #include "script/scriptRuntime.h"
 #include "engine/runtimeCommandExecutorInternal.h"
+#include "engine/testing/terrainRvtFaultTests.h"
 
 namespace VL
 {
@@ -784,6 +789,13 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::RunShaderReloadTest:
         ApplyShaderReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
         break;
+    case RuntimeCommandType::RequestTerrainRvtFault:
+    {
+        const auto result = TerrainRvtFaultTestingService::Submit(command.terrainFaultRequest);
+        std::cout << TerrainRvtFaultTestingService::ControlDiagnostic(
+            command.terrainFaultRequest, result) << std::endl;
+        break;
+    }
     case RuntimeCommandType::RunShaderComputeReloadTest:
         ApplyShaderComputeReloadTest(runtimeConfig, runtimeTestHooks, diagnostics);
         break;
@@ -1055,6 +1067,7 @@ void RuntimeCommandExecutor::ExecuteCommand(
         if (command.type == RuntimeCommandType::SetCameraPosition)
         {
             camera->SetPosition(command.cameraPositionValue);
+            RequestTerrainCompositedQualityRevalidation(activeWorld->GetGeneration());
             diagnostics.ReportInfo(
                 "Camera position set to " + FormatVector3(camera->GetPosition()));
         }
@@ -1069,6 +1082,7 @@ void RuntimeCommandExecutor::ExecuteCommand(
                 camera->GetPosition(),
                 command.cameraLookAtValue,
                 camera->GetUpVector());
+            RequestTerrainCompositedQualityRevalidation(activeWorld->GetGeneration());
             diagnostics.ReportInfo(
                 "Camera look-at set to " + FormatVector3(command.cameraLookAtValue));
         }
@@ -1083,6 +1097,7 @@ void RuntimeCommandExecutor::ExecuteCommand(
                 command.cameraPositionValue,
                 command.cameraLookAtValue,
                 command.cameraUpValue);
+            RequestTerrainCompositedQualityRevalidation(activeWorld->GetGeneration());
             diagnostics.ReportInfo(
                 "Camera pose set: position=" + FormatVector3(camera->GetPosition()) +
                 ", forward=" + FormatVector3(camera->GetForwardVector()));
@@ -1404,9 +1419,13 @@ void RuntimeCommandExecutor::ExecuteCommand(
     case RuntimeCommandType::ReportTerrainStatistics:
         executionResult.terrainStatisticsRequested = true;
         break;
-    case RuntimeCommandType::ReportTerrainLayerStatistics:
-        executionResult.terrainLayerStatisticsRequested = true;
+    case RuntimeCommandType::ReportTerrainCompositedStatistics:
+    {
+        const auto streaming = RendererResourceCache::GetInstance().GetTerrainStreaming();
+        if (streaming && streaming->composited)
+            streaming->composited->ReportStats();
         break;
+    }
     case RuntimeCommandType::ReportTerrainLodStatistics:
         executionResult.terrainLodStatisticsRequested = true;
         break;
@@ -1427,16 +1446,6 @@ void RuntimeCommandExecutor::ExecuteCommand(
         renderSystem.RequestTerrainResidentCapacity(
             static_cast<uint32_t>(std::max(command.intValue, 0)));
         break;
-    case RuntimeCommandType::SetTerrainLayerResidentCapacity:
-        renderSystem.RequestTerrainLayerResidentCapacity(
-            static_cast<uint32_t>(std::max(command.intValue, 0)));
-        break;
-    case RuntimeCommandType::RequestTerrainLayerPreload:
-        renderSystem.RequestTerrainLayerPreload();
-        break;
-    case RuntimeCommandType::SetTerrainLayerForceMip:
-        // 只写 streaming state 的 atomic；M_terrain/feedback 在渲染线程帧首同步。
-        renderSystem.RequestTerrainLayerForceMip(command.intValue);
     case RuntimeCommandType::PrintGpuPassStats:
         renderSystem.PrintGpuPassStats();
         break;

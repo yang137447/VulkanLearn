@@ -1,4 +1,5 @@
 #include "engine/ui/engineUiViewModel.h"
+#include "engine/frame/terrainLoadingGate.h"
 
 #include <memory>
 
@@ -76,6 +77,9 @@ void FillUiViewModelLiveFrame(
         frame.hudView = context.scriptRuntime->HudView(activeWorld.generation);
     }
     const std::shared_ptr<World>& world = context.worldManager->GetActiveWorld();
+    if (buildMode == UiViewModelBuildMode::RuntimeHud)
+        ApplyTerrainLoadingHud(
+            frame.hudView, IsTerrainWorldLoading(world.get(), frame.offlineMode));
     if (!world || frame.offlineMode)
     {
         return;

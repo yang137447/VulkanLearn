@@ -13,6 +13,12 @@
 
 `vk::WriteDescriptorSet` 引用的 image info 不再依赖调用点临时拼装出来的局部对象。若 descriptor writer 需要批量提交，它只在 backend/device boundary 调用范围内复制成提交所需的短生命周期数组，不把补丁式缓存散落到 pass 或 object 代码里。
 
+材质纹理替换时，`MaterialInstance` 的 texture binding version 仅在 Texture 身份变化时推进。
+对象 GPU 资源按 swapchain image 强持有实际写入 descriptor 的 Texture；每个 image 的
+fence 完成后，主帧在 scene pass 前刷新该 image 的变化绑定，再释放它先前的引用。
+其他尚未重新获取的 image 继续持有旧纹理，不能仅按纹理生成者的上传 epoch 销毁 sampler。
+数值参数变更或重复绑定同一 Texture 不触发这次描述符刷新。
+
 本文总结 3 种常见思路，并记录当前仓库已经采用的合同。
 
 ## 方案 1: 资源自带描述信息

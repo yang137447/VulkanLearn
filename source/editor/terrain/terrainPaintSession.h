@@ -11,6 +11,7 @@
 #include "terrain/terrainAssetTypes.h"
 #include "terrain/terrainBrushShape.h"
 #include "terrain/terrainCollisionTypes.h"
+#include "terrain/terrainCompositedDirty.h"
 
 namespace VL::Editor
 {
@@ -66,10 +67,14 @@ public:
     bool Redo();
 
     std::shared_ptr<const TerrainLayerPaintData> PaintData() const;
+    const TerrainCompositedEditDirty& CompositedDirty() const noexcept { return compositedDirty_; }
+    bool AcknowledgeCompositedDirty(uint64_t revision) { return compositedDirty_.Acknowledge(revision); }
 
 private:
+    void EnsureWritable();
     void MarkChanged();
     void Restore(TerrainLayerPaintData data);
+    void IncludeChangedTexel(uint32_t horizontal, uint32_t vertical);
 
     std::string placementId_;
     std::string paintPath_;
@@ -80,6 +85,7 @@ private:
     bool strokeActive_ = false;
     bool strokeChanged_ = false;
     uint64_t revision_ = 0;
+    TerrainCompositedEditDirty compositedDirty_;
     std::deque<TerrainLayerPaintData> undo_;
     std::deque<TerrainLayerPaintData> redo_;
 };

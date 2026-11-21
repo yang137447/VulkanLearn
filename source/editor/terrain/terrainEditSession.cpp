@@ -205,6 +205,7 @@ bool TerrainEditSession::ApplyBrush(const TerrainSculptBrush& brush)
         return false;
     strokeChanged_ = true;
     heightBoundsDirty_ = true;
+    IncludeCompositedDirty(result.dirtyRect);
     return true;
 }
 
@@ -244,7 +245,7 @@ void TerrainEditSession::CancelStroke()
     {
         try
         {
-            editor_->RestoreHeightSamples(std::move(strokeStartSamples_));
+            RestoreSamples(std::move(strokeStartSamples_));
             MarkAllDirty();
             heightBoundsDirty_ = true;
         }
@@ -275,7 +276,7 @@ bool TerrainEditSession::Undo()
     std::vector<float> previous = std::move(undoStack_.back());
     undoStack_.pop_back();
     std::vector<float> current = editor_->CaptureHeightSamples();
-    editor_->RestoreHeightSamples(std::move(previous));
+    RestoreSamples(std::move(previous));
     redoStack_.push_back(std::move(current));
     while (redoStack_.size() > TerrainUndoLimit)
         redoStack_.pop_front();
@@ -291,7 +292,7 @@ bool TerrainEditSession::Redo()
     std::vector<float> next = std::move(redoStack_.back());
     redoStack_.pop_back();
     std::vector<float> current = editor_->CaptureHeightSamples();
-    editor_->RestoreHeightSamples(std::move(next));
+    RestoreSamples(std::move(next));
     undoStack_.push_back(std::move(current));
     while (undoStack_.size() > TerrainUndoLimit)
         undoStack_.pop_front();
@@ -494,7 +495,7 @@ Eigen::Vector3f TerrainEditSession::WorldPoint(float u, float v) const
     return (BuildModelMatrix(placement_) * local.homogeneous()).head<3>();
 }
 
-TerrainMeshUpdate TerrainEditSession::BuildUpdate() const
+TerrainMeshUpdate TerrainEditSession::BuildUpdate(bool allChunks) const
 {
     TerrainMeshUpdate update;
     if (!editor_)
@@ -503,8 +504,14 @@ TerrainMeshUpdate TerrainEditSession::BuildUpdate() const
     update.actorIdentity = actorIdentity_;
     update.assetPath = desc_.assetPath;
     update.desc = desc_;
-    update.heightmap = std::make_shared<const HostImage>(
-        editor_->ExportNormalizedHeightmap());
+    if (!publishedHeightmap_ || publishedHeightmapRevision_ != Revision())
+    {
+        publishedHeightmap_ = std::make_shared<const HostImage>(editor_->ExportNormalizedHeightmap());
+        publishedHeightmapRevision_ = Revision();
+    }
+    update.heightmap = publishedHeightmap_;
+    update.compositedDirty = compositedDirty_;
+    update.sourceRevision = Revision();
 
     std::string sceneName;
     if (!ParsePlacementSceneName(placementId_, sceneName))
@@ -521,7 +528,9 @@ TerrainMeshUpdate TerrainEditSession::BuildUpdate() const
     for (uint32_t lodLevel = 0; lodLevel < lodLevelCount; ++lodLevel)
     {
         const std::vector<TerrainMeshChunk> meshes =
-            editor_->BuildDirtyChunkMeshes(lodLevel);
+            allChunks
+                ? TerrainMeshBuilder::BuildChunks(editedPlan, lodLevel)
+                : editor_->BuildDirtyChunkMeshes(lodLevel);
         for (const TerrainMeshChunk& mesh : meshes)
         {
             TerrainChunkMeshUpdate chunk;
@@ -555,6 +564,49 @@ void TerrainEditSession::ResetDirty()
 {
     if (editor_)
         editor_->ResetDirty();
+}
+
+void TerrainEditSession::IncludeCompositedDirty(const TerrainPixelRect& changed)
+{
+    if (!changed.valid)
+        return;
+    const double innerWidth = editor_->Width() - 1. - 2 * desc_.heightmapMargin;
+    const double innerHeight = editor_->Height() - 1. - 2 * desc_.heightmapMargin;
+    const double margin = desc_.heightmapMargin;
+    const uint32_t coarsestStep = 1u << (std::max(1u, desc_.lodLevels) - 1);
+    const double frameSupport = 2. * coarsestStep / desc_.gridResolution;
+    const double supportU = 1. / innerWidth + frameSupport;
+    const double supportV = 1. / innerHeight + frameSupport;
+    compositedDirty_.Include({
+        std::clamp((changed.minX - margin) / innerWidth - supportU, 0., 1.),
+        std::clamp((changed.minY - margin) / innerHeight - supportV, 0., 1.),
+        std::clamp((changed.maxX - margin) / innerWidth + supportU, 0., 1.),
+        std::clamp((changed.maxY - margin) / innerHeight + supportV, 0., 1.)}, Revision());
+}
+
+void TerrainEditSession::RestoreSamples(std::vector<float> samples)
+{
+    TerrainPixelRect changed;
+    const auto& current = editor_->NormalizedSamples();
+    if (samples.size() != current.size())
+        throw std::invalid_argument("Terrain session restore sample dimensions changed");
+    for (size_t index = 0; index < current.size(); ++index)
+        if (current[index] != samples[index])
+        {
+            const auto horizontal = uint32_t(index % editor_->Width());
+            const auto vertical = uint32_t(index / editor_->Width());
+            if (!changed.valid)
+                changed = {horizontal, vertical, horizontal, vertical, true};
+            else
+            {
+                changed.minX = std::min(changed.minX, horizontal);
+                changed.minY = std::min(changed.minY, vertical);
+                changed.maxX = std::max(changed.maxX, horizontal);
+                changed.maxY = std::max(changed.maxY, vertical);
+            }
+        }
+    if (editor_->RestoreHeightSamples(std::move(samples)))
+        IncludeCompositedDirty(changed);
 }
 
 bool TerrainEditSession::SaveHeightmap(

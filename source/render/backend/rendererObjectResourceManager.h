@@ -30,6 +30,12 @@ public:
     void ShutdownObjectResources(
         RendererBackendVulkan* rendererBackend,
         RendererObjectGpuResources& resources) const;
+
+    void RefreshMaterialTexturesForImage(
+        RendererBackendVulkan& rendererBackend,
+        MaterialInstance& materialInstance,
+        uint32_t swapchainImageIndex,
+        RendererObjectGpuResources& resources) const;
 };
 
 } // namespace VL

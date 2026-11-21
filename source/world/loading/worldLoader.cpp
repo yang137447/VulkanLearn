@@ -8,6 +8,7 @@
 
 #include "scene/validation/sceneAssetValidator.h"
 #include "commonFunction.h"
+#include "core/tracingIfstream.h"
 #include "script/scriptBlueprintAsset.h"
 #include "world/world.h"
 #include "world/loading/worldGameplayPlanBuilder.h"
@@ -47,7 +48,7 @@ nlohmann::json LoadSceneJson(const std::string& scenePath)
         throw std::runtime_error("Scene file not found: " + scenePath);
     }
 
-    std::ifstream file(scenePath);
+    RuntimeFileTrace::TracingIfstream file(scenePath, std::ios::in, "WorldLoader.Scene");
     if (!file.is_open())
     {
         throw std::runtime_error("Scene file not found: " + scenePath);
