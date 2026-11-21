@@ -53,6 +53,30 @@ source asset。Motion warp 的 Bone provider 仍按 source skeleton 和 source c
 
 ## 时钟与快照
 
+### MotionBricks 外部姿态流
+
+`source/animation/motionBricks/` 的 SOMA live 路径由后台 ONNX worker 生成，
+GT 通过 `ExternalPoseFrame` 提交给 `SkeletalPlayback`；baked 路径读取已保存的预测。
+live 组件必须设置 `motionBricks.locomotionTargets`，资产格式为
+`vl.motionbricks.locomotion.v1`：按速度递增的目标组、四个 30 Hz 米制/Y-up 局部姿态、
+以及用于重排的 `jointNames`。当前探针使用官方 Idle/Walk/Jog/Run 目标。
+
+方向输入是固定地面坐标（right=+X、forward=-Z），不是相对当前 Hips 局部轴的增量。
+目标第一帧放在一秒期望速度对应的地面距离处，后三帧以 speed/30 的间距描述终点速度。
+静止使用 Idle 目标且保留最近朝向。左右输入按世界 Y 轴旋转目标，不累计转向。
+worker 返回时丢弃旧控制版本的结果，并在 GT 按最新显示姿态重新校正起点，
+避免把异步推理等待期间的旧姿态作为新段起点。
+
+根位移反馈在连续模拟空间中计算；方向 yaw 由左右髋关节的地面朝向提取。
+MotionBricks 探针蓝图直接消费水平根速度，不额外乘 Actor yaw。
+视觉重定向先移除源姿态的地面平移与 heading，再将目标 root 的残余变换转交
+直接子骨 `pelvis`，保留骨盆高度和倾斜；目标 root 保持参考变换。
+这不包含脚部 IK 或碰撞后对生成轨迹的重新规划。
+
+`MotionBricksLive` 测试覆盖四方向目标、真实模型的行走/跑步/转向/停止、
+骨盆残余变换和异步调度。`tool/animation/capture_motionbricks.py` 是外部工程验收，
+记录实际 CLR/Jolt 速度与截图，不注册为 runtime test。
+
 一个 Actor 的 sections 共享一个 `SkeletalPlayback`。GT 在脚本更新后、构建快照前
 推进一次原生时钟；没有把 ozz context、播放器或 Vulkan 对象传到 RT。
 普通 mesh 的播放独立于 C# Play/Pause/Stop；动画暂停使用本模块控制。

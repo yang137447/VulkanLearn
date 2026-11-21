@@ -13,6 +13,12 @@ add_executable(animation_preflight_tests
     skeletalBlendTests.cpp
     notifyStateTests.cpp
     visualCorrectionTests.cpp
+    externalPoseTests.cpp
+    motionBricksTests.cpp
+    motionBricksPlayerTests.cpp
+    motionBricksOnnxTests.cpp
+    motionBricksRuntimeTests.cpp
+    motionBricksLiveTests.cpp
     slopeWarpingTests.cpp
     poseDriverTests.cpp
     postProcessTests.cpp
@@ -30,5 +36,7 @@ target_compile_definitions(animation_preflight_tests PRIVATE
     # 逐值与 T3D 对账，测试不依赖资源 worktree。
     VL_ANIMATION_POSE_DRIVER_FIXTURE="${PROJECT_SOURCE_DIR}/tool/animation-tests/fixtures/pose-driver/EPD_EchoPostProcess.json"
     # Echo Twist ControlRig 的原生替代资产副本（8 组 / 16 目标）。
-    VL_ANIMATION_POST_PROCESS_FIXTURE="${PROJECT_SOURCE_DIR}/tool/animation-tests/fixtures/post-process/EPP_EchoPostProcess.json")
+    VL_ANIMATION_POST_PROCESS_FIXTURE="${PROJECT_SOURCE_DIR}/tool/animation-tests/fixtures/post-process/EPP_EchoPostProcess.json"
+    # MotionBricks v0.2.0 SOMA manifest and official-Warp golden vectors.
+    VL_MOTIONBRICKS_FIXTURE_DIR="${PROJECT_SOURCE_DIR}/tool/animation-tests/fixtures/motionbricks")
 vulkanlearn_add_gtest(animation_preflight_tests)

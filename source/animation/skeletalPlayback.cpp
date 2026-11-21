@@ -101,8 +101,16 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
 {
     if (!std::isfinite(deltaSeconds) || deltaSeconds < 0)
         throw std::invalid_argument("Playback delta must be finite and nonnegative");
+    lastTickDeltaSeconds = deltaSeconds;
     rootMotionDelta.setZero();
     rootMotionYawDelta = 0;
+    // 外部姿态流与 clip 时钟互斥：启用后不推进 time、不采样片段，也不参与 SyncGroup。
+    // 未提交新帧时保持上一姿态，避免推理迟到时回退到 clip。
+    if (externalPoseStreamEnabled)
+    {
+        TickExternalPose(deltaSeconds);
+        return;
+    }
     // 同步组对齐先于本 tick 的时间推进应用：跳变本身不产生根位移，
     // 本帧根轨迹从对齐后的 time 到采样点，等价于 UE 的 follower 校正。
     bool syncJumped = false;
@@ -251,6 +259,70 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     }
     if (Completed()) playing = false;
     discontinuity = epoch; // 仅保留原根的循环才会归零模型根轨迹。
+}
+
+void SkeletalPlayback::SetExternalPoseStreamEnabled(bool value)
+{
+    if (externalPoseStreamEnabled == value) return;
+    externalPoseStreamEnabled = value;
+    pendingExternalPose.reset();
+    if (!value) return;
+    // 切到生成式来源时丢弃 clip 过渡/同步/warp 状态，避免旧通道继续消费。
+    blendSource.clear();
+    inertialization.Clear();
+    blendElapsed = 0;
+    blendDuration = 0;
+    motionWarp.Clear();
+    motionWarpState.clear();
+    syncPendingValid = false;
+    syncPendingHasTime = false;
+    footPlacementSource.reset();
+    slopeWarpedLocals.clear();
+    visualLocals.clear();
+}
+
+void SkeletalPlayback::SubmitExternalPose(ExternalPoseFrame frame)
+{
+    if (!externalPoseStreamEnabled)
+        throw std::logic_error("External pose submitted while the pose stream is disabled");
+    const size_t expected = (asset->mesh.joints.size() + 3) / 4;
+    if (frame.locals.size() != expected)
+        throw std::invalid_argument("External pose joint count does not match the playback asset");
+    if (!frame.rootMotionDelta.allFinite() || !std::isfinite(frame.rootMotionYawDelta) ||
+        !std::isfinite(frame.deltaSeconds) || frame.deltaSeconds < 0.0f ||
+        !std::isfinite(frame.sourceTime))
+        throw std::invalid_argument("External pose contains non-finite root motion or time");
+    // GT 每 tick 最多提交一帧；重复提交按 latest-wins 覆盖，与快照 mailbox 语义一致。
+    pendingExternalPose = std::move(frame);
+}
+
+void SkeletalPlayback::TickExternalPose(float deltaSeconds)
+{
+    firedNotifies = std::move(pendingNotifies);
+    pendingNotifies.clear();
+    // 显式暂停冻结外部流；推理侧可以继续产出，但 GT 不消费。
+    if (explicitlyPaused)
+    {
+        pendingExternalPose.reset();
+        return;
+    }
+    if (!pendingExternalPose) return;
+    ExternalPoseFrame frame = std::move(*pendingExternalPose);
+    pendingExternalPose.reset();
+    if (frame.hardCut) ++discontinuity;
+    std::shared_ptr<const std::vector<Eigen::Matrix4f>> nextModels;
+    auto nextPoses = Evaluate(frame.locals, discontinuity, nextModels);
+    poses.swap(nextPoses);
+    jointModels.swap(nextModels);
+    preIkModels = jointModels;
+    motionModels = jointModels;
+    visualLocals.clear();
+    slopeWarpedLocals.clear();
+    footPlacementSource.reset();
+    displayedLocals = std::move(frame.locals);
+    rootMotionDelta = frame.rootMotionDelta;
+    rootMotionYawDelta = frame.rootMotionYawDelta;
+    lastTickDeltaSeconds = frame.deltaSeconds > 0.0f ? frame.deltaSeconds : deltaSeconds;
 }
 
 std::shared_ptr<SkeletalPlayback> SkeletalPlayback::NewInstance() const

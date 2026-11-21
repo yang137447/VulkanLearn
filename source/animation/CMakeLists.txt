@@ -25,6 +25,13 @@ add_library(vl_animation_assets STATIC
     motionRuntimeDatabase.cpp
     motionRuntime.cpp
     motionWarping.cpp
+    motionBricks/motionBricksContract.cpp
+    motionBricks/motionBricksMath.cpp
+    motionBricks/motionBricksPlayer.cpp
+    motionBricks/motionBricksSkeleton.cpp
+    motionBricks/motionBricksBakedRuntime.cpp
+    motionBricks/motionBricksLiveRuntime.cpp
+    motionBricks/onnxRuntimeApi.cpp
     ../shader/build/contentHash.cpp
     ../shader/build/atomicFile.cpp
     ../mesh/loader/animation/assimpSkeletalImporter.cpp
@@ -34,5 +41,7 @@ if(MINGW)
     set_source_files_properties(footPlacement.cpp PROPERTIES COMPILE_OPTIONS "-Wa,-mbig-obj")
 endif()
 target_include_directories(vl_animation_assets PUBLIC ${PROJECT_SOURCE_DIR}/source)
+target_include_directories(vl_animation_assets PRIVATE
+    ${PROJECT_SOURCE_DIR}/extern/onnxruntime/include)
 target_link_libraries(vl_animation_assets PUBLIC ozz_animation_offline Eigen3 Vulkan::Vulkan Json
     PRIVATE assimp MikkTSpace BLAKE3::blake3)

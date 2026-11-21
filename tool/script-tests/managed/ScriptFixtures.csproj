@@ -13,4 +13,8 @@
              Link="Gameplay/%(RecursiveDir)%(Filename)%(Extension)"/>
   </ItemGroup>
   <Import Project="$(VulkanLearnSourceItems)" Condition="'$(VulkanLearnSourceItems)' != ''" />
+  <!-- Mirrors Gameplay.csproj: the outline demo needs the unmerged MaterialInstance API. -->
+  <ItemGroup Condition="'$(VulkanLearnEnableGunOutlineDemo)' != 'true'">
+    <Compile Remove="$(VulkanLearnResourceRoot)/Common/Blueprints/GunOutlineDemo.blueprint.cs" />
+  </ItemGroup>
 </Project>

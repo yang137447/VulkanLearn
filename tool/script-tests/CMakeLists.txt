@@ -54,6 +54,7 @@ add_executable(script_tests scriptRuntimeTests.cpp tressfxComponentTests.cpp scr
     "${PROJECT_SOURCE_DIR}/source/world/loading/worldGameplayPlanBuilder.cpp"
     "${PROJECT_SOURCE_DIR}/source/render/shadow/csmSettings.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/worldAnimation.cpp"
+    "${PROJECT_SOURCE_DIR}/source/world/motionBricksRuntime.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/meshSceneObjectIdentity.cpp"
     "${PROJECT_SOURCE_DIR}/source/world/worldSnapshotBuilder.cpp"
     "${PROJECT_SOURCE_DIR}/source/sceneNode.cpp"

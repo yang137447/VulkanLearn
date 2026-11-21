@@ -11,7 +11,7 @@ public readonly record struct AnimationState(string Clip, float Time, float Dura
     string SyncMarker = "", float SyncMarkerAlpha = 0, bool SyncActive = false,
     string SyncLeader = "", string SyncRole = "", string SyncMethod = "",
     string SyncEffectiveMethod = "", string SyncScope = "", string SyncDiagnostic = "",
-    int MontageSegment = 0, string MontageSegmentId = "");
+    int MontageSegment = 0, string MontageSegmentId = "", float RootMotionDeltaSeconds = 0);
 public readonly record struct AnimationSyncMarker(string Name, float Time);
 public readonly record struct AnimationPlayerInfo(string SyncGroup, string SyncRole, string SyncMethod,
     float StartPosition, bool Loop, string SyncGroupScope = "Local");
@@ -85,6 +85,8 @@ internal sealed record SlopeWarpingCommand(bool Enabled, float Weight, float Max
 internal sealed record PoseDriverCommand(bool Enabled, string Asset);
 internal sealed record PostProcessCommand(bool Enabled, string Asset);
 internal sealed record BonePhysicsCommand(bool Enabled, string Asset, bool Debug);
+internal sealed record MotionBricksTargetCommand(float DirectionX, float DirectionY,
+    float SpeedScale);
 
 // catalog 曲线键：times/values 等长且已按时间排序；C# 只在本地做线性 clamp 采样。
 internal sealed class AnimationCurve(float[] times, float[] values)
@@ -121,6 +123,7 @@ public sealed class AnimationPlayback
     internal BonePhysicsCommand? PendingBonePhysics;
     internal BonePhysicsCommand? ActiveBonePhysics;
     internal bool BonePhysicsDebugRequested;
+    internal MotionBricksTargetCommand? PendingMotionBricksTarget;
     internal readonly Dictionary<string, MontageInfo> Montages = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationPlayerInfo[]> ClipPlayers = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationSyncMarker[]> ClipSyncMarkers = new(StringComparer.Ordinal);
@@ -211,6 +214,20 @@ public sealed class AnimationPlayback
         // 复用同一条 configureBonePhysics：只改 debug 字段也要重新提交一次。
         if (ActiveBonePhysics is { } active)
             PendingBonePhysics = active with { Debug = enabled };
+    }
+
+    // Fixed ground steering for the live MotionBricks runtime: direction is
+    // right/forward in [-1,1], speedScale scales the generated target stride.
+    public void SetMotionBricksTarget(Vector2 direction, float speedScale = 1)
+    {
+        CheckRequest();
+        if (!float.IsFinite(direction.X) || !float.IsFinite(direction.Y))
+            throw new ArgumentOutOfRangeException(nameof(direction));
+        if (!float.IsFinite(speedScale) || speedScale <= 0 || speedScale > 4)
+            throw new ArgumentOutOfRangeException(nameof(speedScale));
+        if (direction.LengthSquared() > 1) direction = Vector2.Normalize(direction);
+        PendingMotionBricksTarget = new MotionBricksTargetCommand(
+            direction.X, direction.Y, speedScale);
     }
 
     // 提交斜坡姿态修正参数；原生只改视觉局部 TRS，Actor 位置与 root motion 归胶囊。
@@ -769,7 +786,9 @@ public static partial class NativeBridge
                 value.TryGetProperty("syncScope", out var syncScope) ? syncScope.GetString()! : "",
                 value.TryGetProperty("syncDiagnostic", out var syncDiagnostic) ?
                     syncDiagnostic.GetString()! : "",
-                montageSegment, montageSegmentId);
+                montageSegment, montageSegmentId,
+                value.TryGetProperty("rootMotionDeltaSeconds", out var rootDeltaSeconds) ?
+                    rootDeltaSeconds.GetSingle() : 0);
             component.Animation.FootPlacementFeedback = value.TryGetProperty("footPlacement", out var placement)
                 ? new(placement.GetProperty("enabled").GetBoolean(), placement.GetProperty("active").GetBoolean(),
                     placement.GetProperty("pelvisOffset").GetSingle(), ReadFootPlacementFoot(placement.GetProperty("feet")[0]),
@@ -951,6 +970,13 @@ public static partial class NativeBridge
                     enabled = bonePhysics.Enabled, asset = bonePhysics.Asset,
                     debug = bonePhysics.Debug });
                 mesh.Animation.PendingBonePhysics = null;
+            }
+            if (mesh.Animation.PendingMotionBricksTarget is { } motionBricksTarget)
+            {
+                commands.Add(new { component = mesh.Id, mode = "motionBricksTarget",
+                    direction = new[] { motionBricksTarget.DirectionX, motionBricksTarget.DirectionY },
+                    speed = motionBricksTarget.SpeedScale });
+                mesh.Animation.PendingMotionBricksTarget = null;
             }
         }
         return commands.ToArray();

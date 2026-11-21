@@ -17,4 +17,13 @@
              Exclude="$(DefaultItemExcludes)" />
   </ItemGroup>
   <Import Project="$(VulkanLearnSourceItems)" Condition="'$(VulkanLearnSourceItems)' != ''" />
+  <!--
+    GunOutlineDemo depends on the per-actor MaterialInstance API that still lives
+    on codex/gun-outline. Keep the asset in the resource tree, but do not feed
+    its orphaned source to this branch's assembly. Set
+    -p:VulkanLearnEnableGunOutlineDemo=true after that API merges.
+  -->
+  <ItemGroup Condition="'$(VulkanLearnEnableGunOutlineDemo)' != 'true'">
+    <Compile Remove="$(VulkanLearnResourceRoot)/Common/Blueprints/GunOutlineDemo.blueprint.cs" />
+  </ItemGroup>
 </Project>

@@ -47,6 +47,11 @@ class SpotLight;
 namespace VL
 {
 namespace Animation { class SkeletalPlayback; struct SkinPose; }
+namespace Animation::MotionBricks
+{
+    class IMotionBricksRuntime;
+    struct SomaSkeletonAsset;
+}
 namespace Hair { class TressfxRootCloud; }
 namespace Hair { struct TressfxGroupBinding; }
 class ScriptWorldContext;
@@ -595,6 +600,7 @@ public:
     nlohmann::json ScriptAnimationFeedback() const;
     void ApplyScriptAnimationRequests(const nlohmann::json& actor, const nlohmann::json& requests);
     void TickScriptAnimations(float deltaSeconds, const Animation::GroundProbe* ground = nullptr);
+    void TickMotionBricksAnimations(float deltaSeconds, bool scripted = false);
     void ResetScriptAnimations();
     void SetMotionResourceRoot(std::string root) { motionResourceRoot = std::move(root); }
     bool SetScriptBlueprintTransform(const std::string& id, const std::string& field,
@@ -698,6 +704,17 @@ private:
     Debug::DrawDebug debugDraw;
     std::map<std::string, Animation::MotionTrack> motionTracks;
     std::map<std::string, Animation::MotionRuntime> motionRuntimes;
+    struct MotionBricksWorldRuntime
+    {
+        Animation::SkeletalPlayback* target = nullptr;
+        std::shared_ptr<Animation::MotionBricks::IMotionBricksRuntime> runtime;
+        std::string error;
+    };
+    std::map<std::string, MotionBricksWorldRuntime> motionBricksRuntimes;
+    std::map<std::string, std::shared_ptr<const Animation::MotionBricks::SomaSkeletonAsset>>
+        motionBricksSkeletons;
+    nlohmann::json motionBricksSceneJson;
+    bool motionBricksSceneJsonLoaded = false;
     // 每个 World 一份同步组注册表；每 tick 重建参与者并复用容量，不持有播放器
     // 所有权，也不跨 World 换代保存旧指针。
     Animation::AnimationSyncGroupRegistry syncGroupRegistry;

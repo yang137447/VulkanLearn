@@ -30,6 +30,7 @@
 | `tool/validate-game-package.ps1`、`ui/runtime-ui.manifest.json` | `contracts/game-ui-stack.md`、`contracts/testing.md` | Game packaging manifest closure、Game shader cache closure |
 | `tool/animation/**`、`tool/animation-tests/**` | `contracts/animation-preflight-tools.md`、`contracts/testing.md` | — |
 | `source/animation/**`、`source/mesh/loader/animation/**`、`tool/animation/gaspImportReport.*`、`tool/animation/compare_gasp_import.py`、`tool/animation-tests/skeletalImportTests.cpp` | `contracts/animation-asset-import.md`、`contracts/testing.md` | — |
+| `source/animation/motionBricks/**`、`source/world/motionBricksRuntime.*`、`tool/animation/*motionbricks*` | `contracts/animation-runtime-skinning.md`、`contracts/animation-asset-import.md`、`contracts/testing.md` | — |
 | `source/animation/animationMontage.*`、`source/animation/animationSkeleton.*`、`source/animation/animationSequenceData.*`、`source/mesh/loader/common/meshAssetLoader.*`、`source/mesh/validation/meshAssetValidator.*`、`source/mesh/meshAssetTypes.h`、`tool/animation-tests/animationMontageTests.cpp` | `contracts/animation-montage.md`、`contracts/animation-asset-import.md`、`contracts/testing.md` | — |
 | `source/animation/animationScriptData.*`、`source/world/worldAnimation.cpp`、`source/script/scriptRuntime.cpp`、`tool/animation-tests/animationScriptDataTests.cpp`、`tool/animation-tests/notifyStateTests.cpp` | `contracts/animation-montage.md`、`contracts/animation-runtime-skinning.md`、`contracts/testing.md` | — |
 | `source/animation/skeletalPlayback*`、`source/animation/animationSyncGroup.*`、`source/animation/footPlacement.*`、`source/animation/slopeWarping.*`、`source/animation/skinPose.h`、`source/world/worldAnimation.cpp`、`shader/glsl/engine/skinnedVertexFactory.glsl`、`tool/animation/build_gasp*.py`、`tool/animation-tests/animationSyncGroupTests.cpp`、`tool/animation-tests/slopeWarpingTests.cpp` | `contracts/animation-runtime-skinning.md`、`contracts/animation-motion-warping.md`、`contracts/animation-montage.md` | — |
@@ -315,6 +316,16 @@ notify/playMontage 请求与拒绝矩阵以 `contracts/animation-montage.md` 为
   控制与一次性动作的资产导出和分阶段门禁。计划，非契约；当前运行时能力仍以
   `contracts/animation-motion-features.md`、`contracts/animation-motion-warping.md`、
   `contracts/animation-montage.md` 为准。
+- [MotionBricks 实时动作生成接入计划](plan/animation/motionbricks-runtime-integration-plan.md)：
+  C++ ONNX 同进程推理、外部姿态流、SOMA→SKM 重定向和根运动的长期分阶段方案。
+  当前已落地 P0–P5 的 baked/live 桌面路径，GPU EP 与真实动作质量仍待验证；
+  计划，非契约。
+- [MotionBricks 基础运动修复记录](rationale/motionbricks-basic-locomotion-repair.md)：
+  目标步态、T/A-pose 校准、根运动和异步时钟修复，以及七种动作的实机验收与既有回归问题。
+- [MotionBricks 官方演示对齐计划](plan/animation/motionbricks-official-demo-alignment.md)：
+  SOMA 原生基准、UE5 Manny 展示、官方运行时流程与重定向分阶段对齐计划。
+- [MotionBricks Manny 接入记录](rationale/motionbricks-manny-integration.md)：
+  官方模板资产导出、独立骨架/校准、展示与双角色对照及七种动作实机验证。
 - [原 ALS 计划](plan/architecture/als-csharp-animation-plan.md)：
   已由 GASP 计划取代，仅保留历史决策，不作为后续实施依据。
 

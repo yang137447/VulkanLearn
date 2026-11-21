@@ -341,7 +341,7 @@ void SkeletalPlayback::ApplyVisualRoot(const Eigen::Matrix4f& component,
     const Eigen::Vector3f& achievedVelocity, float deltaSeconds)
 {
     if (!rootOffset.State().enabled || deltaSeconds <= 0 || explicitlyPaused ||
-        (!playing && !Completed())) return;
+        (!playing && !Completed() && !externalPoseStreamEnabled)) return;
     if (!std::isfinite(deltaSeconds) || !achievedVelocity.allFinite())
         throw std::invalid_argument("Visual root input must be finite");
     if (!inPlace)
@@ -452,7 +452,7 @@ void SkeletalPlayback::ApplySlopeWarping(const Eigen::Matrix4f& component, bool 
     const std::string& owner, float deltaSeconds, const GroundProbe& probe)
 {
     if (!slopeWarping || !slopeWarping->Enabled() || deltaSeconds <= 0 ||
-        explicitlyPaused || (!playing && !Completed())) return;
+        explicitlyPaused || (!playing && !Completed() && !externalPoseStreamEnabled)) return;
     FootPlacementSolver::ValidateComponent(component);
     const LocalPose& base = visualLocals.empty() ? displayedLocals : visualLocals;
     auto candidate = *slopeWarping;
@@ -527,7 +527,7 @@ void SkeletalPlayback::SetPostProcess(std::shared_ptr<const PostProcessAsset> as
 void SkeletalPlayback::ApplyPostProcess(float deltaSeconds)
 {
     if (!postProcess || !postProcess->Valid() || deltaSeconds <= 0 || explicitlyPaused ||
-        (!playing && !Completed()))
+        (!playing && !Completed() && !externalPoseStreamEnabled))
         return;
     // 依次回退：足 IK 结果 → 斜坡修正 → 基础姿态。PostProcess 是最后一道姿态修正，
     // 因此不能从 displayedLocals 重新求值，否则会丢掉足 IK。
@@ -642,8 +642,8 @@ void SkeletalPlayback::ApplyFootPlacement(const Eigen::Matrix4f& component, bool
     const std::string& owner, float deltaSeconds, const GroundProbe& probe)
 {
     if (!footPlacement || !footPlacement->State().enabled || deltaSeconds <= 0 || explicitlyPaused ||
-        (!playing && !Completed()) ||
-        (footPlacementSource == preIkModels && !Completed())) return;
+        (!playing && !Completed() && !externalPoseStreamEnabled) ||
+        (footPlacementSource == preIkModels && (!Completed() || externalPoseStreamEnabled))) return;
     if (!inPlace)
     {
         ResetFootPlacement("root-motion");

@@ -1,6 +1,7 @@
 #include "world/world.h"
 #include "animation/skeletalPlayback.h"
 #include "animation/animationScriptData.h"
+#include "world/motionBricksRuntime.h"
 #include "script/scriptScene.h"
 #include "script/scriptComponents.h"
 #include <map>
@@ -13,7 +14,9 @@
 #include <set>
 #include <algorithm>
 #include <filesystem>
+#include <fstream>
 #include <cstdio>
+#include <iostream>
 
 namespace VL
 {
@@ -105,6 +108,9 @@ float ParseMontageStartTime(const nlohmann::json& request)
 
 void World::TickAnimations(float deltaSeconds)
 {
+    // 普通 MotionBricks 使用预览时钟；蓝图流只在 TickScriptAnimations 使用
+    // 脚本倍率时钟推进，Pause/Stop 不会从这里继续生成角色姿态。
+    TickMotionBricksAnimations(deltaSeconds);
     std::unordered_set<Animation::SkeletalPlayback*> updated;
     for (auto& entry : meshObjects)
     {
@@ -197,6 +203,7 @@ nlohmann::json World::ScriptAnimationFeedback() const
                 const auto& rootMotion = player.RootMotionDelta();
                 feedback["rootMotion"] = nlohmann::json::array(
                     {rootMotion.x(), rootMotion.y(), rootMotion.z()});
+                feedback["rootMotionDeltaSeconds"] = player.LastTickDeltaSeconds();
                 feedback["rootMotionYaw"] = player.RootMotionYawDelta();
                 const auto& total = player.RootMotionTotal();
                 feedback["rootMotionTotal"] = nlohmann::json::array(
@@ -381,6 +388,32 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             if (entry.second.sceneObjectIdentity == identity && entry.second.animation)
             { player = entry.second.animation.get(); targetMesh = &entry.second; break; }
         const std::string mode = request.value("mode", std::string());
+        if (mode == "motionBricksTarget")
+        {
+            // Steering is a runtime configuration, not a playback candidate:
+            // it does not advance the clip clock or count against the one
+            // playback command per component in a batch.
+            const auto runtime = motionBricksRuntimes.find(identity);
+            if (runtime == motionBricksRuntimes.end() || !runtime->second.runtime)
+                continue;
+            if (!request.contains("direction") || !request.at("direction").is_array() ||
+                request.at("direction").size() != 2 ||
+                !request.at("direction")[0].is_number() ||
+                !request.at("direction")[1].is_number() ||
+                !request.contains("speed") || !request.at("speed").is_number())
+                throw std::invalid_argument("Script.InvalidMotionBricksTarget");
+            const float directionX = request.at("direction")[0].get<float>();
+            const float directionY = request.at("direction")[1].get<float>();
+            const float speedScale = request.at("speed").get<float>();
+            if (!std::isfinite(directionX) || !std::isfinite(directionY) ||
+                !std::isfinite(speedScale) || speedScale <= 0.0f ||
+                speedScale > 4.0f ||
+                directionX * directionX + directionY * directionY > 1.0001f)
+                throw std::invalid_argument("Script.InvalidMotionBricksTarget");
+            runtime->second.runtime->SetTargetMotion(directionX, directionY,
+                speedScale);
+            continue;
+        }
         // 后处理配置（slope / pose driver）是紧随播放命令的附加候选，必须基于前一条
         // 继续应用，否则会丢掉播放状态；其余命令仍保持“同一 batch 每个组件一条”。
         const bool postProcessConfiguration = mode == "configureSlopeWarping" ||
@@ -674,6 +707,7 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
 
 void World::TickScriptAnimations(float deltaSeconds, const Animation::GroundProbe* ground)
 {
+    TickMotionBricksAnimations(deltaSeconds, true);
     std::unordered_map<std::string, const nlohmann::json*> activeOwners;
     std::unordered_set<Animation::SkeletalPlayback*> updated;
     for (const auto& actor : scriptBlueprintStates)
@@ -834,8 +868,147 @@ void World::TickScriptAnimations(float deltaSeconds, const Animation::GroundProb
     }
 }
 
+void World::TickMotionBricksAnimations(float deltaSeconds, bool scripted)
+{
+    // 组件节点来自 actor.value(...) 的临时 JSON；保存副本，不能把 range-for 的
+    // 元素地址留到循环结束后使用。
+    std::unordered_map<std::string, nlohmann::json> configs;
+    for (const auto& actor : scriptBlueprintStates)
+    {
+        if (!scripted) break;
+        if (actor.value("failed", false) || actor.value("destroyed", false) ||
+            !actor.value("enabled", true))
+            continue;
+        for (const auto& node : actor.value("components", nlohmann::json::array()))
+        {
+            if (node.at("type") != "mesh" || !node.contains("motionBricks")) continue;
+            configs[ScriptMeshIdentity(actor.at("id"), node)] = node;
+        }
+    }
+    if (!scripted && !motionBricksSceneJsonLoaded)
+    {
+        motionBricksSceneJsonLoaded = true;
+        try
+        {
+            std::ifstream input(scenePath, std::ios::binary);
+            if (input) input >> motionBricksSceneJson;
+        }
+        catch (const std::exception& exception)
+        {
+            std::cerr << "[MotionBricks] scene config: " << exception.what() << '\n';
+            motionBricksSceneJson = nlohmann::json::object();
+        }
+    }
+    if (!scripted && motionBricksSceneJson.is_object() && motionBricksSceneJson.contains("objects"))
+        for (const auto& object : motionBricksSceneJson.at("objects"))
+        {
+            if (!object.is_object() || object.value("type", "") != "mesh" ||
+                !object.contains("motionBricks"))
+                continue;
+            configs[object.value("name", "")] = object;
+        }
+
+    std::unordered_map<std::string, const WorldMeshObject*> meshes;
+    std::unordered_set<Animation::SkeletalPlayback*> livePlaybacks;
+    for (const auto& entry : meshObjects)
+    {
+        if (entry.second.animation) livePlaybacks.insert(entry.second.animation.get());
+        if (entry.second.animation && configs.count(entry.second.sceneObjectIdentity))
+            meshes[entry.second.sceneObjectIdentity] = &entry.second;
+    }
+    std::unordered_set<std::string> retained;
+    for (const auto& [identity, component] : configs)
+    {
+        const auto mesh = meshes.find(identity);
+        if (mesh == meshes.end()) continue;
+
+        auto& entry = motionBricksRuntimes[identity];
+        if (entry.target != mesh->second->animation.get())
+        {
+            if (entry.target && livePlaybacks.count(entry.target))
+                entry.target->SetExternalPoseStreamEnabled(false);
+            entry = {};
+            entry.target = mesh->second->animation.get();
+
+            Animation::MotionBricks::MotionBricksMeshConfig config;
+            std::string error;
+            if (!Animation::MotionBricks::TryReadMotionBricksConfig(component, config, error))
+            {
+                entry.error = error.empty() ? "invalid motionBricks config" : error;
+                std::cerr << "[MotionBricks] " << identity << ": " << entry.error << '\n';
+                retained.insert(identity);
+                continue;
+            }
+            if (motionResourceRoot.empty())
+            {
+                entry.error = "motion resource root is not configured";
+                std::cerr << "[MotionBricks] " << identity << ": " << entry.error << '\n';
+                retained.insert(identity);
+                continue;
+            }
+            try
+            {
+                entry.runtime = Animation::MotionBricks::CreateMotionBricksRuntime(config,
+                    motionResourceRoot, entry.target->Asset().mesh, motionBricksSkeletons);
+                entry.target->SetExternalPoseStreamEnabled(true);
+                std::cout << "[MotionBricks] " << identity << ": mode="
+                          << entry.runtime->Mode() << " provider="
+                          << entry.runtime->ProviderName() << " frames="
+                          << entry.runtime->FrameCount() << " target joints="
+                          << entry.runtime->TargetJointCount() << '\n';
+            }
+            catch (const std::exception& exception)
+            {
+                std::cerr << "[MotionBricks] " << identity << ": " << exception.what() << '\n';
+                entry.error = exception.what();
+                retained.insert(identity);
+                continue;
+            }
+        }
+
+        if (!entry.error.empty())
+        {
+            retained.insert(identity);
+            continue;
+        }
+        try
+        {
+            entry.target->SubmitExternalPose(entry.runtime->Tick(deltaSeconds));
+            retained.insert(identity);
+        }
+        catch (const std::exception& exception)
+        {
+            std::cerr << "[MotionBricks] " << identity << ": " << exception.what() << '\n';
+            entry.error = exception.what();
+            retained.insert(identity);
+        }
+    }
+
+    for (auto it = motionBricksRuntimes.begin(); it != motionBricksRuntimes.end();)
+    {
+        if ((it->first.rfind("__blueprint/", 0) == 0) != scripted)
+        {
+            ++it;
+            continue;
+        }
+        if (retained.count(it->first))
+        {
+            ++it;
+            continue;
+        }
+        if (it->second.target && livePlaybacks.count(it->second.target))
+            it->second.target->SetExternalPoseStreamEnabled(false);
+        it = motionBricksRuntimes.erase(it);
+    }
+}
+
 void World::ResetScriptAnimations()
 {
+    for (auto it = motionBricksRuntimes.begin(); it != motionBricksRuntimes.end();)
+        if (it->first.rfind("__blueprint/", 0) == 0)
+            it = motionBricksRuntimes.erase(it);
+        else
+            ++it;
     motionTracks.clear();
     motionRuntimes.clear();
     // 播放器即将换代；Registry 里的非拥有 pointer 必须先失效，下一 tick 重建。

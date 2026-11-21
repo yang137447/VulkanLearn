@@ -84,7 +84,8 @@ inline void ValidateScriptComponents(const nlohmann::json& components)
         for (const auto& field : component.items())
             if (field.key() != "id" && field.key() != "parent" && field.key() != "type" &&
                 field.key() != "position" && field.key() != "rotation" && field.key() != "scale" && field.key() != "collision" &&
-                !(type == "mesh" && (field.key() == "modelPath" || field.key() == "materialOverride")) &&
+                !(type == "mesh" && (field.key() == "modelPath" || field.key() == "materialOverride" ||
+                    field.key() == "motionBricks")) &&
                 !(type == "tressfx" && (field.key() == "modelPath" || field.key() == "rootBone" ||
                     field.key() == "weights" || field.key() == "simulation" ||
                     field.key() == "hairCollision" || field.key() == "materialOverride")) &&

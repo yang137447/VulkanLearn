@@ -1369,6 +1369,14 @@ UI 的 `DebugDrawOverlay`、`DebugDrawLabelTest` 与 `EditorUiTest.DebugDraw*`
 构建 `vl_animation_probe` 和 `animation_preflight_tests` 后，运行
 `ctest --test-dir build -R "^(AnimationSampling|AnimationDependency|UnrealProjectInventory|AnimationFbxInspection|SkeletalImport|SkeletalBlend|AnimationRetarget|SkinRenderHistory|MotionHistory|MotionPrediction|MotionFeatures|MotionRuntimeQuery|MotionDatabase|MotionDatabaseInputs|MotionMatching)\." --output-on-failure`。
 它验证依赖采样、只读盘点与 FBX 审计，不替代 GASP 导出或 VL 动态渲染验收。
+MotionBricks 接入的 CPU/异步调度与外部姿态回归使用
+`animation_preflight_tests --gtest_filter=MotionBricks*:ExternalPose*`。
+真实模型测试要求设置 `VULKANLEARN_MOTIONBRICKS_SOMA_ONNX` 与可用的
+ONNX Runtime 1.22 DLL；未设置时跳过的模型测试不能计为真实推理验收。
+`MotionBricksLive.RealModelWalkRunTurnAndStop` 检查连续生成的速度、
+转向和停止；`tool/animation/capture_motionbricks.py --resource-root <资源工作树>`
+串行启动 CLR/Jolt 场景并输出各动作的实际速度和截图。
+该外部工具生成自己的临时验证蓝图，结束后清理夹具并恢复正式程序集。
 范围见 [动画预检工具](animation-preflight-tools.md)。
 P1 CPU 导入与采样、九影响权重及 MikkTSpace 顶点展开由 `SkeletalImport` 覆盖，
 边界见 [动画资产导入](animation-asset-import.md)；真实资产数值对照是外部工具验收。

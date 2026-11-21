@@ -1,0 +1,218 @@
+{
+  "format": "vl.retarget.v1",
+  "sourceSkeleton": "SK_soma",
+  "targetSkeleton": "SK_UEFN_Mannequin",
+  "sourceRoot": "Hips",
+  "targetRoot": "root",
+  "joints": [
+    {
+      "source": "Hips",
+      "target": "root"
+    },
+    {
+      "source": "Spine1",
+      "target": "spine_01"
+    },
+    {
+      "source": "Spine2",
+      "target": "spine_03"
+    },
+    {
+      "source": "Chest",
+      "target": "spine_05"
+    },
+    {
+      "source": "Neck1",
+      "target": "neck_01"
+    },
+    {
+      "source": "Neck2",
+      "target": "neck_02"
+    },
+    {
+      "source": "Head",
+      "target": "head"
+    },
+    {
+      "source": "LeftShoulder",
+      "target": "clavicle_l"
+    },
+    {
+      "source": "LeftArm",
+      "target": "upperarm_l"
+    },
+    {
+      "source": "LeftForeArm",
+      "target": "lowerarm_l"
+    },
+    {
+      "source": "LeftHand",
+      "target": "hand_l"
+    },
+    {
+      "source": "RightShoulder",
+      "target": "clavicle_r"
+    },
+    {
+      "source": "RightArm",
+      "target": "upperarm_r"
+    },
+    {
+      "source": "RightForeArm",
+      "target": "lowerarm_r"
+    },
+    {
+      "source": "RightHand",
+      "target": "hand_r"
+    },
+    {
+      "source": "LeftLeg",
+      "target": "thigh_l"
+    },
+    {
+      "source": "LeftShin",
+      "target": "calf_l"
+    },
+    {
+      "source": "LeftFoot",
+      "target": "foot_l"
+    },
+    {
+      "source": "LeftToeBase",
+      "target": "ball_l"
+    },
+    {
+      "source": "RightLeg",
+      "target": "thigh_r"
+    },
+    {
+      "source": "RightShin",
+      "target": "calf_r"
+    },
+    {
+      "source": "RightFoot",
+      "target": "foot_r"
+    },
+    {
+      "source": "RightToeBase",
+      "target": "ball_r"
+    }
+  ],
+  "sourcePose": {
+    "name": "SOMA_AlignedToUEFNApose",
+    "rotationOffsets": [
+      {
+        "joint": "LeftShoulder",
+        "rotation": [
+          1.5069645568762037e-09,
+          -0.03394984980627581,
+          0.15062503629013113,
+          0.9880078472060472
+        ]
+      },
+      {
+        "joint": "LeftArm",
+        "rotation": [
+          1.3693776684908491e-09,
+          -0.3282016771537635,
+          -0.14873975939087328,
+          0.9328237470657583
+        ]
+      },
+      {
+        "joint": "LeftForeArm",
+        "rotation": [
+          5.1883314087472865e-09,
+          -0.004091878020618651,
+          0.24542737934651662,
+          0.9694063430787759
+        ]
+      },
+      {
+        "joint": "LeftLeg",
+        "rotation": [
+          -1.742294853089683e-11,
+          -0.057173834919613295,
+          0.002434818837115996,
+          0.9983612694099342
+        ]
+      },
+      {
+        "joint": "LeftShin",
+        "rotation": [
+          -1.5100094199671406e-10,
+          0.02114953102947697,
+          0.03775683308296411,
+          0.9990631205748606
+        ]
+      },
+      {
+        "joint": "LeftFoot",
+        "rotation": [
+          3.5946194058102125e-11,
+          -0.0020296116082168165,
+          -0.007482093996471344,
+          0.9999699490215432
+        ]
+      },
+      {
+        "joint": "RightShoulder",
+        "rotation": [
+          1.5059580822130483e-09,
+          -0.03394947518997839,
+          0.15062543711149937,
+          0.9880077989718983
+        ]
+      },
+      {
+        "joint": "RightArm",
+        "rotation": [
+          6.293670260062101e-09,
+          -0.32820212975970514,
+          -0.14873992041975984,
+          0.9328235621459812
+        ]
+      },
+      {
+        "joint": "RightForeArm",
+        "rotation": [
+          3.9990904026225445e-09,
+          -0.0040920130593469555,
+          0.24542717272830072,
+          0.9694063948188679
+        ]
+      },
+      {
+        "joint": "RightLeg",
+        "rotation": [
+          -1.4265612389937246e-11,
+          -0.05717377812191338,
+          0.0024348078745579094,
+          0.9983612726893407
+        ]
+      },
+      {
+        "joint": "RightShin",
+        "rotation": [
+          -2.9051062467342894e-10,
+          0.021149694079699435,
+          0.037756986120822414,
+          0.9990631113395225
+        ]
+      },
+      {
+        "joint": "RightFoot",
+        "rotation": [
+          -2.3656527299236432e-11,
+          -0.00202957498458438,
+          -0.007482544418657706,
+          0.9999699457255727
+        ]
+      }
+    ]
+  },
+  "targetPose": {
+    "name": "BindPose",
+    "rotationOffsets": []
+  }
+}

@@ -1,6 +1,7 @@
 #pragma once
 
 #include "animationAssets.h"
+#include "externalPose.h"
 #include "animationSyncGroup.h"
 #include "animationRetarget.h"
 #include "animationMontage.h"
@@ -224,6 +225,13 @@ public:
     void SetPlaying(bool value) { playing = value; explicitlyPaused = !value; }
     bool IsPlaying() const { return playing; }
     bool IsExplicitlyPaused() const { return explicitlyPaused; }
+    // 外部姿态流：启用后 Tick 不再推进 clip 时钟，只消费 GT 提交的 ExternalPoseFrame。
+    // 未提交新帧时保持上一姿态（冻结），不会回退到 clip 采样。由 World/组件显式开关，
+    // 与 Play/Pause/Stop 正交；显式暂停仍冻结外部流。
+    void SetExternalPoseStreamEnabled(bool value);
+    bool ExternalPoseStreamEnabled() const { return externalPoseStreamEnabled; }
+    // 一帧只消费一次；未启用时提交会被拒绝，避免静默丢帧。hardCut 推进 discontinuity。
+    void SubmitExternalPose(ExternalPoseFrame frame);
     float Time() const { return time; }
     float Duration() const;
     // 只读曲线采样：name 大小写不敏感，seconds 与 Time() 同为 clip-local 秒。
@@ -246,6 +254,9 @@ public:
     }
     // 根轨道上一播放 tick 的模型空间位移（cm）；Climb 等有明确根轨迹的动作消费。
     const Eigen::Vector3f& RootMotionDelta() const { return rootMotionDelta; }
+    // Delta of the last Tick that produced this feedback. Root-motion consumers divide
+    // by this instead of the (one-frame-later) script delta.
+    float LastTickDeltaSeconds() const { return lastTickDeltaSeconds; }
     Eigen::Vector3f RootMotionTotal() const;
     Eigen::Vector3f RootMotionRemaining() const;
     // 根轨道上一 tick 的 yaw 增量（弧度）。有旋转 warp 窗口时是 warp 后的值，
@@ -377,6 +388,8 @@ private:
         const Clip& clip, float sourceFrom, float sourceTo,
         const Eigen::Vector3f& rawDelta, const Eigen::Matrix4f& meshTransform,
         const Eigen::Vector3f& actorPosition, float actorYaw, float& yawDelta) const;
+    // 外部姿态流的 Tick 路径：不推进 clip 时钟、不采样片段，只发布已提交的 LocalPose。
+    void TickExternalPose(float deltaSeconds);
     std::shared_ptr<const SkeletalAsset> asset;
     std::shared_ptr<const CompiledRetarget> compiledRetarget;
     std::vector<std::shared_ptr<const SkinPose>> poses;
@@ -414,10 +427,13 @@ private:
     size_t selected = 0;
     float time = 0;
     Eigen::Vector3f rootMotionDelta = Eigen::Vector3f::Zero();
+    float lastTickDeltaSeconds = 0;
     float rootMotionYawDelta = 0;
     bool playing = true;
     // 自动到端点仍须响应正 delta 的接地退出；Console 显式暂停则连 IK 一并冻结。
     bool explicitlyPaused = false;
+    bool externalPoseStreamEnabled = false;
+    std::optional<ExternalPoseFrame> pendingExternalPose;
     bool looping = true;
     bool inPlace = false;
     float rate = 1;
