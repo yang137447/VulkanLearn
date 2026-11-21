@@ -68,6 +68,31 @@ if(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS)
     endif()
     set(VULKANLEARN_SCRIPT_SOURCE_ITEMS "${CMAKE_CURRENT_BINARY_DIR}/ResourceSources.props")
     set(VULKANLEARN_SCRIPT_SOURCE_ITEMS "${VULKANLEARN_SCRIPT_SOURCE_ITEMS}" PARENT_SCOPE)
+    # 托管构建根：部分环境（Codex/CI 沙箱）只允许 dotnet 进程写工作区根，
+    # 而 worktree 与资源仓库通常在工作区之外，MSBuild 会在建临时目录或写
+    # obj/输出时被拒绝。设置该变量后，TEMP/TMP、obj、artifacts-path 和输出
+    # DLL 全部落在可写根，再由 CMake 拷回 bin/managed；默认留空表示保持原行为。
+    set(VULKANLEARN_SCRIPT_BUILD_ROOT "" CACHE PATH
+        "Writable root for the managed build (TEMP/obj/output). Empty keeps the default in-tree layout.")
+    if(VULKANLEARN_SCRIPT_BUILD_ROOT)
+        get_filename_component(VULKANLEARN_SCRIPT_BUILD_ROOT "${VULKANLEARN_SCRIPT_BUILD_ROOT}" ABSOLUTE)
+        set(vl_managed_tmp "${VULKANLEARN_SCRIPT_BUILD_ROOT}/tmp")
+        set(vl_managed_obj "${VULKANLEARN_SCRIPT_BUILD_ROOT}/obj")
+        set(vl_managed_bin "${VULKANLEARN_SCRIPT_BUILD_ROOT}/bin")
+        file(MAKE_DIRECTORY "${vl_managed_tmp}" "${vl_managed_obj}" "${vl_managed_bin}")
+        add_custom_target(vl_gameplay
+            COMMAND vl_script_sources "${VULKANLEARN_SCRIPT_RESOURCE_ROOT}" "${VULKANLEARN_SCRIPT_SOURCE_ITEMS}"
+            COMMAND "${CMAKE_COMMAND}" -E env "TEMP=${vl_managed_tmp}" "TMP=${vl_managed_tmp}"
+                "${VULKANLEARN_DOTNET_EXECUTABLE}" build
+                "${VULKANLEARN_SCRIPT_GAMEPLAY_PROJECT}" --configuration "${VULKANLEARN_SCRIPT_CONFIGURATION}"
+                "-p:VulkanLearnSourceItems=${VULKANLEARN_SCRIPT_SOURCE_ITEMS}"
+                "-p:BaseIntermediateOutputPath=${vl_managed_obj}/"
+                --artifacts-path "${vl_managed_tmp}/artifacts"
+                --output "${vl_managed_bin}" --nologo
+            COMMAND "${CMAKE_COMMAND}" -E copy_directory "${vl_managed_bin}" "${VULKANLEARN_SCRIPT_OUTPUT}"
+            COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${hostfxr}" "${VULKANLEARN_SCRIPT_OUTPUT}/hostfxr.dll"
+            DEPENDS vl_script_sources VERBATIM)
+    else()
     add_custom_target(vl_gameplay
         COMMAND vl_script_sources "${VULKANLEARN_SCRIPT_RESOURCE_ROOT}" "${VULKANLEARN_SCRIPT_SOURCE_ITEMS}"
         COMMAND "${VULKANLEARN_DOTNET_EXECUTABLE}" build
@@ -77,6 +102,7 @@ if(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS)
             --output "${VULKANLEARN_SCRIPT_OUTPUT}" --nologo
         COMMAND "${CMAKE_COMMAND}" -E copy_if_different "${hostfxr}" "${VULKANLEARN_SCRIPT_OUTPUT}/hostfxr.dll"
         DEPENDS vl_script_sources VERBATIM)
+    endif()
     # 显式打包目标携带 SDK 随附的运行时，不把 SDK 或全局 .NET 安装当成部署前提。
     file(GLOB runtime_candidates LIST_DIRECTORIES TRUE "${dotnet_root}/shared/Microsoft.NETCore.App/11.*")
     list(SORT runtime_candidates COMPARE NATURAL ORDER DESCENDING)
