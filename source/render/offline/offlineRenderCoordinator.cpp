@@ -26,12 +26,14 @@ nlohmann::json Matrix(const Eigen::Matrix4f& value)
 
 std::string MeshDigest(const MeshSection& section)
 {
-    CanonicalFieldHasher hash("VL.Offline.MeshSection.v1");
+    CanonicalFieldHasher hash("VL.Offline.MeshSection.v2");
     for (const Vertex& vertex : section.vertices)
     {
         // 编码字段值，不哈希 C++ 结构 padding 或指针，持久身份可跨进程。
         hash.AddString("position", Vector(vertex.position).dump());
         hash.AddString("normal", Vector(vertex.normal).dump());
+        hash.AddString("tangent", nlohmann::json{
+            vertex.tangent.x(), vertex.tangent.y(), vertex.tangent.z(), vertex.tangent.w()}.dump());
         hash.AddString("uv", nlohmann::json{
             vertex.texCoord.x(), vertex.texCoord.y()}.dump());
     }
@@ -115,7 +117,8 @@ bool EqualInputSnapshot(const WorldSnapshot& left, const WorldSnapshot& right)
         if (a.type != b.type || !EqualVector(a.position, b.position) ||
             !EqualVector(a.direction, b.direction) ||
             !EqualVector(a.color, b.color) || a.intensity != b.intensity ||
-            a.squareSize != b.squareSize)
+            a.squareSize != b.squareSize || a.radius != b.radius ||
+            a.coneAngleInner != b.coneAngleInner || a.coneAngleOuter != b.coneAngleOuter)
             return false;
     }
     // 粒子系统按 unordered_map 顺序进入快照；这里按名称配对比较，
@@ -175,8 +178,10 @@ void WritePfm(const std::filesystem::path& path,
 
 unsigned char DisplayChannel(double value, float exposure)
 {
-    const double exposed = value * exposure;
-    const double mapped = exposed / (1.0 + exposed);
+    const double exposed = std::max(0.0, value * exposure);
+    const double mapped = std::clamp(
+        (exposed * (2.51 * exposed + 0.03)) /
+        (exposed * (2.43 * exposed + 0.59) + 0.14), 0.0, 1.0);
     const double encoded = mapped <= 0.0031308 ? 12.92 * mapped
         : 1.055 * std::pow(mapped, 1.0 / 2.4) - 0.055;
     return static_cast<unsigned char>(std::clamp(encoded * 255, 0.0, 255.0));
@@ -206,8 +211,8 @@ nlohmann::json OfflineRenderCoordinator::DescribeInput(
         {"profiles", assets.modelProfiles},
         {"profileDigests", assets.modelProfileDigests},
         {"replay", "External source assets at the captured versions are required"},
-        {"sampling", "LOD0; CPU model direction kernels; Reinhard viewport only"},
-        {"modelImplementation", "VL.Offline.ClothSheen.ClothFiber.Lambert.AshikhminVelvet.AshikhminSatin.AshikhminSlantedVelvet.v3"},
+        {"sampling", "LOD0; CPU model direction kernels; ACES fitted display only"},
+        {"modelImplementation", "VL.Offline.ClothSheen.ClothFiber.Lambert.AshikhminVelvet.AshikhminSatin.AshikhminSlantedVelvet.v4"},
         {"environment", static_cast<int>(snapshot.environment.type)}};
     result["groomAssets"] = nlohmann::json::object();
     for (const auto& [reference, groom] : assets.groomAssets)
@@ -236,7 +241,9 @@ nlohmann::json OfflineRenderCoordinator::DescribeInput(
         result["lights"].push_back({
             {"type", static_cast<int>(light.type)}, {"position", Vector(light.position)},
             {"direction", Vector(light.direction)}, {"color", Vector(light.color)},
-            {"intensity", light.intensity}, {"squareSize", light.squareSize}});
+              {"intensity", light.intensity}, {"squareSize", light.squareSize},
+              {"radius", light.radius}, {"coneInnerRadians", light.coneAngleInner},
+              {"coneOuterRadians", light.coneAngleOuter}});
     const OfflineParticlePreviewPolicy particlePolicy =
         OfflineParticlePreviewDefaults();
     result["particles"] = {
@@ -606,7 +613,7 @@ void ExportOfflineResult(const OfflinePublishedResult& result,
     if (!preview) throw std::runtime_error("Offline preview write failed");
     preview.close();
     nlohmann::json manifest = result.manifest;
-    manifest["display"] = {{"exposure", displayExposure}, {"mapping", "Reinhard + sRGB"}};
+    manifest["display"] = {{"exposure", displayExposure}, {"mapping", "ACES fitted + sRGB"}};
     if (hasParticles)
     {
         manifest["particleComposite"] = {

@@ -22,5 +22,7 @@
       "description": "离线 Lambert 线性反射率；不隐式映射为实时 DefaultLit"
     }
   },
-  "textures": {}
+  "textures": {
+    "baseColorMap": {"type": "sampler2D", "default": null}
+  }
 }

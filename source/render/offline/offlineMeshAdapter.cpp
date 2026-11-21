@@ -52,6 +52,12 @@ std::shared_ptr<const Offline::Mesh> BuildOfflineMesh(const MeshSection& section
             triangle.vertices[corner] = ToCore(vertex.position);
             triangle.normals[corner] = ToCore(vertex.normal);
             triangle.uv[corner] = ToCoreUv(vertex.texCoord);
+            triangle.tangents[corner] = ToCore(Eigen::Vector3f(vertex.tangent.head<3>()));
+            triangle.tangentSigns[corner] = vertex.tangent.w();
+            if (!vertex.tangent.allFinite() ||
+                vertex.tangent.head<3>().squaredNorm() <= 1e-12f ||
+                std::abs(vertex.tangent.w()) < 0.5f)
+                mesh->hasValidTangents = false;
         }
         const Offline::Vec3 edge1 = triangle.vertices[1] - triangle.vertices[0];
         const Offline::Vec3 edge2 = triangle.vertices[2] - triangle.vertices[0];

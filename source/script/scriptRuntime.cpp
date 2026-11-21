@@ -191,6 +191,28 @@ void ScriptRuntimeSubsystem::Initialize(bool enabled, const std::string& runtime
     assemblyGeneration = catalog.at("result").at("generation");
     assemblyPath = assembly;
     host = std::move(candidate);
+    hostingEnabled = true;
+}
+
+bool ScriptRuntimeSubsystem::InvokeUiEvent(
+    World& world, const std::string& name, const std::string& value)
+{
+    if (!host || name.empty()) return false;
+    const auto context = world.GetScriptContext();
+    if (!context) return false;
+    try
+    {
+        context->Call("ui_event", {{"name", name}, {"value", value}});
+        return true;
+    }
+    catch (const std::exception& error)
+    {
+        pendingDiagnostics.push_back({
+            LogSeverity::Warning,
+            std::string("UI event delivery failed: ") + error.what(),
+            {}});
+        return false;
+    }
 }
 
 std::shared_ptr<ScriptWorldContext> ScriptRuntimeSubsystem::CreateContext(const nlohmann::json& blueprints,
@@ -549,6 +571,18 @@ void ScriptRuntimeSubsystem::Apply(World& world, const nlohmann::json& response)
         }
         if (update.contains("animationCommands"))
             world.ApplyScriptAnimationRequests(current, update.at("animationCommands"));
+        // 展示关卡：C# 决定材质/面板，原生控制器在 GT 帧内消费（见 EngineLoop）。
+        if (update.contains("showcaseCommands"))
+        {
+            for (const auto& command : update.at("showcaseCommands"))
+            {
+                if (!command.is_object()) continue;
+                ShowcaseStateRequest request;
+                request.materialId = command.value("materialId", std::string());
+                request.panelOpen = command.value("panelOpen", false);
+                world.RequestShowcaseState(request);
+            }
+        }
         try
         {
             if (update.contains("debugCommands") || (changed && (current.value("failed", false) ||
@@ -566,7 +600,7 @@ void ScriptRuntimeSubsystem::Apply(World& world, const nlohmann::json& response)
             ApplyParticleCommands(world, id, update.at("particleCommands"));
         // 请求队列已有独立 owner，快照不保留已领取的一次性资源/查询命令。
         for (const char* field : {"raycasts", "assetRequests", "assetCancels", "animationCommands",
-            "debugCommands", "particleCommands"})
+            "debugCommands", "particleCommands", "showcaseCommands"})
             if (current.contains(field) && !current.at(field).empty()) current[field] = nlohmann::json::array();
     }
     if (cameraChanged) world.UpdateScriptCamera(states);

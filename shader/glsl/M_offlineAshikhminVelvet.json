@@ -20,5 +20,8 @@
       }
     }
   },
-  "textures": {}
+  "textures": {
+    "baseColorMap": {"type": "sampler2D", "default": null},
+    "normalMap": {"type": "sampler2D", "default": null}
+  }
 }

@@ -165,6 +165,9 @@ void DebugConsole::PrintHelp() const
     std::cout << "  mesh transform <identity> <px> <py> <pz> [rx ry rz] - absolute placement (cm, degrees; scale=1)\n";
     std::cout << "  mesh offset <identity> <dx> <dy> <dz> - add a delta to the current placement\n";
     std::cout << "  mesh sweep <identityA> <identityB> <dx> <dy> <dz> <seconds> - linear placement over GT frames\n";
+    std::cout << "  aprop <identity> <field> <values...> - live actor property edit (same path as Details panel)\n";
+    std::cout << "    identity: spotLight|Name / directionalLight|Name / pointLight|Name\n";
+    std::cout << "    field: intensity | outerCone | innerCone | castShadows | position x y z | rotation x y z | color r g b\n";
     std::cout << "  hair trace <path> <frames> <guide-stride> - one-shot read-only GPU guide trace (max 256 guides)\n";
     std::cout << "  hair reset [objectName] - queue one ResetPositions for the next positive-delta frame\n";
     std::cout << "  hair set <objectName> <field> <value...> - override one live simulation parameter (GPU only)\n";
@@ -188,6 +191,7 @@ void DebugConsole::PrintHelp() const
     std::cout << "  softbody impact <balloon-name> [speed] - launch a Jolt sphere at a soft body\n";
     std::cout << "  glass impact <pane-name> [speed] - launch a Jolt sphere at a glass pane\n";
     std::cout << "  shoot - fire a visible arrow from the render camera\n";
+    std::cout << "  showcase select <material-id>|close - drive the showcase level UI through the C# bridge\n";
     std::cout << "  camera get - print the active camera pose\n";
     std::cout << "  camera position <x> <y> <z> - set camera position\n";
     std::cout << "  camera lookat <x> <y> <z> - aim camera at a world-space target\n";

@@ -18,7 +18,10 @@ void FreezeOfflineMaterialTextures(OfflineWorldAssets& assets,
     {
         const bool groom = model == "ClothFiber" && slot == "groomMap";
         const bool color = (model == "ClothSheen" || model == "Lambert") &&
-            (slot == "baseColorMap" || (model == "ClothSheen" && slot == "sheenColorMap"));
+            (slot == "baseColorMap" || (model == "ClothSheen" && slot == "sheenColorMap")) ||
+            ((model == "AshikhminVelvet" || model == "AshikhminSatin" ||
+              model == "AshikhminSlantedVelvet") &&
+             (slot == "baseColorMap" || slot == "normalMap"));
         if (!groom && !color) continue;
         const std::string reference = referenceJson.get<std::string>();
         ValidateTextureAssetReference(slot, reference,
@@ -38,12 +41,15 @@ void FreezeOfflineMaterialTextures(OfflineWorldAssets& assets,
                 "ClothFiber groomMap requires linear RGB PFM, repeat/linear, mipmaps=false: " +
                 reference);
         if (color &&
-            (extension != ".png" && extension != ".tga" &&
+            (extension != ".png" && extension != ".jpg" && extension != ".jpeg" && extension != ".tga" &&
              extension != ".hdr" && extension != ".exr"))
             throw std::runtime_error("Unsupported offline color image format: " + reference);
         if (color && (extension == ".hdr" || extension == ".exr") &&
             desc.transfer != TextureIO::LoadOptions::Transfer::Linear)
             throw std::runtime_error("HDR/EXR offline texture must be linear: " + reference);
+        if (slot == "normalMap" &&
+            desc.transfer != TextureIO::LoadOptions::Transfer::Linear)
+            throw std::runtime_error("Offline normalMap must be linear: " + reference);
         const auto descriptorPath = std::filesystem::path(CommonFunction::Path(reference));
         const auto sourcePath = std::filesystem::path(CommonFunction::Path(source));
         std::ifstream file(sourcePath, std::ios::binary);

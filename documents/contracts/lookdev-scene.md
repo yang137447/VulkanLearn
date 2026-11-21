@@ -31,6 +31,13 @@
 - `tool/lookdev/capture_lookdev.ps1`：采集文章场景截图，不支持已移除的 direct 校准场景。
 
 旧合成场景的灰片像素阈值不适用于文章版，不以旧 `verify_lookdev.py` 的数值结论验收文章版。
+布料审阅工具 `tool/lookdev/capture_cloth_lookdev.py` 保留正式场景的参考物、
+HDRI、强度、相机与曝光，额外放置原尺寸人台，采集基线和
+Satin/Velvet/Slanted Velvet/PBR 四组。派生 JSON 写到
+`Generated/ClothLookdev/`，截图与日志写到代码树 `artifacts/cloth-lookdev/`；
+不覆盖正式入口。当前离线路径拒绝 HDRI，所以这些是实时外观审阅，
+不构成 CPU/GPU 同条件积分验证。Cloth 的环境项仍为低频近似，
+本工具不会为它增加方向性环境镜面求值。
 `SC_model_preview` 保留独立的模型预览用途，其背板、材质与平板 OBJ
 归属 `Maps/SC_model_preview/`。照明和反射复用上述 Epic HDRI（强度 1），
 不再使用旧合成 `studio_neutral.hdr`。灰色 Unlit 背板仅决定背景，不是照明源。

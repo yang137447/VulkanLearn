@@ -152,7 +152,74 @@ RuntimeResult<void> UiSubsystem::InitializeDataModel()
         return RuntimeResult<void>::Failure(MakeRuntimeError(
             "UiSubsystem.DataModelFailed", "Could not bind gameplay HUD text."));
 
+    // 布料展示绑定。面板文案与数值都由 native 侧写入，RmlUi 只负责排版；
+    // 默认 hidden，场景提交后由 SetShowcaseVisible 打开。
+    if (!constructor.Bind("showcase_visible", &bindingData.showcaseVisible) ||
+        !constructor.Bind("showcase_panel_open", &bindingData.showcasePanelOpen) ||
+        !constructor.Bind("showcase_material", &bindingData.showcaseMaterial) ||
+        !constructor.Bind("showcase_material_name", &bindingData.showcaseMaterialName) ||
+        !constructor.Bind("showcase_material_tag", &bindingData.showcaseMaterialTag) ||
+        !constructor.Bind("showcase_base_hex", &bindingData.showcaseBaseHex) ||
+        !constructor.Bind("showcase_sheen_hex", &bindingData.showcaseSheenHex) ||
+        !constructor.Bind("showcase_f0", &bindingData.showcaseF0) ||
+        !constructor.Bind("showcase_sheen_roughness", &bindingData.showcaseSheenRoughness) ||
+        !constructor.Bind("showcase_fiber_rotation", &bindingData.showcaseFiberRotation))
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "UiSubsystem.DataModelFailed", "Could not bind cloth showcase fields."));
+    }
+
     dataModelHandle = constructor.GetModelHandle();
+    if (!constructor.BindEventCallback(
+            "selectMaterial",
+            [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList& arguments)
+            {
+                const std::string id = arguments.empty()
+                    ? std::string()
+                    : arguments.front().Get<Rml::String>();
+                if (showcaseScriptRouting && commandBus != nullptr)
+                {
+                    RuntimeCommand command;
+                    command.type = RuntimeCommandType::ShowcaseUiEvent;
+                    command.stringValue = "selectMaterial";
+                    command.secondaryStringValue = id;
+                    commandBus->Queue(std::move(command));
+                    return;
+                }
+                int index = 0;
+                if (id == "velvet") index = 1;
+                else if (id == "slantedVelvet") index = 2;
+                else if (id == "pbr") index = 3;
+                if (showcaseMaterialSelected)
+                {
+                    showcaseMaterialSelected(index);
+                }
+            }))
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "UiSubsystem.DataModelFailed", "Could not bind selectMaterial."));
+    }
+    if (!constructor.BindEventCallback(
+            "closeShowcasePanel",
+            [this](Rml::DataModelHandle, Rml::Event&, const Rml::VariantList&)
+            {
+                if (showcaseScriptRouting && commandBus != nullptr)
+                {
+                    RuntimeCommand command;
+                    command.type = RuntimeCommandType::ShowcaseUiEvent;
+                    command.stringValue = "closeShowcasePanel";
+                    commandBus->Queue(std::move(command));
+                    return;
+                }
+                if (showcasePanelClosed)
+                {
+                    showcasePanelClosed();
+                }
+            }))
+    {
+        return RuntimeResult<void>::Failure(MakeRuntimeError(
+            "UiSubsystem.DataModelFailed", "Could not bind closeShowcasePanel."));
+    }
     return RuntimeResult<void>::Success();
 }
 
@@ -603,6 +670,7 @@ void UiSubsystem::BuildAndPublishRenderSnapshot(bool includeUiDocuments)
     if (includeUiDocuments)
     {
         rmlContext->Render();
+        CollectGlassRects(*snapshot);
     }
     const size_t firstDebugCommand = snapshot->drawCommands.size();
     // 沉浸显示与编辑器共用同一 DrawDebug 适配；控制台仍可在开发者 UI 隐藏时
@@ -629,6 +697,51 @@ void UiSubsystem::BuildAndPublishRenderSnapshot(bool includeUiDocuments)
     previousUiDrawCount = snapshot->drawCommands.size();
     snapshotPublisher.Publish(std::move(snapshot));
     ++refreshStats.snapshotPublishes;
+}
+
+void UiSubsystem::CollectGlassRects(UiRenderSnapshot& snapshot)
+{
+    snapshot.glassRects.clear();
+    if (!bindingData.showcaseVisible || !bindingData.showcasePanelOpen ||
+        runtimeDocument == nullptr)
+    {
+        return;
+    }
+    // 面板与对照卡片都是 16dp 圆角；矩形取 border box，供 RT 做圆角遮罩。
+    for (const char* id : {"sc-panel", "sc-compare"})
+    {
+        Rml::Element* element = runtimeDocument->GetElementById(id);
+        if (element == nullptr)
+        {
+            continue;
+        }
+        const Rml::Vector2f offset = element->GetAbsoluteOffset(Rml::BoxArea::Border);
+        // client 尺寸已排除 border，补回两侧 1dp 描边。
+        const float width = element->GetClientWidth() + 2.0f;
+        const float height = element->GetClientHeight() + 2.0f;
+        if (width <= 1.0f || height <= 1.0f)
+        {
+            continue;
+        }
+        UiGlassRect rect;
+        rect.x = offset.x - 1.0f;
+        rect.y = offset.y - 1.0f;
+        rect.width = width;
+        rect.height = height;
+        rect.cornerRadius = 16.0f;
+        const float right = std::min(
+            rect.x + rect.width, static_cast<float>(snapshot.viewportWidth));
+        const float bottom = std::min(
+            rect.y + rect.height, static_cast<float>(snapshot.viewportHeight));
+        rect.x = std::max(rect.x, 0.0f);
+        rect.y = std::max(rect.y, 0.0f);
+        rect.width = right - rect.x;
+        rect.height = bottom - rect.y;
+        if (rect.width > 1.0f && rect.height > 1.0f)
+        {
+            snapshot.glassRects.push_back(rect);
+        }
+    }
 }
 
 } // namespace VL

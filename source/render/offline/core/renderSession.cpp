@@ -196,7 +196,9 @@ std::uint64_t RenderSession::Start(RenderInput input)
           !std::isfinite(input.cameraForward.z) ||
           std::abs(length(input.cameraForward) - 1.0) > 1.0e-4))
         throw std::invalid_argument("invalid offline render settings");
-    if (input.scene.directionalLight && input.scene.hasAreaEmitter)
+    if (static_cast<int>(input.scene.directionalLight) +
+        static_cast<int>(input.scene.hasAreaEmitter) +
+        static_cast<int>(input.scene.spotLight) > 1)
         throw std::invalid_argument("combined directional and area light is not supported");
     for (const MeshInstance& instance : input.scene.instances)
     {
@@ -209,15 +211,19 @@ std::uint64_t RenderSession::Start(RenderInput input)
              !IsOwned(instance.velvet, input.instanceVelvets)) ||
             (instance.model == SurfaceModel::AshikhminSatin &&
              (!IsOwned(instance.satin, input.instanceSatins) ||
-              !instance.mesh->hasValidUvFrames)) ||
+              !(instance.useImportedTangents ? instance.mesh->hasValidTangents
+                                             : instance.mesh->hasValidUvFrames))) ||
             (instance.model == SurfaceModel::AshikhminSlantedVelvet &&
              (!IsOwned(instance.slantedVelvet, input.instanceSlantedVelvets) ||
-              !instance.mesh->hasValidUvFrames)) ||
+              !(instance.useImportedTangents ? instance.mesh->hasValidTangents
+                                             : instance.mesh->hasValidUvFrames))) ||
             (instance.groom && !IsOwned(instance.groom, input.instanceGrooms)) ||
             (instance.baseColorMap &&
              !IsOwned(instance.baseColorMap, input.instanceColorMaps)) ||
             (instance.sheenColorMap &&
-             !IsOwned(instance.sheenColorMap, input.instanceColorMaps)))
+             !IsOwned(instance.sheenColorMap, input.instanceColorMaps)) ||
+            (instance.normalMap &&
+             !IsOwned(instance.normalMap, input.instanceColorMaps)))
             throw std::invalid_argument("offline instance references an unowned asset");
     }
     auto candidate = std::make_shared<const RenderInput>(std::move(input));

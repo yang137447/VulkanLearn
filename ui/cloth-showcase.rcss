@@ -1,0 +1,223 @@
+/* 布料材质展示 —— 样式令牌见 documents/plan/ui/studio-ui-design-system.md。
+   RmlUi 不支持 box-shadow / linear-gradient / backdrop-filter，玻璃感靠
+   半透明底色 + 1px 描边表达；半透明必须写 #RRGGBBAA，rgba() 会被截断成 0。 */
+
+#sc-root {
+    position: absolute;
+    left: 0;
+    top: 0;
+    width: 100%;
+    height: 100%;
+    pointer-events: none;
+}
+
+#sc-hint {
+    position: absolute;
+    left: 24dp;
+    bottom: 30dp;
+    color: #FFFFFF9E;
+    font-size: 12dp;
+}
+
+/* 胶囊条：外层负责居中，内层才是玻璃底。 */
+#sc-chips {
+    position: absolute;
+    left: 0;
+    right: 0;
+    bottom: 22dp;
+    display: flex;
+    justify-content: center;
+}
+
+#sc-chipbar {
+    display: flex;
+    align-items: center;
+    padding: 6dp;
+    border-width: 1dp;
+    border-color: #FFFFFF3D;
+    border-radius: 30dp;
+    background-color: #E8E4DE61;
+    pointer-events: auto;
+}
+
+.sc-chip {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    min-width: 96dp;
+    padding: 6dp 18dp;
+    border-radius: 24dp;
+    color: #FBF8F1D9;
+}
+
+.sc-chip:hover {
+    background-color: #FFFFFF24;
+}
+
+.sc-chip.selected {
+    background-color: #D8BE8E;
+    color: #3A332A;
+}
+
+.sc-chip-cn {
+    font-size: 13dp;
+    font-weight: bold;
+}
+
+.sc-chip-en {
+    margin-top: 2dp;
+    font-size: 10dp;
+    color: #FBF8F1A6;
+}
+
+.sc-chip.selected .sc-chip-en {
+    color: #3A332AB8;
+}
+
+/* 参数面板 */
+#sc-side {
+    position: absolute;
+    right: 28dp;
+    top: 56dp;
+    width: 332dp;
+    display: flex;
+    flex-direction: column;
+    pointer-events: auto;
+}
+
+#sc-panel {
+    display: block;
+    padding: 20dp;
+    border-width: 1dp;
+    border-color: #FFFFFF2E;
+    border-radius: 16dp;
+    background-color: #403A326B;
+}
+
+#sc-panel-head {
+    display: flex;
+    flex-direction: column;
+    padding-bottom: 14dp;
+    border-bottom-width: 1dp;
+    border-bottom-color: #FFFFFF1A;
+}
+
+#sc-panel-title {
+    color: #FBF8F1;
+    font-size: 18dp;
+    font-weight: bold;
+}
+
+#sc-panel-tag {
+    margin-top: 4dp;
+    color: #B6AFA7;
+    font-size: 10dp;
+}
+
+#sc-panel-close {
+    position: absolute;
+    right: 18dp;
+    top: 16dp;
+    width: 22dp;
+    height: 22dp;
+    color: #FBF8F1A6;
+    font-size: 16dp;
+    text-align: center;
+}
+
+#sc-panel-close:hover {
+    color: #FBF8F1;
+}
+
+.sc-group-title {
+    display: block;
+    margin-top: 16dp;
+    margin-bottom: 10dp;
+    color: #B6AFA7;
+    font-size: 11dp;
+}
+
+.sc-color-row {
+    display: flex;
+    align-items: center;
+    height: 32dp;
+}
+
+.sc-swatch {
+    width: 22dp;
+    height: 22dp;
+    border-width: 1dp;
+    border-color: #FFFFFF33;
+    border-radius: 11dp;
+}
+
+.sc-color-label {
+    margin-left: 10dp;
+    color: #FBF8F1;
+    font-size: 13dp;
+}
+
+.sc-hex {
+    margin-left: auto;
+    padding: 3dp 8dp;
+    border-radius: 6dp;
+    background-color: #00000026;
+    color: #D6CFC4;
+    font-size: 11dp;
+}
+
+.sc-icon {
+    margin-left: 10dp;
+    color: #FBF8F1A6;
+    font-size: 13dp;
+}
+
+.sc-param-row {
+    display: block;
+    margin-top: 12dp;
+}
+
+.sc-param-head {
+    display: flex;
+    align-items: center;
+}
+
+.sc-param-label {
+    color: #FBF8F1D9;
+    font-size: 12dp;
+}
+
+.sc-param-value {
+    margin-left: auto;
+    color: #FBF8F1;
+    font-size: 12dp;
+}
+
+.sc-track {
+    position: relative;
+    display: block;
+    margin-top: 8dp;
+    height: 3dp;
+    border-radius: 2dp;
+    background-color: #FFFFFF2E;
+}
+
+.sc-track-fill {
+    display: block;
+    height: 3dp;
+    border-radius: 2dp;
+    background-color: #D8BE8E;
+}
+
+.sc-knob {
+    position: absolute;
+    /* RmlUi 没有默认样式表：绝对定位的 div 仍是 inline，必须显式块级化才吃宽高。 */
+    display: block;
+    top: -4dp;
+    width: 10dp;
+    height: 10dp;
+    border-radius: 5dp;
+    background-color: #C9AE7A;
+}
+

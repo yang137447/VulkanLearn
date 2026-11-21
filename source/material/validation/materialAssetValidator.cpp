@@ -658,6 +658,7 @@ void MaterialAssetValidator::ValidateRenderStateCombination(
     const bool usesThinTranslucentShadingModel =
         shadingModel == "ThinTranslucent";
     const bool usesEyeShadingModel = shadingModel == "Eye";
+    const bool usesClothShadingModel = shadingModel == "Cloth";
     const bool usesForwardOpaqueRenderMode = renderMode == "ForwardOpaque";
     const bool usesDeferredOpaqueRenderMode = renderMode == "Opaque";
 
@@ -669,10 +670,22 @@ void MaterialAssetValidator::ValidateRenderStateCombination(
             "Eye shadingModel requires an explicit Eye render path: " +
             std::string(materialInstancePath));
     }
-    if (!usesEyeShadingModel && usesForwardOpaqueRenderMode)
+    if (!usesEyeShadingModel &&
+        !usesClothShadingModel &&
+        usesForwardOpaqueRenderMode)
     {
         throw std::runtime_error(
             "Only Eye shadingModel may use an Eye forward render path: " +
+            std::string(materialInstancePath));
+    }
+    if (usesClothShadingModel &&
+        (usesDeferredOpaqueRenderMode ||
+         renderMode == "OpaqueClip" ||
+         renderMode == "ThinTranslucent"))
+    {
+        throw std::runtime_error(
+            "Cloth is a forward-only shading model; use ForwardOpaque or a "
+            "transparent renderMode: " +
             std::string(materialInstancePath));
     }
     if (usesThinTranslucentShadingModel !=

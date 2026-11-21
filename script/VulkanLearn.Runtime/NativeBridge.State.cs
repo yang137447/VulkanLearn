@@ -51,6 +51,7 @@ public static partial class NativeBridge
             ExportCommand(ref update, blueprint.Handle.Id, "animationCommands", TakeAnimationCommands(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "debugCommands", context.Services.TakeDebug(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "particleCommands", context.Services.TakeParticles(blueprint), complete);
+            ExportCommand(ref update, blueprint.Handle.Id, "showcaseCommands", TakeShowcaseCommands(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "assetRequests", context.Services.TakeAssets(blueprint), complete);
             ExportCommand(ref update, blueprint.Handle.Id, "assetCancels", context.Services.TakeAssetCancellations(blueprint), complete);
             ExportValue(baseline, ref update, blueprint.Handle.Id, "scriptComponents", ExportScriptComponents(instance), complete);
@@ -58,6 +59,25 @@ public static partial class NativeBridge
             if (update != null) (updates ??= []).Add(update);
         }
         return updates?.ToArray() ?? Array.Empty<object>();
+    }
+
+    // 展示关卡：C# 侧只提交意图，原生 ShowcaseController 负责可见性/旋转/面板。
+    // 每个请求消费一次；material < 0 表示只改面板开关。
+    private static object[] TakeShowcaseCommands(Blueprint owner)
+    {
+        var commands = new List<object>();
+        if (owner.PendingShowcaseMaterialId is string materialId)
+        {
+            commands.Add(new { materialId, panelOpen = owner.PendingShowcasePanelOpen ?? true });
+            owner.PendingShowcaseMaterialId = null;
+            owner.PendingShowcasePanelOpen = null;
+        }
+        else if (owner.PendingShowcasePanelOpen is bool panelOpen)
+        {
+            commands.Add(new { materialId = "", panelOpen });
+            owner.PendingShowcasePanelOpen = null;
+        }
+        return commands.ToArray();
     }
 
     private static void AddUpdate(ref Dictionary<string, object>? update, string id, string field, object value)

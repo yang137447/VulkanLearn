@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <functional>
 #include <memory>
 #include <optional>
 #include <string>
@@ -16,6 +17,7 @@
 
 #include "core/runtimeResult.h"
 #include "platform/platformEvent.h"
+#include "showcase/showcaseViewModel.h"
 #include "ui/iEditorUiShell.h"
 #include "ui/rmlUiInterfaces.h"
 #include "ui/rmlUiRuntime.h"
@@ -221,7 +223,7 @@ public:
     bool IsSceneViewportEnabled() const
     {
         // 资源标签同样消费 renderer-owned 离屏图像；不能因资产编辑器可见而关闭输出。
-        return developerUiVisible;
+        return developerUiVisible && editorUiShell != nullptr;
     }
     std::optional<UiViewportPoint> GetSceneViewportPoint(float x, float y) const
     {
@@ -233,6 +235,16 @@ public:
     bool ShouldGameReceivePointer() const;
     const UiInputOwnershipSnapshot& GetInputOwnership() const { return inputOwnership; }
     UiRenderSnapshotQueue& GetRenderSnapshotQueue() { return snapshotPublisher.Queue(); }
+    // 布料展示：只接收控制器算好的快照，不读 World、不判断关卡类型。
+    void SetShowcaseModel(const ShowcaseViewModel& model);
+    void SetShowcaseCallbacks(
+        std::function<void(int)> materialSelected,
+        std::function<void()> panelClosed);
+    // C# 宿主启用时，展示 UI 事件不再直接驱动原生控制器，而是转成
+    // RuntimeCommand::ShowcaseUiEvent 交给蓝图；关闭时保持原生回退。
+    void SetShowcaseScriptRouting(bool enabled) { showcaseScriptRouting = enabled; }
+    // 按 RmlUi 布局冻结磨砂背板矩形；面板关闭时不产生任何矩形。
+    void CollectGlassRects(UiRenderSnapshot& snapshot);
 
 private:
     // 运行时分节存储在 .cpp；编辑器运行时/面板/资产库/缩略图库由
@@ -250,6 +262,17 @@ private:
         Rml::String gameplayText;
         bool sceneLoading = false;
         std::vector<UiSceneOption> sceneOptions;
+        // 布料展示面板。数值绑定用格式化字符串，避免 float 打印位数抖动。
+        bool showcaseVisible = false;
+        bool showcasePanelOpen = false;
+        int showcaseMaterial = 0;
+        Rml::String showcaseMaterialName;
+        Rml::String showcaseMaterialTag;
+        Rml::String showcaseBaseHex;
+        Rml::String showcaseSheenHex;
+        Rml::String showcaseF0;
+        Rml::String showcaseSheenRoughness;
+        Rml::String showcaseFiberRotation;
     };
 
     RuntimeResult<void> InitializeRmlUi();
@@ -345,6 +368,9 @@ private:
     RmlUiTextInputHandler rmlTextInputHandler;
     RmlUiRenderInterface rmlRenderInterface;
     Rml::DataModelHandle dataModelHandle;
+    std::function<void(int)> showcaseMaterialSelected;
+    std::function<void()> showcasePanelClosed;
+    bool showcaseScriptRouting = false;
     BindingData bindingData;
     LocalizationDatabase localizations;
     AssetFingerprint assetFingerprint;

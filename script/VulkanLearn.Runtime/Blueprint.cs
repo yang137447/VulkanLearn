@@ -157,6 +157,9 @@ public abstract partial class Blueprint
     protected virtual void OnCreate() { }
     protected virtual void BeginPlay() { }
     protected virtual void Tick(float deltaTime) { }
+    // 运行时 UI 事件（RmlUi → 原生命令 → 这里）。参数是纯字符串，
+    // 语义由关卡自己的 UI 文档定义；未订阅的蓝图保持空实现。
+    protected virtual void OnUiEvent(string name, string value) { }
     protected virtual void LateTick(float deltaTime) { }
     protected virtual void EndPlay(EndPlayReason reason) { }
     protected virtual void OnCollisionEnter(BlueprintHandle other) { }
@@ -174,6 +177,29 @@ public abstract partial class Blueprint
     { if (enter) OnTriggerEnter(other); else OnTriggerExit(other); }
     public void Destroy() => PendingDestroy = true;
     internal bool PendingDestroy { get; set; }
+    // 展示关卡状态请求：C# 决定，原生 ShowcaseController 在 GT 帧内消费。
+    internal string? PendingShowcaseMaterialId { get; set; }
+    internal bool? PendingShowcasePanelOpen { get; set; }
+    private ShowcaseApi? showcase;
+    public ShowcaseApi Showcase => showcase ??= new(this);
+    internal void DispatchUiEvent(string name, string value)
+    {
+        if (!Enabled || PendingDestroy) return;
+        OnUiEvent(name, value);
+    }
+}
+
+// 展示关卡的 C# 侧入口。只记录意图；真正的可见性/旋转由原生控制器应用。
+public sealed class ShowcaseApi
+{
+    private readonly Blueprint owner;
+    internal ShowcaseApi(Blueprint owner) => this.owner = owner;
+    public void SelectMaterial(string materialId)
+    {
+        owner.PendingShowcaseMaterialId = materialId;
+        owner.PendingShowcasePanelOpen = true;
+    }
+    public void SetPanelOpen(bool open) => owner.PendingShowcasePanelOpen = open;
 }
 
 public sealed class Input

@@ -129,6 +129,11 @@ const std::vector<vk::ImageView>& RendererBackendVulkan::GetSwapchainImageViews(
     return rhiDevice->GetSwapchainImageViews(rhiDevice->GetPresentTarget());
 }
 
+const std::vector<vk::Image>& RendererBackendVulkan::GetSwapchainImages() const
+{
+    return rhiDevice->GetSwapchainImages(rhiDevice->GetPresentTarget());
+}
+
 float RendererBackendVulkan::GetTimestampPeriodNanoseconds()
 {
     return rhiDevice->GetTimestampPeriodNanoseconds();

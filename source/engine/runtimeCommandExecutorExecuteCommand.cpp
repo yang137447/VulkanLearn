@@ -1118,6 +1118,25 @@ void RuntimeCommandExecutor::ExecuteCommand(
             "Sun intensity set to " + std::to_string(command.floatValue));
         break;
     }
+    case RuntimeCommandType::ShowcaseUiEvent:
+    {
+        const std::shared_ptr<World>& activeWorld =
+            worldManager.GetActiveWorld();
+        if (!activeWorld || scripts == nullptr || !scripts->HostingEnabled())
+        {
+            diagnostics.ReportWarning(
+                "Showcase UI event ignored: no active World or C# hosting is disabled.");
+            break;
+        }
+        if (!scripts->InvokeUiEvent(
+                *activeWorld, command.stringValue, command.secondaryStringValue))
+        {
+            diagnostics.ReportWarning(
+                "Showcase UI event could not be delivered to C#: " +
+                command.stringValue);
+        }
+        break;
+    }
     case RuntimeCommandType::SetActorVisible:
     {
         const std::shared_ptr<World>& activeWorld =
@@ -1164,27 +1183,32 @@ void RuntimeCommandExecutor::ExecuteCommand(
     {
         const auto& activeWorld = worldManager.GetActiveWorld();
         std::string error;
+        // Console 来源（aprop）没有 generation；0 表示"应用到当前 World"。
+        // 编辑器面板始终带真实代数，因此这里不会放宽过期事件的校验。
+        EditorActorPropertyEdit edit = command.actorProperty;
+        if (activeWorld && edit.worldGeneration == 0)
+            edit.worldGeneration = activeWorld->GetGeneration();
         if (!activeWorld)
             error = "No active World.";
-        else if (command.actorProperty.preview)
+        else if (edit.preview)
         {
             // 拖动预览只改 live World，不要求文档可编辑、不写草稿/历史；
             // 释放时同一 Transform 以 preview=false 再进来一次，才产生单笔 Undo。
-            if (!ApplyEditorActorProperty(*activeWorld, command.actorProperty, error))
+            if (!ApplyEditorActorProperty(*activeWorld, edit, error))
                 diagnostics.ReportWarning("Actor preview rejected: " + error);
             break;
         }
         else if (editorHost && !editorHost->PrepareActorEdit(
-            activeWorld->GetScenePath(), command.actorProperty.identity, error))
+            activeWorld->GetScenePath(), edit.identity, error))
         {
             // 文档身份必须先验证，避免 World 接受了修改却没有可保存的作者目标。
         }
-        else if (ApplyEditorActorProperty(*activeWorld, command.actorProperty, error))
+        else if (ApplyEditorActorProperty(*activeWorld, edit, error))
         {
-            if (command.actorProperty.property == EditorActorProperty::CastShadows)
+            if (edit.property == EditorActorProperty::CastShadows)
                 renderSystem.SetCsmSettings(activeWorld->GetCsmSettings());
             if (editorHost)
-                editorHost->RecordActorEdit(*activeWorld, command.actorProperty);
+                editorHost->RecordActorEdit(*activeWorld, edit);
             break;
         }
         diagnostics.ReportWarning("Actor edit rejected: " + error);

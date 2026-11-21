@@ -163,6 +163,27 @@ public static partial class NativeBridge
                 DrainCommands(context);
                 ResetSpringArmCameras(context);
                 return Export(context, DeltaRequested(request));
+            case "ui_event":
+            {
+                // RmlUi → 原生命令 → 这里：广播给当前上下文里已启动的蓝图。
+                // 事件本身不产生渲染状态，蓝图通过 Showcase 服务记录意图，
+                // 下一次 Export 以 showcaseCommands 交给原生控制器。
+                if (!context.Playing) return null;
+                var uiEventName = request.TryGetProperty("name", out var uiName)
+                    ? uiName.GetString() ?? "" : "";
+                var uiEventValue = request.TryGetProperty("value", out var uiValue)
+                    ? uiValue.GetString() ?? "" : "";
+                if (uiEventName.Length == 0) return null;
+                foreach (var instance in context.Instances)
+                {
+                    if (!instance.Started) continue;
+                    instance.Blueprint.DispatchUiEvent(uiEventName, uiEventValue);
+                    if (instance.Blueprint.PendingShowcaseMaterialId != null ||
+                        instance.Blueprint.PendingShowcasePanelOpen != null)
+                        instance.Dirty = true;
+                }
+                return null;
+            }
             case "tick":
                 if (!context.Playing) throw new InvalidOperationException("Context is not playing.");
                 float dt = BeginFrameTime(context, request);

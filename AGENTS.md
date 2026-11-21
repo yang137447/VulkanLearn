@@ -108,6 +108,13 @@ Current implemented areas include:
   DecalResponse channel masks, sampled albedo/normal/ORM textures with procedural FBM
   fallback and GPU-side per-decal material descriptors (`albedoMap`/`normalMap`/`ormMap`,
   no Material Graph); current scope and limits: `documents/contracts/decal-runtime.md`
+- Forward-only Ashikhmin 2000 cloth: `Cloth` ID 8 renders Satin / Velvet / Slanted Velvet
+  through `forwardOpaque` or `forwardTransparent`; analytic `p(h)` plus a runtime
+  `g/R0/R1` LUT texture atlas, no GBuffer/deferred path. Materials:
+  `M_clothAshikhmin{Satin,Velvet,SlantedVelvet}.json`; current limits:
+  `documents/contracts/cloth-ashikhmin-runtime.md`. The three materials consume optional
+  albedo/normal/ORM/emission/alpha maps through `mf_pbrInputs`; 3d66 garment intake and
+  naming live in `tool/cloth-intake/`.
 - Shader BLAKE3-256 incremental build cache and transitive include invalidation
 - Shader hot reload: manual/FileMonitor triggers, compile worker, ABI-compatible Material/Compute/UI replacement, M_*.json schema rebuild, GPU-epoch retirement
 - Tracy and NVTX profiling markers
@@ -115,7 +122,9 @@ Current implemented areas include:
 Shading model state (2026-09-12): the per-model implementations were deleted on purpose — ClearCoat, Cloth,
 Eye, Hair, Subsurface ×3, ThinTranslucent and TwoSidedFoliage — together with their case assets. Each model is
 rebuilt **from its paper**, one at a time, following `documents/plan/rendering/shading-model-alignment-plan.md`
-§0.6. The interface surface is deliberately kept because it stays UE-aligned and is currently unconsumed:
+§0.6. `Cloth` (8) has since been rebuilt as a **forward-only** Ashikhmin 2000 closure family
+(Satin / Velvet / Slanted Velvet); it deliberately does not enter deferred or claim GBuffer channels.
+The remaining interface surface is deliberately kept because it stays UE-aligned and is currently unconsumed:
 `engine/materialInputs.glsl` model structs, `engine/materialSurface.glsl` fields, `engine/gbufferCodec.glsl`
 layout, the `ShadingModelID` table, debug-view data plumbing and the renderMode/output macros. Paper models
 are reproduced through VL offline first. Runtime promotion is a separate decision: only core models receive

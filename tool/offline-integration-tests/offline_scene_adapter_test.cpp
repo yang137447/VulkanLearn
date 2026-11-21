@@ -3,6 +3,7 @@
 #include <cstring>
 #include <limits>
 #include "core/groomPfm.h"
+#include "core/renderSession.h"
 #include "render/offline/offlineColorImage.h"
 #include "render/offline/offlineSceneAdapter.h"
 
@@ -86,6 +87,61 @@ TEST(OfflineSceneAdapter, FreezesImportedSectionAndEffectiveLambert)
     EXPECT_DOUBLE_EQ(input.cameraClipNear, snapshot.camera.clipNear);
     EXPECT_DOUBLE_EQ(input.cameraClipFar, snapshot.camera.clipFar);
     EXPECT_EQ(input.scene.seed, 3u);
+}
+
+TEST(OfflineSceneAdapter, SpotFreezesPhysicalUnitsAndRejectsMixedActiveLights)
+{
+    const auto assets = MakeAssets();
+    auto snapshot = MakeSnapshot();
+    VL::LightSnapshot spot;
+    spot.type = VL::LightSnapshotType::Spot;
+    spot.position = Eigen::Vector3f(0, 100, 0);
+    spot.direction = Eigen::Vector3f(0, -1, 0);
+    spot.intensity = 850000;
+    spot.radius = 8000;
+    spot.coneAngleInner = 0.5f;
+    spot.coneAngleOuter = 0.6f;
+    snapshot.lights.push_back(spot);
+    auto result = VL::BuildOfflineRenderInput(snapshot, assets, Settings());
+    ASSERT_TRUE(result.IsSuccess()) << result.Error().message;
+    EXPECT_TRUE(result.Value().scene.spotLight);
+    EXPECT_DOUBLE_EQ(result.Value().scene.spotCandela, 850000);
+    EXPECT_DOUBLE_EQ(result.Value().scene.spotRadius, 8000);
+    snapshot.lights.push_back(spot);
+    EXPECT_TRUE(VL::BuildOfflineRenderInput(snapshot, assets, Settings()).IsFailure());
+    snapshot.lights.back().intensity = 0;
+    EXPECT_TRUE(VL::BuildOfflineRenderInput(snapshot, assets, Settings()).IsSuccess());
+    snapshot.lights.front().coneAngleOuter = 0;
+    EXPECT_TRUE(VL::BuildOfflineRenderInput(snapshot, assets, Settings()).IsFailure());
+}
+
+TEST(OfflineSceneAdapter, ImportedFiberFrameRequiresExplicitOptInAndValidTangents)
+{
+    auto assets = MakeAssets();
+    auto imported = std::const_pointer_cast<MeshAssetImportResult>(
+        assets.meshImports.begin()->second);
+    for (auto& vertex : imported->modelResource.sections.front().vertices)
+    {
+        vertex.texCoord = Eigen::Vector2f::Zero();
+        vertex.tangent = Eigen::Vector4f(1, 0, 0, 1);
+    }
+    auto& material = assets.effectiveMaterialInstances.begin()->second;
+    material["offlineModel"] = "AshikhminSatin";
+    material["parameters"] = {
+        {"u_sigmaFlat", 0.1}, {"u_sigmaEnds", 0.3}, {"u_flatWeight", 0.7},
+        {"u_f0", 0.05}, {"u_baseColor", {0.2, 0.3, 0.4}},
+        {"u_fiberRotationDegrees", 0.0}};
+    EXPECT_TRUE(VL::PreflightOfflineRenderInput(MakeSnapshot(), assets, Settings()).IsFailure());
+    material["parameters"]["u_useImportedTangents"] = 1.0;
+    EXPECT_TRUE(VL::PreflightOfflineRenderInput(MakeSnapshot(), assets, Settings()).IsSuccess());
+    auto prepared = VL::BuildOfflineRenderInput(MakeSnapshot(), assets, Settings());
+    ASSERT_TRUE(prepared.IsSuccess()) << prepared.Error().message;
+    EXPECT_TRUE(prepared.Value().scene.instances.front().useImportedTangents);
+    VL::Offline::RenderSession session;
+    EXPECT_NO_THROW(session.Start(std::move(prepared.Value())));
+    session.Stop();
+    imported->modelResource.sections.front().vertices.front().tangent.setZero();
+    EXPECT_TRUE(VL::PreflightOfflineRenderInput(MakeSnapshot(), assets, Settings()).IsFailure());
 }
 
 TEST(OfflineSceneAdapter, CarriesFrozenCameraClipThroughPreflight)

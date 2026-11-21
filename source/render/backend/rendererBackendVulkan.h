@@ -125,6 +125,8 @@ public:
     vk::Extent2D GetSwapchainExtent() const;
     vk::Format GetSwapchainImageFormat() const;
     const std::vector<vk::ImageView>& GetSwapchainImageViews() const;
+    // 磨砂 UI 背板需要在 UI pass 之前把已合成的画面拷到离屏图像。
+    const std::vector<vk::Image>& GetSwapchainImages() const;
     bool RecordSwapchainScreenshot(
         const RendererFrameContext& frameContext,
         const std::string& path,

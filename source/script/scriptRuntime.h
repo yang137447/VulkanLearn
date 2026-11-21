@@ -100,6 +100,10 @@ public:
     void ValidateBlueprint(const nlohmann::json& blueprint);
     void SetFeedback(std::string message) { feedback = std::move(message); }
     void SetResourceRoot(std::string root) { resourceRoot = std::move(root); }
+    // 展示关卡 UI → C#：把命名事件投给当前 World 的蓝图实例。
+    // 没有活动上下文或宿主未启用时返回 false，调用方据此回退到原生处理。
+    bool InvokeUiEvent(World& world, const std::string& name, const std::string& value);
+    bool HostingEnabled() const { return hostingEnabled; }
     bool PollBlueprintAssetChanges(const World& world, float dt);
     bool ReloadAssembly(World& world, std::string& error, const std::string& candidateAssembly = {});
     nlohmann::json TakeAssetRequests(World& world);
@@ -149,5 +153,6 @@ private:
     std::shared_ptr<ScriptPhysicsWorld> physics;
     std::string resourceRoot, observedAssets, pendingAssets;
     float assetPollTime = 0;
+    bool hostingEnabled = false;
 };
 } // namespace VL

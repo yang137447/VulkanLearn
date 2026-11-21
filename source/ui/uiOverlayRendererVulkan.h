@@ -118,6 +118,16 @@ private:
     void FlushRetiredTextures();
     vk::DescriptorSet ResolveTextureDescriptor(UiTextureId textureId, uint32_t imageIndex) const;
     void EnsureWhiteTexture();
+    // 磨砂背板：每 swapchain image 一张半分辨率拷贝 + 独立 glass pipeline。
+    void CreateGlassResources();
+    void DestroyGlassResources();
+    void CaptureGlassBackdrop(
+        vk::CommandBuffer commandBuffer,
+        uint32_t swapchainImageIndex);
+    void DrawGlass(
+        vk::CommandBuffer commandBuffer,
+        uint32_t swapchainImageIndex,
+        const UiRenderSnapshot& snapshot);
 
     RendererBackendVulkan* backend = nullptr;
     std::string vertexShaderPath;
@@ -131,6 +141,20 @@ private:
     std::vector<FrameBuffers> frameBuffers;
     std::vector<vk::DescriptorSet> sceneViewportDescriptors;
     std::vector<vk::DescriptorSet> sceneDepthDescriptors;
+    struct GlassTarget
+    {
+        vk::Image image;
+        vk::DeviceMemory memory;
+        vk::ImageView imageView;
+        vk::DescriptorSet descriptorSet;
+    };
+    std::vector<GlassTarget> glassTargets;
+    vk::Sampler glassSampler;
+    vk::DescriptorSetLayout glassDescriptorSetLayout;
+    vk::PipelineLayout glassPipelineLayout;
+    vk::Pipeline glassPipeline;
+    vk::PipelineCache glassPipelineCache;
+    GraphicsShaderVariantArtifact glassShaderArtifact;
     vk::PipelineCache straightAlphaPipelineCache;
     vk::Pipeline straightAlphaPipeline;
     vk::PipelineCache premultipliedAlphaPipelineCache;

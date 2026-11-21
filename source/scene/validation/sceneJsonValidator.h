@@ -90,6 +90,129 @@ inline void ValidateDestructibleProfileKey(
             "Destructible profile material does not match object type");
 }
 
+// 关卡级展示配置：只有声明了 showcase 的关卡才启用展示 UI。
+// 这里只校验结构与引用，不解析 UI 资源、不创建 World。
+inline void ValidateShowcaseBlock(const nlohmann::json& scene)
+{
+    if (!scene.contains("showcase")) return;
+    const auto& block = scene.at("showcase");
+    if (!block.is_object())
+        throw std::invalid_argument("Scene showcase must be an object");
+    for (auto it = block.begin(); it != block.end(); ++it)
+    {
+        const std::string& field = it.key();
+        if (field != "kind" && field != "defaultMaterial" &&
+            field != "rotatePivot" && field != "rotateObject" &&
+            field != "cameraObject" && field != "materials")
+        {
+            throw std::invalid_argument(
+                "Scene showcase has unknown field: " + field);
+        }
+    }
+    if (block.value("kind", std::string()) != "cloth")
+        throw std::invalid_argument("Scene showcase kind must be cloth");
+    if (!block.contains("materials") || !block.at("materials").is_array() ||
+        block.at("materials").empty() || block.at("materials").size() > 8)
+    {
+        throw std::invalid_argument("Scene showcase requires 1..8 materials");
+    }
+
+    std::set<std::string> meshNames;
+    std::set<std::string> cameraNames;
+    for (const auto& object : scene.at("objects"))
+    {
+        if (!object.is_object()) continue;
+        const std::string type = object.value("type", std::string());
+        const std::string name = object.value("name", std::string());
+        if (type == "mesh") meshNames.insert(name);
+        if (type == "camera") cameraNames.insert(name);
+    }
+
+    std::set<std::string> ids;
+    for (const auto& material : block.at("materials"))
+    {
+        if (!material.is_object())
+            throw std::invalid_argument("Scene showcase material must be an object");
+        for (auto it = material.begin(); it != material.end(); ++it)
+        {
+            const std::string& field = it.key();
+            if (field != "id" && field != "label" && field != "tag" &&
+                field != "object" && field != "sheenHex")
+            {
+                throw std::invalid_argument(
+                    "Scene showcase material has unknown field: " + field);
+            }
+        }
+        const std::string id = material.value("id", std::string());
+        if (id.empty())
+            throw std::invalid_argument("Scene showcase material requires id");
+        for (const char character : id)
+        {
+            const bool allowed =
+                (character >= 'a' && character <= 'z') ||
+                (character >= 'A' && character <= 'Z') ||
+                (character >= '0' && character <= '9') ||
+                character == '_' || character == '-';
+            if (!allowed)
+                throw std::invalid_argument(
+                    "Scene showcase material id must match [A-Za-z0-9_-]+: " + id);
+        }
+        if (!ids.insert(id).second)
+            throw std::invalid_argument(
+                "Scene showcase material id is duplicated: " + id);
+        if (material.value("label", std::string()).empty())
+            throw std::invalid_argument(
+                "Scene showcase material requires label: " + id);
+        const std::string objectName = material.value("object", std::string());
+        if (objectName.empty() || meshNames.count(objectName) == 0)
+            throw std::invalid_argument(
+                "Scene showcase material references unknown mesh: " + objectName);
+        for (const char* field : {"tag", "sheenHex"})
+        {
+            if (material.contains(field) &&
+                !material.at(field).is_string())
+                throw std::invalid_argument(
+                    std::string("Scene showcase material field must be a string: ") + field);
+        }
+    }
+    if (block.contains("defaultMaterial"))
+    {
+        const auto& value = block.at("defaultMaterial");
+        if (!value.is_string() ||
+            ids.count(value.get<std::string>()) == 0)
+            throw std::invalid_argument(
+                "Scene showcase defaultMaterial must reference a material id");
+    }
+    if (block.contains("rotatePivot"))
+    {
+        const auto& pivot = block.at("rotatePivot");
+        if (!pivot.is_array() || pivot.size() != 3)
+            throw std::invalid_argument("Scene showcase rotatePivot requires vec3");
+        for (const auto& component : pivot)
+        {
+            if (!component.is_number() ||
+                !std::isfinite(component.get<double>()))
+                throw std::invalid_argument("Scene showcase rotatePivot must be finite");
+        }
+    }
+    if (block.contains("rotateObject"))
+    {
+        const std::string objectName =
+            block.value("rotateObject", std::string());
+        if (objectName.empty() || meshNames.count(objectName) == 0)
+            throw std::invalid_argument(
+                "Scene showcase rotateObject references unknown mesh: " + objectName);
+    }
+    if (block.contains("cameraObject"))
+    {
+        const std::string cameraName =
+            block.value("cameraObject", std::string());
+        if (cameraName.empty() || cameraNames.count(cameraName) == 0)
+            throw std::invalid_argument(
+                "Scene showcase cameraObject references unknown camera: " + cameraName);
+    }
+}
+
 // loader 与资产草稿共用的作者数据校验；不读模型、不创建 World 或 GPU 资源。
 inline void ValidateSceneAssetJson(const nlohmann::json& scene)
 {
@@ -478,6 +601,7 @@ inline void ValidateSceneAssetJson(const nlohmann::json& scene)
                 throw std::invalid_argument("Camera look_at must differ from position");
         }
     }
+    ValidateShowcaseBlock(scene);
     if (!hasCamera) throw std::invalid_argument("Scene has no camera");
 }
 } // namespace VL

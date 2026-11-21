@@ -28,6 +28,7 @@
 #include "scene/placementBinding.h"
 #include "world/worldSnapshot.h"
 #include "world/worldWind.h"
+#include "world/worldShowcase.h"
 #include "world/projectileSettings.h"
 #include "animation/motionDebug.h"
 #include "animation/motionHistory.h"
@@ -366,6 +367,21 @@ public:
     void SetEnvironment(WorldEnvironment environment);
     const WorldEnvironment& GetEnvironment() const { return environment; }
 
+    // 关卡级展示配置；没有 showcase 块的场景保持 enabled=false。
+    void SetShowcase(WorldShowcase showcase) { this->showcase = std::move(showcase); }
+    const WorldShowcase& GetShowcase() const { return showcase; }
+    // C# 蓝图 → 展示控制器：脚本同步时写入，GT 帧内消费一次。
+    void RequestShowcaseState(ShowcaseStateRequest request)
+    {
+        pendingShowcaseRequest = request;
+    }
+    std::optional<ShowcaseStateRequest> ConsumeShowcaseStateRequest()
+    {
+        std::optional<ShowcaseStateRequest> result = pendingShowcaseRequest;
+        pendingShowcaseRequest.reset();
+        return result;
+    }
+
     // 场景全局风；与 environment 同属一次 World 构建，随 World 的发布/替换整体切换。
     void SetWind(WorldWind wind);
     const WorldWind& GetWind() const { return wind; }
@@ -651,6 +667,8 @@ private:
     std::shared_ptr<Camera> scriptCamera;
     bool editorViewEnabled = false;
     WorldEnvironment environment;
+    WorldShowcase showcase;
+    std::optional<ShowcaseStateRequest> pendingShowcaseRequest;
     WorldWind wind;
     TressfxGroupPreviewState tressfxGroupPreview;
     CsmSettings csmSettings;

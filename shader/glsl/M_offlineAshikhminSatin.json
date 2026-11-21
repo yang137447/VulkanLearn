@@ -7,6 +7,11 @@
   "renderStates": {"renderMode": "Opaque", "cullMode": "None"},
   "macros": {},
   "parameters": {
+    "u_useImportedTangents": {
+      "type": "float", "default": 0.0,
+      "description": "显式选用导入顶点切线作为纤维轴；0 使用 UV 导数，1 使用导入切线",
+      "range": {"min": 0, "max": 1}
+    },
     "u_sigmaFlat": {
       "type": "float", "default": 0.1,
       "description": "Ashikhmin 2000 Sec. 6.3 flat fiber normal width sigma_x; sigma_y is infinite",
@@ -43,5 +48,8 @@
       }
     }
   },
-  "textures": {}
+  "textures": {
+    "baseColorMap": {"type": "sampler2D", "default": null},
+    "normalMap": {"type": "sampler2D", "default": null}
+  }
 }

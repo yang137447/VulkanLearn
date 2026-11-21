@@ -1,6 +1,7 @@
 #include <algorithm>
 #include <chrono>
 #include <thread>
+#include <fstream>
 
 #include <gtest/gtest.h>
 
@@ -10,6 +11,40 @@
 namespace
 {
 using namespace VL;
+
+TEST(OfflineRenderCoordinator, ExportUsesAcesAndPreservesLinearFilm)
+{
+    const auto output = std::filesystem::temp_directory_path() /
+        ("vl-aces-export-" + std::to_string(
+            std::chrono::steady_clock::now().time_since_epoch().count()));
+    auto film = std::make_shared<Offline::FilmSnapshot>();
+    film->width = 1;
+    film->height = 1;
+    film->completedSamples = film->targetSamples = 1;
+    film->direct = {{0.18, 1.0, 4.0}};
+    film->indirect = {{0, 0, 0}};
+    OfflinePublishedResult result;
+    result.film = film;
+    result.manifest = nlohmann::json::object();
+    ExportOfflineResult(result, output, 1.0f);
+    std::ifstream manifestFile(output / "manifest.json");
+    const auto manifest = nlohmann::json::parse(manifestFile);
+    EXPECT_EQ(manifest["display"]["mapping"], "ACES fitted + sRGB");
+    EXPECT_EQ(manifest["display"]["exposure"], 1.0);
+    std::ifstream preview(output / "combined.ppm", std::ios::binary);
+    std::string line;
+    for (int index = 0; index < 3; ++index) std::getline(preview, line);
+    unsigned char rgb[3]{};
+    preview.read(reinterpret_cast<char*>(rgb), 3);
+    EXPECT_NEAR(rgb[0], 141, 1);
+    EXPECT_NEAR(rgb[1], 231, 1);
+    EXPECT_NEAR(rgb[2], 252, 1);
+    EXPECT_DOUBLE_EQ(film->direct.front().x, 0.18);
+    EXPECT_DOUBLE_EQ(film->direct.front().z, 4.0);
+    preview.close();
+    manifestFile.close();
+    std::filesystem::remove_all(output);
+}
 
 struct Input
 {

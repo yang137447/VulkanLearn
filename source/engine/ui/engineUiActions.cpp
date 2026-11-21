@@ -14,6 +14,7 @@
 #include "engine/runtimeCommandExecutor.h"
 #include "engine/script/engineScriptBuild.h"
 #include "engine/subsystemCollection.h"
+#include "showcase/showcaseController.h"
 #include "engine/window/engineWindowLifecycle.h"
 #include "input/mouseMotionBatch.h"
 #include "platform/platformApplication.h"
@@ -571,6 +572,14 @@ void PumpEnginePlatformEvents(
         }
 
         if (uiSubsystem != nullptr && uiSubsystem->HandlePlatformEvent(event))
+        {
+            continue;
+        }
+
+        // UI 没消费的指针事件才给展示控制器：点在胶囊条/面板上的拖拽不转模特。
+        // 控制器自己按 active 状态门控（编辑器非 Play 时不会拦截拖动）。
+        if (context.showcase != nullptr &&
+            context.showcase->HandlePlatformEvent(event))
         {
             continue;
         }

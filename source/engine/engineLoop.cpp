@@ -29,6 +29,7 @@
 #include "engine/projectileRuntime.h"
 #include "physics/runtime/fractureImpactWorld.h"
 #include "engine/subsystemCollection.h"
+#include "showcase/showcaseController.h"
 #include "world/particleRuntimeBridge.h"
 #include "engine/testing/runtimeValidationServices.h"
 #include "engine/editorHost.h"
@@ -603,6 +604,12 @@ RuntimeResult<void> EngineLoop::InitializeRuntimeSystems(
         RenderSystem::GetInstance().SetUiOverlayShaderPaths(
             GetRuntimeConfig().ResolvePath("uiOverlay_vert.spv"),
             GetRuntimeConfig().ResolvePath("uiOverlay_frag.spv"));
+
+        // 展示控制器只依赖 UiSubsystem 的视图接口；关卡数据在 World 提交后注入。
+        showcaseController = std::make_unique<ShowcaseController>();
+        showcaseController->AttachUi(*uiSubsystem);
+        uiSubsystem->SetShowcaseScriptRouting(
+            GetSubsystems().GetScriptRuntime().HostingEnabled());
     }
     worldCandidatePreparer = std::make_unique<WorldCandidatePreparer>(
         GetSubsystems().GetWorldManager(),
@@ -720,6 +727,7 @@ void EngineLoop::Tick()
         [this](World& world) { PollParticleRuntimeBridge(world); };
 
     context.uiActions = MakeUiActionContext();
+    context.uiActions.showcase = showcaseController.get();
     context.scriptBuild = MakeScriptBuildContext();
     context.windowLifecycle = MakeWindowLifecycleContext();
 
@@ -947,6 +955,33 @@ void EngineLoop::UpdateUiViewModel(
     const WorldHandle& activeWorld = worldManager.GetActiveWorldHandle();
     const ScriptRuntimeSubsystem& scriptRuntime = GetSubsystems().GetScriptRuntime();
 
+    // World 换代（含首个关卡）时重新绑定展示控制器；非展示关卡自动关闭 UI。
+    if (showcaseController != nullptr &&
+        (lastUiViewModelWorldGeneration != activeWorld.generation ||
+         lastUiViewModelWorldPath != activeWorld.scenePath))
+    {
+        const std::shared_ptr<World>& world = worldManager.GetActiveWorld();
+        showcaseController->OnWorldChanged(world);
+        // 游戏档的展示关卡打开即呈现：自动进 Play，让 C# 决策层和展示 UI 都活着。
+        // 编辑器档不自动 Play——作者要在 Details/Outliner 里实时改场景，
+        // 展示控制器此时保持非活动态，不写可见性/TRS/相机。
+        const bool editorFlavor =
+            editorHost != nullptr && editorHost->IsEditorFlavor();
+        if (!editorFlavor && world != nullptr &&
+            world->GetShowcase().enabled &&
+            GetSubsystems().GetScriptRuntime().HostingEnabled() &&
+            !GetSubsystems().GetScriptRuntime().IsPlaying())
+        {
+            std::string playError;
+            if (!GetSubsystems().GetScriptRuntime().Control(
+                    *world, ScriptPlayState::Playing, playError))
+            {
+                GetSubsystems().GetDiagnosticsSubsystem().ReportWarning(
+                    "Showcase level could not enter Play: " + playError);
+            }
+        }
+    }
+
     // 可见性决定构建档位：编辑器隐藏时绝不构建编辑器分节，沉浸模式只保留 DrawDebug。
     const UiViewModelBuildMode buildMode = DecideUiViewModelBuildMode(
         true,
@@ -999,6 +1034,29 @@ void EngineLoop::UpdateUiViewModel(
         uiViewModelSectionFirstRefresh = false;
     }
     uiSubsystem->Update(sections, frame, buildMode, editorSnapshotDue);
+    if (showcaseController != nullptr)
+    {
+        if (const auto& world = GetSubsystems().GetWorldManager().GetActiveWorld())
+        {
+            if (const auto request = world->ConsumeShowcaseStateRequest())
+            {
+                showcaseController->ApplyExternalState(*request);
+                GetSubsystems().GetDiagnosticsSubsystem().ReportInfo(
+                    "Showcase state applied from C#: material='" +
+                    request->materialId + "' panel=" +
+                    (request->panelOpen ? "open" : "closed"));
+            }
+        }
+        // 展示只在"游戏档"或"编辑器 Play 中"呈现；编辑态恢复 World 提交时的
+        // 可见性/TRS/相机，并隐藏展示 UI。UI 事件也只在 Play 中交给 C#。
+        const bool editorFlavor =
+            editorHost != nullptr && editorHost->IsEditorFlavor();
+        const bool playing = GetSubsystems().GetScriptRuntime().IsPlaying();
+        showcaseController->SetActive(!editorFlavor || playing);
+        showcaseController->Update();
+        uiSubsystem->SetShowcaseScriptRouting(
+            GetSubsystems().GetScriptRuntime().HostingEnabled() && playing);
+    }
     uiViewModelBuildMode = buildMode;
     lastUiViewModelWorldGeneration = activeWorld.generation;
     lastUiViewModelWorldPath = activeWorld.scenePath;

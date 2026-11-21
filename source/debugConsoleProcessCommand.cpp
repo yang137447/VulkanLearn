@@ -269,6 +269,69 @@ void DebugConsole::ProcessCommand(const std::string& line)
     // actor placement。Console 线程不持有 World，因此这里只解析意图；身份存在性、
     // 有限值和实际写入都由 GT 的 RuntimeCommandExecutor 校验。
     // 参数在切出子串后重新解析，避免 istream 在"旋转只给 1..2 个分量"时留下半消费状态。
+    // aprop <identity> <field> <values...>：与编辑器 Details 面板同一条
+    // SetActorProperty 路径（ApplyEditorActorProperty），用于不开 UI 的实时调光。
+    // 向量字段一次给 3 个值，内部按 component 拆成 3 条 preview 命令；GT 每次
+    // 从当前对象读其余分量，因此不会互相覆盖。
+    if (command == "aprop")
+    {
+        const char* usage =
+            "Usage: aprop <identity> <field> <values...>\n"
+            "  identity: spotLight|Name / directionalLight|Name / pointLight|Name\n"
+            "  field: intensity | outerCone | innerCone | castShadows |\n"
+            "         position x y z | rotation x y z | color r g b\n"
+            "  example: aprop spotLight|SunPatch intensity 140000";
+        std::string identity;
+        std::string field;
+        if (!(commandStream >> identity >> field))
+        {
+            std::cout << usage << std::endl;
+            return;
+        }
+
+        using P = VL::EditorActorProperty;
+        P property = P::Intensity;
+        int components = 1;
+        if (field == "intensity") property = P::Intensity;
+        else if (field == "outerCone") property = P::OuterCone;
+        else if (field == "innerCone") property = P::InnerCone;
+        else if (field == "castShadows") property = P::CastShadows;
+        else if (field == "position") { property = P::Position; components = 3; }
+        else if (field == "rotation") { property = P::Rotation; components = 3; }
+        else if (field == "color") { property = P::Color; components = 3; }
+        else
+        {
+            std::cout << "Unknown field: " << field << "\n" << usage << std::endl;
+            return;
+        }
+
+        float values[3] = {0.0f, 0.0f, 0.0f};
+        for (int index = 0; index < components; ++index)
+        {
+            if (!(commandStream >> values[index]))
+            {
+                std::cout << usage << std::endl;
+                return;
+            }
+        }
+
+        for (int component = 0; component < components; ++component)
+        {
+            VL::RuntimeCommand runtimeCommand;
+            runtimeCommand.type = VL::RuntimeCommandType::SetActorProperty;
+            runtimeCommand.sourceText = line;
+            runtimeCommand.actorProperty.identity = identity;
+            runtimeCommand.actorProperty.property = property;
+            runtimeCommand.actorProperty.component =
+                static_cast<uint32_t>(component);
+            runtimeCommand.actorProperty.value = values[component];
+            runtimeCommand.actorProperty.preview = true;
+            commandBus.Queue(std::move(runtimeCommand));
+        }
+        std::cout << "aprop queued: " << identity << " " << field << std::endl;
+        return;
+    }
+
     if (command == "mesh")
     {
         const char* meshUsage =
@@ -661,6 +724,41 @@ void DebugConsole::ProcessCommand(const std::string& line)
         runtimeCommand.type = VL::RuntimeCommandType::FireProjectile;
         runtimeCommand.sourceText = line;
         commandBus.Queue(std::move(runtimeCommand));
+        return;
+    }
+
+    if (command == "showcase")
+    {
+        // 展示关卡的诊断入口：和 UI 点击走同一条 RuntimeCommand → C# → 控制器路径。
+        std::string action;
+        std::string value;
+        commandStream >> action;
+        if (action == "select")
+        {
+            commandStream >> value;
+            if (value.empty())
+            {
+                std::cout << "Usage: showcase select <material-id>" << std::endl;
+                return;
+            }
+            VL::RuntimeCommand runtimeCommand;
+            runtimeCommand.type = VL::RuntimeCommandType::ShowcaseUiEvent;
+            runtimeCommand.stringValue = "selectMaterial";
+            runtimeCommand.secondaryStringValue = value;
+            runtimeCommand.sourceText = line;
+            commandBus.Queue(std::move(runtimeCommand));
+            return;
+        }
+        if (action == "close")
+        {
+            VL::RuntimeCommand runtimeCommand;
+            runtimeCommand.type = VL::RuntimeCommandType::ShowcaseUiEvent;
+            runtimeCommand.stringValue = "closeShowcasePanel";
+            runtimeCommand.sourceText = line;
+            commandBus.Queue(std::move(runtimeCommand));
+            return;
+        }
+        std::cout << "Usage: showcase <select <material-id>|close>" << std::endl;
         return;
     }
 

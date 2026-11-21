@@ -154,7 +154,7 @@ Shading Model 消费 MaterialInputs，负责 UE 对齐的光照响应。Shading 
 | Subsurface / SubsurfaceProfile | **实现已删除** | 同上；SSS 屏幕空间 pass 与 LUT 生成器已一并删除。 |
 | Hair | **实现已删除** | 同上；Hair LUT 生成器、Card coverage 与 Debug View 21–41 的数据供给链路已删除，接口结构保留。 |
 | Eye | **实现已删除** | 同上；四个 Eye 母材质与 dual-shell pass 已删除。 |
-| Cloth | **实现已删除** | 同上；两张 directional-albedo LUT 与各向异性路径已删除。 |
+| Cloth | **已实现（forward-only）** | Ashikhmin 2000 的 Satin / Velvet / Slanted Velvet；LUT 纹理 + forwardOpaque/forwardTransparent，不进入 GBuffer/deferred。见 [cloth-ashikhmin-runtime](cloth-ashikhmin-runtime.md)。 |
 | TwoSidedFoliage | **实现已删除** | 同上；重建前先决定背光常量是否参数化。 |
 | Iridescence | 待定义 | 当前没有独立的 Shading Model ID 和 GBuffer 合同。 |
 

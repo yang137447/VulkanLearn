@@ -255,6 +255,8 @@ private:
     std::unique_ptr<Controller> controller;
     ModelPreviewCamera modelPreviewCamera;
     std::unique_ptr<UiSubsystem> uiSubsystem;
+    // 布料展示关卡控制器：World 提交后接管，非展示关卡保持 Active()==false。
+    std::unique_ptr<class ShowcaseController> showcaseController;
     uint64_t uiFrameIndex = 0;
     // 视图模型可见性/刷新节拍：隐藏时不构建编辑器分节；可见时按 10 Hz 重新采样
     // 时间/进度驱动的节，事件只强制自己声明的节（见 UiSectionMask）。

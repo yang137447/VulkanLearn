@@ -17,9 +17,10 @@ ID 与 flag 表来自 `shader/glsl/common/shadingModel.glsl` 与 `source/materia
 
 两个必须写明的状态差异：
 
-- **已实现（有 evaluator 消费）**：`Unlit`(0)、`DefaultLit`(1)。
+- **已实现（有 evaluator 消费）**：`Unlit`(0)、`DefaultLit`(1)；
+  `Cloth`(8) 另有 **forward-only** 的 Ashikhmin 2000 求值器，不消费 GBuffer。
 - **保留但无消费者**：`Subsurface`(2)、`PreintegratedSkin`(3)、`ClearCoat`(4)、`SubsurfaceProfile`(5)、
-  `TwoSidedFoliage`(6)、`Hair`(7)、`Cloth`(8)、`Eye`(9) 的编码/解码分支**全部还在**，
+  `TwoSidedFoliage`(6)、`Hair`(7)、`Eye`(9) 的编码/解码分支**全部还在**，
   但 2026-09-12 的旧实现清理删掉了它们的 evaluator（见 `plan/rendering/archive/README.md`）。
   这些分支是**有意留存的 UE 对齐接口面**：重建模型时按论文接回自己的求值器，
   **不要**把"分支还在"读成"模型已实现"。
@@ -101,7 +102,7 @@ high 4 bits = SelectiveOutputMask     (DecodeGBufferFlags,        gbufferCodec.g
 | 5 | `SubsurfaceProfile` | ✅ | 分支保留，无 evaluator |
 | 6 | `TwoSidedFoliage` | ✅ | 分支保留，无 evaluator |
 | 7 | `Hair` | ✅ | 分支保留，无 evaluator |
-| 8 | `Cloth` | ✅ | 分支保留，无 evaluator |
+| 8 | `Cloth` | ✅ | **forward-only Ashikhmin 2000 求值器**；不进入 deferred |
 | 9 | `Eye` | ✅ | 分支保留，无 evaluator |
 | 10 | `SingleLayerWater` | ❌ 槽位保留 | 未实现 |
 | 11 | `ThinTranslucent` | ✅ | 输出壳为编译期 `#error` |
@@ -147,7 +148,7 @@ high 4 bits = SelectiveOutputMask     (DecodeGBufferFlags,        gbufferCodec.g
 | 5 `SubsurfaceProfile` | normal, a=0 | metallic, 0.5, roughness | baseColor, AO | profileId, weight, thickness, transmissionWeight | `precomputedShadowFactors` | xy=velocity | tangent.xyz, a=anisotropy | emissive, opacity |
 | 6 `TwoSidedFoliage` | normal, a=0 | metallic, specular, roughness | baseColor, AO | subsurfaceColor.rgb（decode 需 `0x10` flag，否则回退 0） | `precomputedShadowFactors` | xy=velocity | tangent.xyz, a=anisotropy | emissive, opacity |
 | 7 `Hair` | normal, a=0 | hairScatter, specular, roughness | baseColor（decode 成 `sigma_a`） | oct(normal).xy, backlit.z | `precomputedShadowFactors` | xy=velocity | tangent.xyz, **tangent.w = handedness** | emissive, opacity |
-| 8 `Cloth` | normal, a=0 | metallic, 0.5, roughness（decode 强制 metallic=0） | baseColor, AO | sheenColor.rgb, sheenRoughness.a | `precomputedShadowFactors` | xy=velocity | tangent.xyz, **a(=.w) = 5+5 bit (anisotropy, cross)** | emissive, opacity |
+| 8 `Cloth` | —（forward-only） | — | — | — | — | — | — | — |
 | 9 `Eye` | cornea normal, a=0 | corneaIor, causticStrength, roughness | irisColor, AO | irisUv.xy, packed profile.z（**独占并版本化**）, irisMask.a | scleraColor.rgb, irisRadius.a | xy=velocity, **z=pupil/iris, w=limbus/iris** | irisNormal.xyz, irisDistance.a | emissive, opacity |
 
 补充事实：
@@ -209,7 +210,12 @@ Forward-only 模型不分配 GBuffer 附件，也不做 GBuffer `customData` 编
 6. **Forward 与 Deferred 两条 dispatch 同时补**，并给 debug view 分配区间；本项仅适用于核心 deferred 模型。
 7. **更新本文档与 `documents/README.md`**。
 
-## 7. 通道预算：Cloth 双闭包（2026-09-16 定案）
+## 7. 通道预算：Cloth 双闭包（历史定案）
+
+**2026-11-15 运行时更新**：`Cloth`(8) 当前是 forward-only Ashikhmin 2000
+（Satin / Velvet / Slanted Velvet），不编码 GBuffer，也不进入 deferred。下面的
+2026-09-16 双闭包通道预算是历史方案，不是当前 Cloth 的分配事实；当前运行时契约见
+[cloth-ashikhmin-runtime](cloth-ashikhmin-runtime.md)。
 
 **定案**：`Cloth` = **8**（A 臂：Estévez 完整模型 —— Charlie 分布 + 式(3) 的 G + 式(4) 软化 + §5 分层，**`F` 取 1**；**对照臂**）；
 `ClothFiber` = **13**（B 臂：Sadeghi et al. 2013 microcylinder，**生产臂**，VulkanLearn 本地扩展）。

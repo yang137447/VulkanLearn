@@ -513,6 +513,7 @@ RuntimeResult<std::shared_ptr<World>> WorldBuilder::BuildFromLoadedScene(
 
         world->SetEnvironment(environment);
         world->SetWind(wind);
+        world->SetShowcase(ReadSceneShowcase(worldBuildPlan.sceneJson));
         world->SetCsmSettings(std::move(csmSettings));
 
         for (const WindResponseProfile& profile : assemblyAssets.windResponseProfiles)

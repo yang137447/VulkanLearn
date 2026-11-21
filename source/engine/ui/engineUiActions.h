@@ -17,6 +17,7 @@ class ModelPreviewCamera;
 class PlatformApplication;
 class PlatformWindow;
 class ScriptBuildService;
+class ShowcaseController;
 class SubsystemCollection;
 class UiSubsystem;
 struct EngineScriptBuildContext;
@@ -29,6 +30,8 @@ struct EngineUiActionContext
     SubsystemCollection* subsystems = nullptr;
     IEditorHost* editorHost = nullptr;
     UiSubsystem* uiSubsystem = nullptr;
+    // 布料展示关卡控制器；非展示关卡为 nullptr 或 !Active()。
+    ShowcaseController* showcase = nullptr;
     Controller* controller = nullptr;
     ModelPreviewCamera* modelPreviewCamera = nullptr;
     ScriptBuildService* scriptBuild = nullptr;

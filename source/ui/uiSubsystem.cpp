@@ -254,6 +254,24 @@ bool UiSubsystem::HandlePlatformEvent(const PlatformEvent& event)
         editorUiShell->HandlePlatformEvent(event, consumed);
     }
 
+    // 展示关卡：运行时 HUD 平时是只读叠层，只有展示模式才把指针事件送进 RmlUi。
+    // 点击被 UI 消费时不再交给转模特逻辑；MouseMove 始终放行，
+    // 由 ShowcaseController 判断是否处于拖动中。
+    if (bindingData.showcaseVisible &&
+        (event.type == PlatformEventType::MouseMove ||
+         event.type == PlatformEventType::MouseButtonDown ||
+         event.type == PlatformEventType::MouseButtonUp ||
+         event.type == PlatformEventType::MouseWheel))
+    {
+        const bool propagates = ProcessRuntimeUiEvent(event);
+        UpdateInputOwnership();
+        if (event.type == PlatformEventType::MouseMove)
+        {
+            return false;
+        }
+        return !propagates;
+    }
+
     UpdateInputOwnership();
     return consumed;
 }
@@ -551,6 +569,52 @@ bool UiSubsystem::SyncGameplayTextBinding(const ScriptRuntimeView& scripts)
     return false;
 }
 
+void UiSubsystem::SetShowcaseModel(const ShowcaseViewModel& model)
+{
+    bool changed = false;
+    auto assign = [&changed](auto& target, const auto& value)
+    {
+        if (!(target == value))
+        {
+            target = value;
+            changed = true;
+        }
+    };
+    assign(bindingData.showcaseVisible, model.visible);
+    assign(bindingData.showcasePanelOpen, model.panelOpen);
+    assign(bindingData.showcaseMaterial, model.material);
+    assign(bindingData.showcaseMaterialName, model.name);
+    assign(bindingData.showcaseMaterialTag, model.tag);
+    assign(bindingData.showcaseBaseHex, model.baseHex);
+    assign(bindingData.showcaseSheenHex, model.sheenHex);
+    assign(bindingData.showcaseF0, model.f0);
+    assign(bindingData.showcaseSheenRoughness, model.roughness);
+    assign(bindingData.showcaseFiberRotation, model.rotation);
+    if (!changed)
+    {
+        return;
+    }
+    dataModelHandle.DirtyVariable("showcase_visible");
+    dataModelHandle.DirtyVariable("showcase_panel_open");
+    dataModelHandle.DirtyVariable("showcase_material");
+    dataModelHandle.DirtyVariable("showcase_material_name");
+    dataModelHandle.DirtyVariable("showcase_material_tag");
+    dataModelHandle.DirtyVariable("showcase_base_hex");
+    dataModelHandle.DirtyVariable("showcase_sheen_hex");
+    dataModelHandle.DirtyVariable("showcase_f0");
+    dataModelHandle.DirtyVariable("showcase_sheen_roughness");
+    dataModelHandle.DirtyVariable("showcase_fiber_rotation");
+    uiUpdateScheduler.MarkMutation(UiMutationKind::ForcedRefresh);
+}
+
+void UiSubsystem::SetShowcaseCallbacks(
+    std::function<void(int)> materialSelected,
+    std::function<void()> panelClosed)
+{
+    showcaseMaterialSelected = std::move(materialSelected);
+    showcasePanelClosed = std::move(panelClosed);
+}
+
 void UiSubsystem::PublishStatusSection(const UiViewModelFrameValues& frameValues)
 {
     UiStatusSection status;
@@ -772,6 +836,8 @@ bool UiSubsystem::RequestActorSelection(const std::string& actorIdentity)
 bool UiSubsystem::ShouldUseRelativeMouseModeForGame() const
 {
     if (!initialized) return false;
+    // 展示界面需要绝对光标才能点胶囊和面板；此时拖动转模特、滚轮推拉。
+    if (bindingData.showcaseVisible) return false;
     if (editorUiShell != nullptr && editorUiShell->IsAssetEditorVisible())
         return false;
     // 捕获由 Viewport 点击建立，不能再用绝对光标位置反向取消；

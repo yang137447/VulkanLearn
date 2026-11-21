@@ -101,12 +101,455 @@ ForwardLightingResult ShadeUnlitForwardSurface(in MaterialSurface surface)
     return result;
 }
 
+#if defined(VL_CLOTH_ASHIKHMIN)
+#include "../common/ashikhminCloth.glsl"
+
+vec3 EvaluateAshikhminClothDirectionalLight(
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 diffuseColor,
+    in vec3 specularTint,
+    in float f0,
+    in AshikhminClothFrame frame,
+    in Light directionalLight,
+    out vec3 outDiffuse,
+    out vec3 outSpecular)
+{
+    vec3 radiance =
+        directionalLight.colorIntensity.xyz *
+        directionalLight.colorIntensity.w;
+    return EvaluateAshikhminClothLight(
+        normal_WS,
+        normalize(cameraPos_WS - pixelPos_WS),
+        normalize(-directionalLight.directionPad.xyz),
+        radiance,
+        diffuseColor,
+        specularTint,
+        f0,
+        frame,
+        outDiffuse,
+        outSpecular);
+}
+
+vec3 EvaluateAshikhminClothPointLight(
+    in sampler2DArrayShadow localShadowMap,
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 diffuseColor,
+    in vec3 specularTint,
+    in float f0,
+    in AshikhminClothFrame frame,
+    in Light pointLight,
+    out vec3 outDiffuse,
+    out vec3 outSpecular)
+{
+    outDiffuse = vec3(0.0);
+    outSpecular = vec3(0.0);
+    vec3 lightOffset = pointLight.positionRadius.xyz - pixelPos_WS;
+    float distanceCm = length(lightOffset);
+    float attenuation =
+        EvaluateLocalLightRadiusWindow(
+            distanceCm,
+            pointLight.positionRadius.w) /
+        (distanceCm * distanceCm + 1.0);
+    if (attenuation <= 0.0)
+    {
+        return vec3(0.0);
+    }
+    vec3 radiance =
+        attenuation *
+        pointLight.colorIntensity.w *
+        pointLight.colorIntensity.xyz;
+    radiance *= SampleLocalLightShadow(
+        localShadowMap,
+        pointLight.shadowParams,
+        pointLight.positionRadius.xyz,
+        pointLight.directionPad.xyz,
+        pointLight.coneAngleOuterInnerPadPad.x,
+        pixelPos_WS,
+        normal_WS);
+    return EvaluateAshikhminClothLight(
+        normal_WS,
+        normalize(cameraPos_WS - pixelPos_WS),
+        normalize(lightOffset),
+        radiance,
+        diffuseColor,
+        specularTint,
+        f0,
+        frame,
+        outDiffuse,
+        outSpecular);
+}
+
+vec3 EvaluateAshikhminClothSpotLight(
+    in sampler2DArrayShadow localShadowMap,
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 diffuseColor,
+    in vec3 specularTint,
+    in float f0,
+    in AshikhminClothFrame frame,
+    in Light spotLight,
+    out vec3 outDiffuse,
+    out vec3 outSpecular)
+{
+    outDiffuse = vec3(0.0);
+    outSpecular = vec3(0.0);
+    vec3 lightOffset = spotLight.positionRadius.xyz - pixelPos_WS;
+    vec3 lightDirection = normalize(lightOffset);
+    float spotAngle = acos(dot(
+        lightDirection,
+        -spotLight.directionPad.xyz));
+    float angleIntensity = 1.0 - smoothstep(
+        spotLight.coneAngleOuterInnerPadPad.y,
+        spotLight.coneAngleOuterInnerPadPad.x,
+        spotAngle);
+    float distanceCm = length(lightOffset);
+    float attenuation =
+        EvaluateLocalLightRadiusWindow(
+            distanceCm,
+            spotLight.positionRadius.w) /
+        (distanceCm * distanceCm + 1.0);
+    float shadowedAttenuation = attenuation * angleIntensity;
+    if (shadowedAttenuation <= 0.0)
+    {
+        return vec3(0.0);
+    }
+    vec3 radiance =
+        shadowedAttenuation *
+        spotLight.colorIntensity.w *
+        spotLight.colorIntensity.xyz;
+    radiance *= SampleLocalLightShadow(
+        localShadowMap,
+        spotLight.shadowParams,
+        spotLight.positionRadius.xyz,
+        spotLight.directionPad.xyz,
+        spotLight.coneAngleOuterInnerPadPad.x,
+        pixelPos_WS,
+        normal_WS);
+    return EvaluateAshikhminClothLight(
+        normal_WS,
+        normalize(cameraPos_WS - pixelPos_WS),
+        lightDirection,
+        radiance,
+        diffuseColor,
+        specularTint,
+        f0,
+        frame,
+        outDiffuse,
+        outSpecular);
+}
+
+vec3 AccumulateAshikhminClothLightByIndex(
+    in int lightIndex,
+    in sampler2DArrayShadow localShadowMap,
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 diffuseColor,
+    in vec3 specularTint,
+    in float f0,
+    in AshikhminClothFrame frame,
+    out vec3 outDiffuse,
+    out vec3 outSpecular)
+{
+    outDiffuse = vec3(0.0);
+    outSpecular = vec3(0.0);
+    int lightCount =
+        uboLight.spotLightOffset + uboLight.spotLightCount;
+    if (lightIndex < 0 || lightIndex >= lightCount)
+    {
+        return vec3(0.0);
+    }
+    if (lightIndex < uboLight.pointLightOffset)
+    {
+        return EvaluateAshikhminClothDirectionalLight(
+            normal_WS,
+            pixelPos_WS,
+            cameraPos_WS,
+            diffuseColor,
+            specularTint,
+            f0,
+            frame,
+            uboLight.lights[lightIndex],
+            outDiffuse,
+            outSpecular);
+    }
+    if (lightIndex < uboLight.spotLightOffset)
+    {
+        return EvaluateAshikhminClothPointLight(
+            localShadowMap,
+            normal_WS,
+            pixelPos_WS,
+            cameraPos_WS,
+            diffuseColor,
+            specularTint,
+            f0,
+            frame,
+            uboLight.lights[lightIndex],
+            outDiffuse,
+            outSpecular);
+    }
+    return EvaluateAshikhminClothSpotLight(
+        localShadowMap,
+        normal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        diffuseColor,
+        specularTint,
+        f0,
+        frame,
+        uboLight.lights[lightIndex],
+        outDiffuse,
+        outSpecular);
+}
+
+void AccumulateAshikhminClothParticleLights(
+    in sampler2DArrayShadow localShadowMap,
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 diffuseColor,
+    in vec3 specularTint,
+    in float f0,
+    in AshikhminClothFrame frame,
+    inout vec3 outDiffuse,
+    inout vec3 outSpecular)
+{
+    uint count = min(particleLightSSBO.header.x, 64u);
+    for (uint index = 0u; index < count; ++index)
+    {
+        ParticleLightGPU source = particleLightSSBO.lights[index];
+        if (source.colorIntensity.w <= 0.0)
+        {
+            continue;
+        }
+        Light pointLight;
+        pointLight.colorIntensity = source.colorIntensity;
+        pointLight.positionRadius = source.positionRadius;
+        pointLight.directionPad = vec4(0.0);
+        pointLight.coneAngleOuterInnerPadPad = vec4(0.0);
+        pointLight.shadowParams = vec4(-1.0);
+        vec3 lightDiffuse;
+        vec3 lightSpecular;
+        EvaluateAshikhminClothPointLight(
+            localShadowMap,
+            normal_WS,
+            pixelPos_WS,
+            cameraPos_WS,
+            diffuseColor,
+            specularTint,
+            f0,
+            frame,
+            pointLight,
+            lightDiffuse,
+            lightSpecular);
+        outDiffuse += lightDiffuse;
+        outSpecular += lightSpecular;
+    }
+}
+
+vec3 CalculateAshikhminClothDirectLighting(
+    in sampler2DArrayShadow localShadowMap,
+    in vec3 normal_WS,
+    in vec3 pixelPos_WS,
+    in vec3 cameraPos_WS,
+    in vec3 diffuseColor,
+    in vec3 specularTint,
+    in float f0,
+    in AshikhminClothFrame frame,
+    out vec3 outDiffuse,
+    out vec3 outSpecular)
+{
+    outDiffuse = vec3(0.0);
+    outSpecular = vec3(0.0);
+    if (LightGridEnabled())
+    {
+        uint tileIndex =
+            LightGridTileIndexFromFragCoord(gl_FragCoord.xy);
+        uint visibleLightCount =
+            LightGridVisibleLightCount(tileIndex);
+        for (uint slot = 0u; slot < visibleLightCount; ++slot)
+        {
+            int lightIndex = int(
+                LightGridLightIndex(tileIndex, slot));
+            vec3 lightDiffuse;
+            vec3 lightSpecular;
+            AccumulateAshikhminClothLightByIndex(
+                lightIndex,
+                localShadowMap,
+                normal_WS,
+                pixelPos_WS,
+                cameraPos_WS,
+                diffuseColor,
+                specularTint,
+                f0,
+                frame,
+                lightDiffuse,
+                lightSpecular);
+            outDiffuse += lightDiffuse;
+            outSpecular += lightSpecular;
+        }
+    }
+    else
+    {
+        int offset = uboLight.directionalLightOffset;
+        int end = offset + uboLight.directionalLightCount;
+        for (int i = offset; i < end; ++i)
+        {
+            vec3 lightDiffuse;
+            vec3 lightSpecular;
+            EvaluateAshikhminClothDirectionalLight(
+                normal_WS,
+                pixelPos_WS,
+                cameraPos_WS,
+                diffuseColor,
+                specularTint,
+                f0,
+                frame,
+                uboLight.lights[i],
+                lightDiffuse,
+                lightSpecular);
+            outDiffuse += lightDiffuse;
+            outSpecular += lightSpecular;
+        }
+        offset = uboLight.pointLightOffset;
+        end = offset + uboLight.pointLightCount;
+        for (int i = offset; i < end; ++i)
+        {
+            vec3 lightDiffuse;
+            vec3 lightSpecular;
+            EvaluateAshikhminClothPointLight(
+                localShadowMap,
+                normal_WS,
+                pixelPos_WS,
+                cameraPos_WS,
+                diffuseColor,
+                specularTint,
+                f0,
+                frame,
+                uboLight.lights[i],
+                lightDiffuse,
+                lightSpecular);
+            outDiffuse += lightDiffuse;
+            outSpecular += lightSpecular;
+        }
+        offset = uboLight.spotLightOffset;
+        end = offset + uboLight.spotLightCount;
+        for (int i = offset; i < end; ++i)
+        {
+            vec3 lightDiffuse;
+            vec3 lightSpecular;
+            EvaluateAshikhminClothSpotLight(
+                localShadowMap,
+                normal_WS,
+                pixelPos_WS,
+                cameraPos_WS,
+                diffuseColor,
+                specularTint,
+                f0,
+                frame,
+                uboLight.lights[i],
+                lightDiffuse,
+                lightSpecular);
+            outDiffuse += lightDiffuse;
+            outSpecular += lightSpecular;
+        }
+    }
+    AccumulateAshikhminClothParticleLights(
+        localShadowMap,
+        normal_WS,
+        pixelPos_WS,
+        cameraPos_WS,
+        diffuseColor,
+        specularTint,
+        f0,
+        frame,
+        outDiffuse,
+        outSpecular);
+    return outDiffuse + outSpecular;
+}
+
+ForwardLightingResult ShadeClothAshikhminForwardSurface(
+    in MaterialSurface surface)
+{
+    ForwardLightingResult result = CreateDefaultForwardLightingResult();
+    vec3 normal = normalize(surface.worldNormal);
+    vec3 view = normalize(uboVP.cameraPosition - surface.worldPosition);
+    float fiberRotation = radians(
+        surface.modelInputs.cloth.fiberRotationDegrees);
+    AshikhminClothFrame frame = BuildAshikhminClothFrame(
+        normal,
+        surface.worldTangent,
+        fiberRotation);
+    vec3 diffuseColor = surface.baseColor;
+    vec3 specularTint = surface.modelInputs.cloth.sheenColor;
+    float f0 = clamp(surface.modelInputs.cloth.f0, 0.0, 1.0);
+
+    vec3 directDiffuse;
+    vec3 directSpecular;
+    CalculateAshikhminClothDirectLighting(
+        localShadowMap,
+        normal,
+        surface.worldPosition,
+        uboVP.cameraPosition,
+        diffuseColor,
+        specularTint,
+        f0,
+        frame,
+        directDiffuse,
+        directSpecular);
+
+    result.shadow = 1.0;
+    result.shadowCascadeIndex = 0.0;
+#if defined(VL_FORWARD_DECLARE_SHADOWMAP_INPUT)
+    int cascadeIndex = 0;
+    result.shadow = CalculateCsmShadow(
+        shadowMap,
+        surface.worldPosition,
+        normal,
+        cascadeIndex);
+    result.shadowCascadeIndex = ShadowCascadeDebugValue(cascadeIndex);
+#endif
+    result.directDiffuse = directDiffuse * result.shadow;
+    result.directSpecular = directSpecular * result.shadow;
+    result.directLighting =
+        result.directDiffuse + result.directSpecular;
+
+    vec3 averageRadiance = EvaluateIrradianceSH(normal) / PI;
+    EvaluateAshikhminClothIndirect(
+        normal,
+        view,
+        frame,
+        diffuseColor,
+        specularTint,
+        f0,
+        averageRadiance,
+        result.indirectDiffuse,
+        result.indirectSpecular);
+    result.indirectLighting =
+        result.indirectDiffuse + result.indirectSpecular;
+    result.finalColor =
+        surface.emissiveColor +
+        result.directLighting +
+        result.indirectLighting * surface.ambientOcclusion;
+    return result;
+}
+#endif
+
 ForwardLightingResult ShadeForwardSurfaceDetailed(in MaterialSurface surface)
 {
     switch (surface.shadingModel)
     {
         case SHADING_MODEL_UNLIT:
             return ShadeUnlitForwardSurface(surface);
+#if defined(VL_CLOTH_ASHIKHMIN)
+        case SHADING_MODEL_CLOTH:
+            return ShadeClothAshikhminForwardSurface(surface);
+#endif
         // 旧实现清理（2026-09-12）后只剩 DefaultLit 与 Unlit；ClearCoat / ThinTranslucent /
         // Hair / Cloth / TwoSidedFoliage / Eye 的 case 随各自实现删除，按论文重建时逐个接回。
         // 未实现的 ShadingModelID 会落到 default（= DefaultLit），这正是 A-07 记录的风险，

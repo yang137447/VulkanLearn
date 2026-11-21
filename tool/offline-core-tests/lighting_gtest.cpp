@@ -10,6 +10,71 @@ namespace
 {
 using namespace VL::Offline;
 
+TEST(OfflineLighting, SpotUsesCandelaCentimetersConeAndFiniteShadowSegment)
+{
+    Scene scene;
+    scene.spotLight = true;
+    scene.spotPosition = {0, 100, 0};
+    scene.spotDirection = {0, -1, 0};
+    scene.spotCandela = 100;
+    scene.spotInner = 0.2;
+    scene.spotOuter = 0.4;
+    MeshInstance instance;
+    instance.model = SurfaceModel::Lambert;
+    instance.baseColor = {1, 1, 1};
+    Hit hit;
+    hit.instance = &instance;
+    hit.normal = hit.geometricNormal = {0, 1, 0};
+    AlbedoTable albedo;
+    Random random{17};
+    const Vec3 lit = directLight(scene, albedo, hit, {0, 1, 0}, 1, random);
+    EXPECT_NEAR(lit.x, 100.0 * 10000 / 10001 / kPi, 1e-10);
+    hit.position = {100, 0, 0};
+    EXPECT_DOUBLE_EQ(length(directLight(scene, albedo, hit, {0, 1, 0}, 1, random)), 0);
+    hit.position = {};
+    scene.spotRadius = 50;
+    EXPECT_DOUBLE_EQ(length(directLight(scene, albedo, hit, {0, 1, 0}, 1, random)), 0);
+    scene.spotRadius = 0;
+    Mesh blocker;
+    Triangle triangle;
+    triangle.vertices = {{{-10, 200, -10}, {10, 200, -10}, {0, 200, 10}}};
+    triangle.normals = {{{0, -1, 0}, {0, -1, 0}, {0, -1, 0}}};
+    blocker.triangles.push_back(triangle);
+    blocker.order.push_back(0);
+    expand(blocker.bounds, triangleBounds(triangle));
+    buildBvh(blocker, 0, 1);
+    MeshInstance blockingInstance;
+    blockingInstance.mesh = &blocker;
+    scene.instances.push_back(blockingInstance);
+    EXPECT_NEAR(directLight(scene, albedo, hit, {0, 1, 0}, 1, random).x, lit.x, 1e-10);
+    scene.instances.front().translation = {0, -150, 0};
+    EXPECT_DOUBLE_EQ(length(directLight(scene, albedo, hit, {0, 1, 0}, 1, random)), 0);
+}
+
+TEST(OfflineLighting, VelvetTextureScalesDiffuseWithoutTintingPaperSpecular)
+{
+    VelvetMaterial velvet = makeVelvetMaterial(0.5, 0.05, {0.2, 0.3, 0.4});
+    ColorMap texture;
+    texture.width = texture.height = 1;
+    texture.pixels.push_back({0.25, 0.5, 0.75});
+    MeshInstance instance;
+    instance.model = SurfaceModel::AshikhminVelvet;
+    instance.velvet = &velvet;
+    Hit hit;
+    hit.instance = &instance;
+    hit.normal = hit.geometricNormal = {0, 1, 0};
+    const Vec3 view = normalize(Vec3{1, 0.1, 0});
+    const Vec3 light = normalize(Vec3{1, 0.2, 0});
+    AlbedoTable albedo;
+    const Vec3 plain = evaluateBsdf(albedo, hit, view, light);
+    const double specular = velvetSpecular(velvet, hit.normal, view, light);
+    instance.baseColorMap = &texture;
+    const Vec3 mapped = evaluateBsdf(albedo, hit, view, light);
+    EXPECT_NEAR(mapped.x, (plain.x - specular) * 0.25 + specular, 1e-10);
+    EXPECT_NEAR(mapped.y, (plain.y - specular) * 0.5 + specular, 1e-10);
+    EXPECT_NEAR(mapped.z, (plain.z - specular) * 0.75 + specular, 1e-10);
+}
+
 Vec3 AreaReference(const Scene& scene, Hit hit, Vec3 view, int grid)
 {
     Vec3 total{};

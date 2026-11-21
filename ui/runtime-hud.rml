@@ -2,10 +2,12 @@
     <head>
         <title>VulkanLearn HUD</title>
         <link type="text/rcss" href="runtime-hud.rcss" />
+        <link type="text/rcss" href="cloth-showcase.rcss" />
     </head>
     <body data-model="game_ui">
         <div id="ui-root">
-            <div id="hud">
+            <!-- 展示关卡不显示场景名卡片：参考设计里只有模特、胶囊条和提示。 -->
+            <div id="hud" data-if="!showcase_visible">
                 <!-- #hud 只负责定位、75% 宽度上限与裁剪；卡片底色在内层收缩盒上。
                      百分比 max-width 不能写在内层：RmlUi 的 shrink-to-fit 用 0 作为
                      containing block 宽度解析百分比 min/max-width，会把宽度钳成 0，
@@ -13,6 +15,79 @@
                 <div id="hud-panel">
                     <div>{{world_text}}</div>
                     <div id="gameplay-hud" data-if="gameplay_text != ''">{{gameplay_text}}</div>
+                </div>
+            </div>
+            <!-- 布料材质展示：单人台 + 底部材质胶囊 + 右侧参数面板。
+                 只在展示场景打开；默认浏览态不显示面板。 -->
+            <div id="sc-root" data-if="showcase_visible">
+                <div id="sc-hint">拖动旋转 · 滚轮缩放 · 双击材质编辑</div>
+                <div id="sc-chips">
+                    <div id="sc-chipbar">
+                        <div class="sc-chip" data-class-selected="showcase_material == 0"
+                             data-event-click="selectMaterial('satin')">
+                            <div class="sc-chip-cn">缎面</div>
+                            <div class="sc-chip-en">Satin</div>
+                        </div>
+                        <div class="sc-chip" data-class-selected="showcase_material == 1"
+                             data-event-click="selectMaterial('velvet')">
+                            <div class="sc-chip-cn">绒面</div>
+                            <div class="sc-chip-en">Velvet</div>
+                        </div>
+                        <div class="sc-chip" data-class-selected="showcase_material == 2"
+                             data-event-click="selectMaterial('slantedVelvet')">
+                            <div class="sc-chip-cn">斜绒</div>
+                            <div class="sc-chip-en">Slanted Velvet</div>
+                        </div>
+                        <div class="sc-chip" data-class-selected="showcase_material == 3"
+                             data-event-click="selectMaterial('pbr')">
+                            <div class="sc-chip-cn">标准 PBR</div>
+                            <div class="sc-chip-en">Default PBR</div>
+                        </div>
+                    </div>
+                </div>
+                <div id="sc-side" data-if="showcase_panel_open">
+                <div id="sc-panel">
+                    <div id="sc-panel-head">
+                        <div id="sc-panel-title">{{showcase_material_name}}</div>
+                        <div id="sc-panel-tag">{{showcase_material_tag}}</div>
+                        <div id="sc-panel-close" data-event-click="closeShowcasePanel">×</div>
+                    </div>
+                    <div class="sc-group-title">颜色</div>
+                    <div class="sc-color-row">
+                        <div class="sc-swatch" style="background-color: #F2EDE4;"></div>
+                        <div class="sc-color-label">底色</div>
+                        <div class="sc-hex">{{showcase_base_hex}}</div>
+                        <div class="sc-icon">◐</div>
+                    </div>
+                    <div class="sc-color-row">
+                        <div class="sc-swatch" style="background-color: #FFF8EB;"></div>
+                        <div class="sc-color-label">Sheen</div>
+                        <div class="sc-hex">{{showcase_sheen_hex}}</div>
+                        <div class="sc-icon">◐</div>
+                    </div>
+                    <div class="sc-group-title">参数</div>
+                    <div class="sc-param-row">
+                        <div class="sc-param-head">
+                            <div class="sc-param-label">F0</div>
+                            <div class="sc-param-value">{{showcase_f0}}</div>
+                        </div>
+                        <div class="sc-track"><div class="sc-track-fill" style="width: 8%;"></div><div class="sc-knob" style="left: 8%;"></div></div>
+                    </div>
+                    <div class="sc-param-row">
+                        <div class="sc-param-head">
+                            <div class="sc-param-label">Sheen Roughness</div>
+                            <div class="sc-param-value">{{showcase_sheen_roughness}}</div>
+                        </div>
+                        <div class="sc-track"><div class="sc-track-fill" style="width: 50%;"></div><div class="sc-knob" style="left: 50%;"></div></div>
+                    </div>
+                    <div class="sc-param-row">
+                        <div class="sc-param-head">
+                            <div class="sc-param-label">Fiber Rotation</div>
+                            <div class="sc-param-value">{{showcase_fiber_rotation}}</div>
+                        </div>
+                        <div class="sc-track"><div class="sc-track-fill" style="width: 50%;"></div><div class="sc-knob" style="left: 50%;"></div></div>
+                    </div>
+                </div>
                 </div>
             </div>
         </div>

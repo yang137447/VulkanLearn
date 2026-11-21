@@ -1,0 +1,113 @@
+{
+  "name": "M_clothAshikhminSatin",
+  "type": "material",
+  "shadingModel": "Cloth",
+  "shaderEvaluation": {
+    "vertex": "M_clothAshikhminSatin.vertex.glsl",
+    "surface": "M_clothAshikhminSatin.surface.glsl"
+  },
+  "renderStates": {
+    "renderMode": "ForwardOpaque",
+    "cullMode": "None"
+  },
+  "macros": {
+    "VL_CLOTH_CLOSURE_SATIN": 1,
+    "VL_CLOTH_ASHIKHMIN": 1,
+    "USE_ALBEDO_MAP": 0,
+    "USE_NORMAL_MAP": 0,
+    "USE_PBR_MAP": 0,
+    "USE_EMISSION_MAP": 0,
+    "USE_ALPHA_MAP": 0,
+    "USE_VERTEX_COLOR": 0
+  },
+  "parameters": {
+    "u_tintColor": {
+      "type": "color",
+      "default": [1.0, 1.0, 1.0, 1.0],
+      "description": "linear albedo multiplier used only when a texture map is enabled",
+      "channels": {
+        "x": {"name": "red", "description": "linear red multiplier", "range": {"min": 0.0, "max": 1.0}},
+        "y": {"name": "green", "description": "linear green multiplier", "range": {"min": 0.0, "max": 1.0}},
+        "z": {"name": "blue", "description": "linear blue multiplier", "range": {"min": 0.0, "max": 1.0}},
+        "w": {"name": "opacity", "description": "coverage multiplier", "range": {"min": 0.0, "max": 1.0}}
+      }
+    },
+    "u_pbrFactors": {
+      "type": "vec4",
+      "default": [0.5, 0.0, 1.0, 0.0],
+      "description": "fallback roughness/metallic/AO used when pbrParamMap is disabled",
+      "channels": {
+        "x": {"name": "roughness", "description": "fallback roughness metadata; the Ashikhmin closure uses its baked sigma tables", "range": {"min": 0.0, "max": 1.0}},
+        "y": {"name": "metallic", "description": "unused by cloth; forced to zero by the surface entry", "range": {"min": 0.0, "max": 0.0}},
+        "z": {"name": "ambientOcclusion", "description": "linear ambient-occlusion multiplier", "range": {"min": 0.0, "max": 1.0}},
+        "w": {"name": "reserved", "description": "reserved channel", "range": {"min": 0.0, "max": 0.0}}
+      }
+    },
+    "u_emissiveStrength": {
+      "type": "float",
+      "default": 1.0,
+      "range": {"min": 0.0, "max": 100000.0},
+      "description": "scene-linear emissive radiance multiplier before camera exposure"
+    },
+    "u_baseColor": {
+      "type": "color",
+      "default": [0.018, 0.018, 0.018, 1.0],
+      "description": "Eq. (30) diffuse reflectance rho_d; not a specular tint",
+      "channels": {
+        "x": {"name": "red", "description": "linear red diffuse reflectance", "range": {"min": 0.0, "max": 1.0}},
+        "y": {"name": "green", "description": "linear green diffuse reflectance", "range": {"min": 0.0, "max": 1.0}},
+        "z": {"name": "blue", "description": "linear blue diffuse reflectance", "range": {"min": 0.0, "max": 1.0}},
+        "w": {"name": "opacity", "description": "forward coverage for transparent variants", "range": {"min": 0.0, "max": 1.0}}
+      }
+    },
+    "u_f0": {
+      "type": "float",
+      "default": 0.05,
+      "range": {"min": 0.0, "max": 1.0},
+      "description": "scalar Schlick normal reflectance used by the Ashikhmin lobe"
+    },
+    "u_fiberRotationDegrees": {
+      "type": "float",
+      "default": 0.0,
+      "range": {"min": -360.0, "max": 360.0},
+      "description": "authored fiber-axis rotation around the shading normal"
+    },
+    "u_clothSheenColor": {
+      "type": "color",
+      "default": [1.0, 1.0, 1.0, 1.0],
+      "description": "specular lobe tint; the paper's dielectric lobe is neutral by default",
+      "channels": {
+        "x": {"name": "red", "description": "linear red specular tint", "range": {"min": 0.0, "max": 1.0}},
+        "y": {"name": "green", "description": "linear green specular tint", "range": {"min": 0.0, "max": 1.0}},
+        "z": {"name": "blue", "description": "linear blue specular tint", "range": {"min": 0.0, "max": 1.0}},
+        "w": {"name": "reserved", "description": "reserved alpha; must remain one", "range": {"min": 1.0, "max": 1.0}}
+      }
+    },
+    "u_clothSheenRoughness": {
+      "type": "float",
+      "default": 0.5,
+      "range": {"min": 0.02, "max": 1.0},
+      "description": "legacy Cloth schema field; the Ashikhmin closure uses the baked sigma tables"
+    },
+    "u_clothAnisotropy": {
+      "type": "float",
+      "default": 0.0,
+      "range": {"min": -1.0, "max": 1.0},
+      "description": "legacy Cloth schema field; the Ashikhmin closure uses the fiber frame directly"
+    },
+    "u_clothAnisotropyCross": {
+      "type": "float",
+      "default": 0.0,
+      "range": {"min": 0.0, "max": 1.0},
+      "description": "legacy Cloth schema field; the Ashikhmin closure uses the fiber frame directly"
+    }
+  },
+  "textures": {
+    "clothLut": {"type": "sampler2D", "default": null},
+    "albedoMap": {"type": "sampler2D", "default": null},
+    "normalMap": {"type": "sampler2D", "default": null},
+    "pbrParamMap": {"type": "sampler2D", "default": null},
+    "emissionMap": {"type": "sampler2D", "default": null},
+    "alphaMap": {"type": "sampler2D", "default": null}
+  }
+}

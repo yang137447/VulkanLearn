@@ -76,6 +76,8 @@ struct Bounds
 struct Triangle
 {
     std::array<Vec3, 3> vertices, normals;
+    std::array<Vec3, 3> tangents{};
+    std::array<double, 3> tangentSigns{{1, 1, 1}};
     Vec3 dpdu, dpdv;
     std::array<Vec2, 3> uv{};
 };
@@ -92,6 +94,7 @@ struct Mesh
     std::vector<BvhNode> nodes;
     Bounds bounds;
     bool hasValidUvFrames = true;
+    bool hasValidTangents = true;
 };
 struct GroomMap;
 struct ColorMap;
@@ -166,6 +169,7 @@ struct MeshInstance
     SurfaceModel model = SurfaceModel::Lambert;
     Vec3 baseColor{0.5, 0.5, 0.5};
     Vec3 sheenColor{0.95, 0.75, 0.65};
+    Vec3 clothSpecularTint{1, 1, 1};
     double roughness = 0.4;
     const FabricMaterial* fabric = nullptr;
     const VelvetMaterial* velvet = nullptr;
@@ -174,13 +178,18 @@ struct MeshInstance
     const GroomMap* groom = nullptr;
     const ColorMap* baseColorMap = nullptr;
     const ColorMap* sheenColorMap = nullptr;
+    const ColorMap* normalMap = nullptr;
     double yarnRotationDegrees = 0.0;
     double fiberRotationDegrees = 0.0;
+    // 显式作者选项：与实时导入切线共享纤维轴，不静默替代退化 UV。
+    bool useImportedTangents = false;
 };
 struct Hit
 {
     double distance = std::numeric_limits<double>::infinity();
     Vec3 position, normal, geometricNormal, dpdu, dpdv;
+    Vec3 tangent;
+    double tangentSign = 1.0;
     Vec2 uv;
     double roughness = 0.0;
     const MeshInstance* instance = nullptr;
@@ -212,6 +221,12 @@ struct Scene
     Vec3 lightCenter{-0.8, 3.8, 1.6};
     double lightWidth = 4.5, lightDepth = 2.0;
     bool directionalLight = false;
+    // 聚光灯保留 cd/cm 作者单位；积分边界仅进行一次 10000 倍距离单位换算。
+    bool spotLight = false;
+    Vec3 spotPosition{}, spotDirection{0, 0, -1};
+    double spotCandela = 0.0, spotRadius = 0.0;
+    double spotInner = 0.0, spotOuter = 0.0;
+    Vec3 spotColor{1, 1, 1};
     Vec3 toLight{0.0, 1.0, 0.0};
     double directionalIrradiance = 0.0;
     Vec3 cameraPosition{0.0, 1.7, 8.0};

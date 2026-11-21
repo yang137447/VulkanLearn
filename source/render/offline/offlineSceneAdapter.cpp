@@ -85,6 +85,9 @@ void ApplyMaterial(const nlohmann::json& material,
     if (!material.at("macros").empty())
         throw std::runtime_error("Offline macro combination is not implemented");
     const auto& textures = material.at("textures");
+    const bool ashikhmin = instance.model == Offline::SurfaceModel::AshikhminVelvet ||
+        instance.model == Offline::SurfaceModel::AshikhminSatin ||
+        instance.model == Offline::SurfaceModel::AshikhminSlantedVelvet;
     for (const auto& [slot, reference] : textures.items())
     {
         const bool supported = reference.is_string() &&
@@ -92,7 +95,8 @@ void ApplyMaterial(const nlohmann::json& material,
              (instance.model == Offline::SurfaceModel::ClothSheen &&
               (slot == "baseColorMap" || slot == "sheenColorMap")) ||
              (instance.model == Offline::SurfaceModel::Lambert && slot == "baseColorMap"));
-        if (!supported)
+        if (!supported && !(reference.is_string() &&
+            (ashikhmin && (slot == "baseColorMap" || slot == "normalMap"))))
             throw std::runtime_error("Offline texture binding is not implemented: " + slot);
     }
     const auto colorMap = [&](const char* slot) -> const Offline::ColorMap*
@@ -111,6 +115,20 @@ void ApplyMaterial(const nlohmann::json& material,
     };
 
     const auto& params = material.at("parameters");
+    if (ashikhmin)
+    {
+        instance.baseColorMap = colorMap("baseColorMap");
+        instance.normalMap = colorMap("normalMap");
+        if (params.contains("u_useImportedTangents"))
+        {
+            const double enabled = FiniteNumber(params.at("u_useImportedTangents"), "u_useImportedTangents");
+            if (enabled != 0 && enabled != 1)
+                throw std::runtime_error("u_useImportedTangents must be zero or one");
+            instance.useImportedTangents = enabled == 1;
+            if (instance.useImportedTangents && !instance.mesh->hasValidTangents)
+                throw std::runtime_error("Imported fiber frame requires valid vertex tangents");
+        }
+    }
     if (instance.model == Offline::SurfaceModel::Lambert)
     {
         RequireExactKeys(params, {"u_baseColor"}, "Lambert parameters");
@@ -150,7 +168,8 @@ void ApplyMaterial(const nlohmann::json& material,
     else if (instance.model == Offline::SurfaceModel::AshikhminSatin)
     {
         RequireExactKeys(params, {"u_sigmaFlat", "u_sigmaEnds", "u_flatWeight",
-                                  "u_f0", "u_baseColor", "u_fiberRotationDegrees"},
+                                  "u_f0", "u_baseColor", "u_fiberRotationDegrees",
+                                  "u_useImportedTangents"},
                          "AshikhminSatin parameters");
         const double sigmaFlat = FiniteNumber(params.at("u_sigmaFlat"), "u_sigmaFlat");
         const double sigmaEnds = FiniteNumber(params.at("u_sigmaEnds"), "u_sigmaEnds");
@@ -164,7 +183,7 @@ void ApplyMaterial(const nlohmann::json& material,
             diffuse.x > 1 || diffuse.y > 1 || diffuse.z > 1 ||
             std::abs(instance.fiberRotationDegrees) > 360)
             throw std::runtime_error("Invalid AshikhminSatin parameter range");
-        if (!instance.mesh->hasValidUvFrames)
+        if (!instance.useImportedTangents && !instance.mesh->hasValidUvFrames)
             throw std::runtime_error("AshikhminSatin requires non-degenerate UV axes");
         if (prepareGeometry)
         {
@@ -178,7 +197,8 @@ void ApplyMaterial(const nlohmann::json& material,
     else if (instance.model == Offline::SurfaceModel::AshikhminSlantedVelvet)
     {
         RequireExactKeys(params, {"u_sigma", "u_slantDegrees", "u_f0",
-                                  "u_baseColor", "u_fiberRotationDegrees"},
+                                  "u_baseColor", "u_fiberRotationDegrees",
+                                  "u_useImportedTangents"},
                          "AshikhminSlantedVelvet parameters");
         const double sigma = FiniteNumber(params.at("u_sigma"), "u_sigma");
         const double slant = FiniteNumber(params.at("u_slantDegrees"), "u_slantDegrees");
@@ -190,7 +210,7 @@ void ApplyMaterial(const nlohmann::json& material,
             f0 < 0 || f0 > 1 || diffuse.x > 1 || diffuse.y > 1 || diffuse.z > 1 ||
             std::abs(instance.fiberRotationDegrees) > 360)
             throw std::runtime_error("Invalid AshikhminSlantedVelvet parameter range");
-        if (!instance.mesh->hasValidUvFrames)
+        if (!instance.useImportedTangents && !instance.mesh->hasValidUvFrames)
             throw std::runtime_error("AshikhminSlantedVelvet requires non-degenerate UV axes");
         if (prepareGeometry)
         {
@@ -341,14 +361,37 @@ RuntimeResult<Offline::RenderInput> BuildOfflineRenderInput(
     input.scene.seed = settings.seed;
     input.scene.backdrop = {};
 
-    if (snapshot.lights.size() > 1)
+    std::vector<const LightSnapshot*> activeLights;
+    for (const auto& light : snapshot.lights)
+        if (light.intensity > 0) activeLights.push_back(&light);
+    if (activeLights.size() > 1)
         return RuntimeResult<Offline::RenderInput>::Failure(MakeRuntimeError(
             "Offline.LightUnsupported", "Only one directional light is supported",
             assets.scenePath, "lights"));
-    if (!snapshot.lights.empty())
+    if (!activeLights.empty())
     {
-        const auto& light = snapshot.lights.front();
-        if (light.type != LightSnapshotType::Directional)
+        const auto& light = *activeLights.front();
+        if (light.type == LightSnapshotType::Spot)
+        {
+            if (!std::isfinite(light.intensity) || !light.position.allFinite() ||
+                !light.direction.allFinite() || light.direction.squaredNorm() <= 1e-12 ||
+                !std::isfinite(light.coneAngleInner) || !std::isfinite(light.coneAngleOuter) ||
+                light.coneAngleInner < 0 || light.coneAngleOuter <= 0 ||
+                light.coneAngleInner > light.coneAngleOuter ||
+                light.coneAngleOuter >= Offline::kPi || !std::isfinite(light.radius))
+                return RuntimeResult<Offline::RenderInput>::Failure(MakeRuntimeError(
+                    "Offline.InvalidSpotLight", "Invalid spot light",
+                    assets.scenePath, std::to_string(light.lightId)));
+            input.scene.spotLight = true;
+            input.scene.spotPosition = ToCore(light.position);
+            input.scene.spotDirection = Offline::normalize(ToCore(light.direction));
+            input.scene.spotCandela = light.intensity;
+            input.scene.spotColor = ToCore(light.color);
+            input.scene.spotRadius = light.radius;
+            input.scene.spotInner = light.coneAngleInner;
+            input.scene.spotOuter = light.coneAngleOuter;
+        }
+        else if (light.type != LightSnapshotType::Directional)
         {
             if (light.type != LightSnapshotType::SquareArea)
                 return RuntimeResult<Offline::RenderInput>::Failure(MakeRuntimeError(
@@ -418,6 +461,11 @@ RuntimeResult<Offline::RenderInput> BuildOfflineRenderInput(
                     if (source.indices.empty() || source.indices.size() % 3 != 0)
                         throw std::runtime_error("Section needs triangle indices");
                     auto probe = std::make_shared<Offline::Mesh>();
+                    for (const auto& vertex : source.vertices)
+                        if (!vertex.tangent.allFinite() ||
+                            vertex.tangent.head<3>().squaredNorm() <= 1e-12f ||
+                            std::abs(vertex.tangent.w()) < 0.5f)
+                            probe->hasValidTangents = false;
                     for (size_t i = 0; i < source.indices.size(); i += 3)
                     {
                         for (size_t corner = 0; corner < 3; ++corner)

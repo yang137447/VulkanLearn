@@ -27,6 +27,8 @@ std::shared_ptr<const Offline::ColorMap> DecodeOfflineColorImage(
     // 离线材质必须复用 Texture 文件材质的单次行翻转合同；网格 UV 保持导入原值。
     options.flipY = TextureIO::LoadOptions::FlipYMode::ForceOn;
     if (asset.extension == ".png") options.formatHint = TextureIO::FileFormat::Png;
+    else if (asset.extension == ".jpg" || asset.extension == ".jpeg")
+        options.formatHint = TextureIO::FileFormat::Jpg;
     else if (asset.extension == ".tga") options.formatHint = TextureIO::FileFormat::Tga;
     else if (asset.extension == ".hdr") options.formatHint = TextureIO::FileFormat::Hdr;
     else if (asset.extension == ".exr") options.formatHint = TextureIO::FileFormat::Exr;

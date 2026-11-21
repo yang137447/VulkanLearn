@@ -31,6 +31,7 @@ def main():
     parser = argparse.ArgumentParser()
     parser.add_argument("black", type=Path)
     parser.add_argument("red", type=Path)
+    parser.add_argument("--expected-exposure", type=float, default=1.0)
     args = parser.parse_args()
     sources = [args.black.resolve(), args.red.resolve()]
     for source in sources:
@@ -45,7 +46,8 @@ def main():
     require(black["complete"] and red["complete"], "partial exports are not comparisons")
     require(black["samples"] == red["samples"], "mismatched sample counts")
     require(black["integrator"]["bounces"] == 0, "Fig. 13 requires zero bounces")
-    require(black["display"]["exposure"] == 1, "unexpected display exposure")
+    require(math.isclose(black["display"]["exposure"], args.expected_exposure,
+                         rel_tol=1e-6), "unexpected display exposure")
     require([(d["mesh"], d["model"], d["object"]) for d in black["draws"]] ==
             [(d["mesh"], d["model"], d["object"]) for d in red["draws"]],
             "geometry or transforms differ")
@@ -81,11 +83,13 @@ def main():
 
     width, height, black_pixels = read_pfm(sources[0] / "combined.pfm")
     red_pixels = read_pfm(sources[1] / "combined.pfm")[2]
+    irradiance = black["lights"][0]["intensity"]
+    require(irradiance > 0, "expected positive directional irradiance")
     # 共享白光、零反弹：红/黑差值只能来自 rho_d 的线性增量；
     # 若偷偷改变高光、曝光或背景，三个通道恢复的 diffuse kernel 会不一致。
     error = 0.0
     for index in range(0, len(black_pixels), 3):
-        values = [(red_pixels[index + c] - black_pixels[index + c]) / delta[c]
+        values = [(red_pixels[index + c] - black_pixels[index + c]) / delta[c] / irradiance
                   for c in range(3)]
         error = max(error, max(values) - min(values))
     require(error < 1e-4, f"shared specular/diffuse linearity failed: {error}")
@@ -147,7 +151,8 @@ def main():
                                            "specularParameters", "fiberOrientation"],
         "diffuseColors": colors,
         "cameraKeyAxisAngleDegrees": angle,
-        "linearDiffuseKernelMaxChannelError": error,
+        "irradianceNormalizedDiffuseKernelMaxChannelError": error,
+        "linearDiffuseKernelMaxChannelError": error * irradiance,
         "blackDisplayMean": {"left": left, "right": right},
         "uniformBackgroundBordersVerified": True,
         "crop": crop,

@@ -83,6 +83,10 @@ enum class RuntimeCommandType
     // 未知/陈旧身份必须被拒绝并给诊断。可见性是 World 的运行时状态，不持久化。
     SetActorVisible,
     SetActorProperty,
+    // 展示关卡 UI 事件 → C# 蓝图：stringValue=事件名（selectMaterial/
+    // closeShowcasePanel），secondaryStringValue=事件参数（材质 id）。
+    // 只有 C# 宿主启用时才由 UI 发出，避免无脚本构建丢交互。
+    ShowcaseUiEvent,
     // 正常 Console 的 actor placement 入口（`mesh transform/offset/sweep`）。
     // 只在显式命令时改变 mesh 场景对象的根 TRS，不是每帧自动运行；执行端复用
     // World::SetMeshSceneObjectTransform，不经过编辑器 sceneDocuments。

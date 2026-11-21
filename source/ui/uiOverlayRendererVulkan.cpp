@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cstring>
+#include <filesystem>
 #include <stdexcept>
 #include <unordered_set>
 #include <utility>
@@ -31,6 +32,13 @@ vk::DeviceSize NextBufferCapacity(vk::DeviceSize requiredSize, vk::DeviceSize in
         capacity *= 2;
     }
     return capacity;
+}
+
+// 磨砂 shader 与 UI overlay 成对发布：同一目录下的 uiGlass_{vert,frag}.spv。
+std::string SiblingShaderPath(const std::string& reference, const char* fileName)
+{
+    const std::filesystem::path base(reference);
+    return (base.parent_path() / fileName).string();
 }
 
 vk::ShaderModule CreateShaderModule(
@@ -333,7 +341,8 @@ void UiOverlayRendererVulkan::Record(
     vk::ImageView sceneDepthView,
     vk::Sampler sceneDepthSampler)
 {
-    if (!initialized || snapshot.drawCommands.empty())
+    if (!initialized ||
+        (snapshot.drawCommands.empty() && snapshot.glassRects.empty()))
     {
         return;
     }
@@ -393,6 +402,11 @@ void UiOverlayRendererVulkan::Record(
         .setRenderArea(vk::Rect2D({0, 0}, backend->GetSwapchainExtent()));
     const vk::ClearValue background(vk::ClearColorValue(std::array<float, 4>{0.012f, 0.012f, 0.014f, 1.0f}));
     if (snapshot.sceneViewportEnabled) renderPassBeginInfo.setClearValues(background);
+    // 磨砂背板必须在开始 render pass 之前拷贝：pass 内不能再采样正在写入的图像。
+    if (!snapshot.sceneViewportEnabled && !snapshot.glassRects.empty())
+    {
+        CaptureGlassBackdrop(commandBuffer, swapchainImageIndex);
+    }
     commandBuffer.beginRenderPass(renderPassBeginInfo, vk::SubpassContents::eInline);
 
     const vk::Viewport viewport(
@@ -403,6 +417,7 @@ void UiOverlayRendererVulkan::Record(
         0.0f,
         1.0f);
     commandBuffer.setViewport(0, viewport);
+    DrawGlass(commandBuffer, swapchainImageIndex, snapshot);
     commandBuffer.bindVertexBuffers(0, buffers.vertices.buffer, vk::DeviceSize{0});
     commandBuffer.bindIndexBuffer(buffers.indices.buffer, 0, vk::IndexType::eUint32);
     const auto& rect = snapshot.sceneViewportRect;
@@ -513,10 +528,12 @@ void UiOverlayRendererVulkan::CreateSwapchainResources()
     backend->AllocateDescriptorSets(allocateInfo, sceneViewportDescriptors);
     sceneDepthDescriptors.resize(layouts.size());
     backend->AllocateDescriptorSets(allocateInfo, sceneDepthDescriptors);
+    CreateGlassResources();
 }
 
 void UiOverlayRendererVulkan::DestroySwapchainResources()
 {
+    DestroyGlassResources();
     for (auto& descriptor : sceneViewportDescriptors)
         backend->FreeDescriptorSet(descriptorPool, descriptor);
     sceneViewportDescriptors.clear();
@@ -526,6 +543,356 @@ void UiOverlayRendererVulkan::DestroySwapchainResources()
     DestroyFrameBuffers();
     DestroyPipelines();
     DestroyRenderPassAndFramebuffers();
+}
+
+void UiOverlayRendererVulkan::CreateGlassResources()
+{
+    const vk::Extent2D extent = backend->GetSwapchainExtent();
+    if (extent.width < 8 || extent.height < 8)
+    {
+        return;
+    }
+    const vk::Extent2D halfExtent(
+        std::max(1u, extent.width / 2),
+        std::max(1u, extent.height / 2));
+    const vk::Format format = backend->GetSwapchainImageFormat();
+
+    glassSampler = backend->Create2DSampler(
+        vk::Filter::eLinear,
+        vk::SamplerAddressMode::eClampToEdge,
+        false,
+        "UI Glass Backdrop Sampler");
+
+    vk::DescriptorSetLayoutBinding binding;
+    binding
+        .setBinding(0)
+        .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+        .setDescriptorCount(1)
+        .setStageFlags(vk::ShaderStageFlagBits::eFragment);
+    vk::DescriptorSetLayoutCreateInfo layoutInfo;
+    layoutInfo.setBindings(binding);
+    glassDescriptorSetLayout = backend->CreateDescriptorSetLayout(
+        layoutInfo, "UI Glass Descriptor Set Layout");
+
+    vk::PushConstantRange constants(
+        vk::ShaderStageFlagBits::eFragment, 0, sizeof(float) * 16);
+    vk::PipelineLayoutCreateInfo pipelineLayoutInfo;
+    pipelineLayoutInfo
+        .setSetLayouts(glassDescriptorSetLayout)
+        .setPushConstantRanges(constants);
+    glassPipelineLayout = backend->CreatePipelineLayout(
+        pipelineLayoutInfo, "UI Glass Pipeline Layout");
+
+    vk::ShaderModule vertexShader = CreateShaderModule(
+        *backend,
+        SiblingShaderPath(vertexShaderPath, "uiGlass_vert.spv"),
+        "UI Glass Vertex Shader");
+    vk::ShaderModule fragmentShader = CreateShaderModule(
+        *backend,
+        SiblingShaderPath(fragmentShaderPath, "uiGlass_frag.spv"),
+        "UI Glass Fragment Shader");
+    std::vector<vk::PipelineShaderStageCreateInfo> stages(2);
+    stages[0]
+        .setStage(vk::ShaderStageFlagBits::eVertex)
+        .setModule(vertexShader)
+        .setPName("main");
+    stages[1]
+        .setStage(vk::ShaderStageFlagBits::eFragment)
+        .setModule(fragmentShader)
+        .setPName("main");
+    GraphicsPipelineStateDesc state;
+    state.bUseVertexInput = false;
+    state.bDepthTestEnable = false;
+    state.bDepthWriteEnable = false;
+    state.cullMode = vk::CullModeFlagBits::eNone;
+    state.blendMode = GraphicsPipelineBlendMode::AlphaBlend;
+    GraphicsPipelineBuildDesc buildDesc{
+        renderPass,
+        glassPipelineLayout,
+        stages,
+        {},
+        {},
+        "UI Glass Backdrop",
+        vk::SampleCountFlagBits::e1,
+        1,
+        state,
+        false
+    };
+    GraphicsPipelineBuildResult result = backend->BuildGraphicsPipeline(buildDesc);
+    glassPipeline = result.graphicsPipeline;
+    glassPipelineCache = result.pipelineCache;
+    backend->DestroyShaderModule(vertexShader);
+    backend->DestroyShaderModule(fragmentShader);
+
+    const std::vector<vk::Image>& images = backend->GetSwapchainImages();
+    glassTargets.reserve(images.size());
+    for (size_t index = 0; index < images.size(); ++index)
+    {
+        const std::string debugName =
+            "UI Glass Backdrop " + std::to_string(index);
+        const auto created = backend->CreateImage(
+            halfExtent.width,
+            halfExtent.height,
+            1,
+            vk::SampleCountFlagBits::e1,
+            format,
+            vk::ImageTiling::eOptimal,
+            vk::ImageUsageFlagBits::eSampled |
+                vk::ImageUsageFlagBits::eTransferSrc |
+                vk::ImageUsageFlagBits::eTransferDst,
+            vk::MemoryPropertyFlagBits::eDeviceLocal,
+            debugName);
+        GlassTarget target;
+        target.image = created.first;
+        target.memory = created.second;
+        target.imageView = backend->CreateImageView(
+            target.image,
+            vk::ImageViewType::e2D,
+            format,
+            vk::ImageAspectFlagBits::eColor,
+            0,
+            1,
+            0,
+            1,
+            debugName + " View");
+        backend->TransitionImageLayout(
+            target.image,
+            1,
+            format,
+            vk::ImageLayout::eUndefined,
+            vk::ImageLayout::eShaderReadOnlyOptimal);
+
+        const std::vector<vk::DescriptorSetLayout> setLayouts{
+            glassDescriptorSetLayout};
+        vk::DescriptorSetAllocateInfo allocateInfo;
+        allocateInfo
+            .setDescriptorPool(descriptorPool)
+            .setSetLayouts(setLayouts);
+        std::vector<vk::DescriptorSet> sets;
+        backend->AllocateDescriptorSets(allocateInfo, sets);
+        target.descriptorSet = sets.empty() ? vk::DescriptorSet{} : sets.front();
+        if (target.descriptorSet)
+        {
+            const vk::DescriptorImageInfo imageInfo(
+                glassSampler,
+                target.imageView,
+                vk::ImageLayout::eShaderReadOnlyOptimal);
+            vk::WriteDescriptorSet write;
+            write
+                .setDstSet(target.descriptorSet)
+                .setDstBinding(0)
+                .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+                .setImageInfo(imageInfo);
+            backend->UpdateDescriptorSets({write});
+        }
+        glassTargets.push_back(target);
+    }
+}
+
+void UiOverlayRendererVulkan::DestroyGlassResources()
+{
+    for (GlassTarget& target : glassTargets)
+    {
+        if (target.descriptorSet)
+        {
+            backend->FreeDescriptorSet(descriptorPool, target.descriptorSet);
+        }
+        vk::Sampler unusedSampler{};
+        backend->DestroyImageResource(
+            target.image, target.memory, target.imageView, unusedSampler);
+        target.image = vk::Image{};
+        target.memory = vk::DeviceMemory{};
+    }
+    glassTargets.clear();
+    if (glassSampler)
+    {
+        backend->DestroySampler(glassSampler);
+        glassSampler = vk::Sampler{};
+    }
+    if (glassPipeline)
+    {
+        backend->DestroyPipeline(glassPipeline);
+        glassPipeline = vk::Pipeline{};
+    }
+    if (glassPipelineCache)
+    {
+        backend->DestroyPipelineCache(glassPipelineCache);
+        glassPipelineCache = vk::PipelineCache{};
+    }
+    if (glassPipelineLayout)
+    {
+        backend->DestroyPipelineLayout(glassPipelineLayout);
+        glassPipelineLayout = vk::PipelineLayout{};
+    }
+    if (glassDescriptorSetLayout)
+    {
+        backend->DestroyDescriptorSetLayout(glassDescriptorSetLayout);
+        glassDescriptorSetLayout = vk::DescriptorSetLayout{};
+    }
+}
+
+void UiOverlayRendererVulkan::CaptureGlassBackdrop(
+    vk::CommandBuffer commandBuffer,
+    uint32_t swapchainImageIndex)
+{
+    const std::vector<vk::Image>& images = backend->GetSwapchainImages();
+    if (swapchainImageIndex >= images.size() ||
+        swapchainImageIndex >= glassTargets.size())
+    {
+        return;
+    }
+    const vk::Image source = images[swapchainImageIndex];
+    const GlassTarget& target = glassTargets[swapchainImageIndex];
+    const vk::Extent2D extent = backend->GetSwapchainExtent();
+    const vk::Extent2D halfExtent(
+        std::max(1u, extent.width / 2),
+        std::max(1u, extent.height / 2));
+    const vk::ImageSubresourceRange range(
+        vk::ImageAspectFlagBits::eColor, 0, 1, 0, 1);
+
+    vk::ImageMemoryBarrier toTransfer;
+    toTransfer
+        .setImage(source)
+        .setSubresourceRange(range)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setOldLayout(vk::ImageLayout::ePresentSrcKHR)
+        .setNewLayout(vk::ImageLayout::eTransferSrcOptimal)
+        .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eTransferRead);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        vk::PipelineStageFlagBits::eTransfer,
+        {},
+        {},
+        {},
+        toTransfer);
+
+    // 上一帧/创建时背板停在 SHADER_READ_ONLY；blit 前必须先回到 TRANSFER_DST。
+    vk::ImageMemoryBarrier backdropWrite;
+    backdropWrite
+        .setImage(target.image)
+        .setSubresourceRange(range)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setOldLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+        .setNewLayout(vk::ImageLayout::eTransferDstOptimal)
+        .setSrcAccessMask(vk::AccessFlagBits::eShaderRead)
+        .setDstAccessMask(vk::AccessFlagBits::eTransferWrite);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eFragmentShader,
+        vk::PipelineStageFlagBits::eTransfer,
+        {},
+        {},
+        {},
+        backdropWrite);
+
+    vk::ImageBlit blit;
+    blit
+        .setSrcSubresource({vk::ImageAspectFlagBits::eColor, 0, 0, 1})
+        .setSrcOffsets({
+            vk::Offset3D(0, 0, 0),
+            vk::Offset3D(
+                static_cast<int32_t>(extent.width),
+                static_cast<int32_t>(extent.height),
+                1)})
+        .setDstSubresource({vk::ImageAspectFlagBits::eColor, 0, 0, 1})
+        .setDstOffsets({
+            vk::Offset3D(0, 0, 0),
+            vk::Offset3D(
+                static_cast<int32_t>(halfExtent.width),
+                static_cast<int32_t>(halfExtent.height),
+                1)});
+    commandBuffer.blitImage(
+        source,
+        vk::ImageLayout::eTransferSrcOptimal,
+        target.image,
+        vk::ImageLayout::eTransferDstOptimal,
+        blit,
+        vk::Filter::eLinear);
+
+    vk::ImageMemoryBarrier backdropReady;
+    backdropReady
+        .setImage(target.image)
+        .setSubresourceRange(range)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setOldLayout(vk::ImageLayout::eTransferDstOptimal)
+        .setNewLayout(vk::ImageLayout::eShaderReadOnlyOptimal)
+        .setSrcAccessMask(vk::AccessFlagBits::eTransferWrite)
+        .setDstAccessMask(vk::AccessFlagBits::eShaderRead);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eFragmentShader,
+        {},
+        {},
+        {},
+        backdropReady);
+
+    vk::ImageMemoryBarrier toPresent;
+    toPresent
+        .setImage(source)
+        .setSubresourceRange(range)
+        .setSrcQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setDstQueueFamilyIndex(VK_QUEUE_FAMILY_IGNORED)
+        .setOldLayout(vk::ImageLayout::eTransferSrcOptimal)
+        .setNewLayout(vk::ImageLayout::ePresentSrcKHR)
+        .setSrcAccessMask(vk::AccessFlagBits::eTransferRead)
+        .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite);
+    commandBuffer.pipelineBarrier(
+        vk::PipelineStageFlagBits::eTransfer,
+        vk::PipelineStageFlagBits::eColorAttachmentOutput,
+        {},
+        {},
+        {},
+        toPresent);
+}
+
+void UiOverlayRendererVulkan::DrawGlass(
+    vk::CommandBuffer commandBuffer,
+    uint32_t swapchainImageIndex,
+    const UiRenderSnapshot& snapshot)
+{
+    if (!glassPipeline || snapshot.glassRects.empty() ||
+        swapchainImageIndex >= glassTargets.size())
+    {
+        return;
+    }
+    struct GlassPushConstants
+    {
+        float rectA[4] = {0, 0, 0, 0};
+        float rectB[4] = {0, 0, 0, 0};
+        float params[4] = {16, 16, 1, 1};
+        // 背板是半分辨率，9 texel 约等于屏幕 18px，匹配展示规范。
+        float blur[4] = {9.0f, 0, 0, 0};
+    } push;
+    for (size_t i = 0; i < snapshot.glassRects.size() && i < 2; ++i)
+    {
+        const UiGlassRect& rect = snapshot.glassRects[i];
+        float* target = i == 0 ? push.rectA : push.rectB;
+        target[0] = rect.x;
+        target[1] = rect.y;
+        target[2] = rect.width;
+        target[3] = rect.height;
+        push.params[i] = rect.cornerRadius;
+    }
+    push.params[2] = static_cast<float>(snapshot.viewportWidth);
+    push.params[3] = static_cast<float>(snapshot.viewportHeight);
+
+    commandBuffer.bindPipeline(vk::PipelineBindPoint::eGraphics, glassPipeline);
+    commandBuffer.bindDescriptorSets(
+        vk::PipelineBindPoint::eGraphics,
+        glassPipelineLayout,
+        0,
+        glassTargets[swapchainImageIndex].descriptorSet,
+        {});
+    commandBuffer.pushConstants(
+        glassPipelineLayout,
+        vk::ShaderStageFlagBits::eFragment,
+        0,
+        sizeof(push),
+        &push);
+    commandBuffer.draw(3, 1, 0, 0);
 }
 
 void UiOverlayRendererVulkan::CreateRenderPassAndFramebuffers()

@@ -670,6 +670,18 @@
                 "cone_angle_inner": {
                     "type": "number"
                 },
+                "shadow": {
+                    "oneOf": [
+                        {"type": "boolean"},
+                        {
+                            "type": "object",
+                            "properties": {
+                                "castShadows": {"type": "boolean"},
+                                "bias": {"type": "number", "minimum": 0, "maximum": 1000}
+                            }
+                        }
+                    ]
+                },
                 "intensityUnit": {
                     "type": "string",
                     "enum": [

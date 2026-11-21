@@ -203,6 +203,10 @@ void intersectTriangle(const Triangle& triangle, Ray ray, double roughness, Hit&
     hit.geometricNormal = geometric;
     hit.dpdu = triangle.dpdu;
     hit.dpdv = triangle.dpdv;
+    hit.tangent = triangle.tangents[0] * (1.0 - u - v) +
+        triangle.tangents[1] * u + triangle.tangents[2] * v;
+    hit.tangentSign = triangle.tangentSigns[0] * (1.0 - u - v) +
+        triangle.tangentSigns[1] * u + triangle.tangentSigns[2] * v;
     hit.uv = {triangle.uv[0].x * (1.0 - u - v) +
                   triangle.uv[1].x * u + triangle.uv[2].x * v,
               triangle.uv[0].y * (1.0 - u - v) +
@@ -261,7 +265,35 @@ void IntersectInstance(const MeshInstance& instance, Ray ray, Hit& hit)
     candidate.normal = shading;
     candidate.dpdu = ApplyBasis(instance.localToWorld, candidate.dpdu);
     candidate.dpdv = ApplyBasis(instance.localToWorld, candidate.dpdv);
+    candidate.tangent = ApplyBasis(instance.localToWorld, candidate.tangent);
+    if (length(candidate.tangent) > 1e-10)
+        candidate.tangent = normalize(candidate.tangent);
+    if (determinant < 0) candidate.tangentSign = -candidate.tangentSign;
     candidate.instance = &instance;
+    if (instance.normalMap)
+    {
+        const Vec3 encoded = sampleColorMap(*instance.normalMap, candidate.uv);
+        const Vec3 localNormal = encoded * 2.0 - Vec3{1, 1, 1};
+        Vec3 tangent = length(candidate.tangent) > 1e-10
+            ? candidate.tangent : candidate.dpdu - shading * dot(shading, candidate.dpdu);
+        if (length(tangent) > 1e-10)
+        {
+            tangent = normalize(tangent);
+            Vec3 bitangent = cross(shading, tangent);
+            if (length(candidate.tangent) > 1e-10)
+                bitangent = bitangent * candidate.tangentSign;
+            else if (dot(bitangent, candidate.dpdv) < 0) bitangent = -bitangent;
+            const Vec3 mapped = tangent * localNormal.x +
+                bitangent * localNormal.y + shading * localNormal.z;
+            if (length(mapped) > 1e-10)
+                candidate.normal = normalize(mapped);
+        }
+    }
+    if (instance.useImportedTangents)
+    {
+        candidate.dpdu = candidate.tangent;
+        candidate.dpdv = cross(candidate.normal, candidate.tangent) * candidate.tangentSign;
+    }
     hit = candidate;
 }
 } // namespace
@@ -287,15 +319,39 @@ Vec3 evaluateBsdf(const AlbedoTable& albedo, Hit hit, Vec3 view, Vec3 light)
     const Vec3 sampledSheen = instance.sheenColorMap
         ? instance.sheenColor * sampleColorMap(*instance.sheenColorMap, hit.uv)
         : instance.sheenColor;
+    const Vec3 clothTexture = instance.baseColorMap
+        ? sampleColorMap(*instance.baseColorMap, hit.uv) : Vec3{1, 1, 1};
     if (dot(hit.normal, view) <= 0.0 || dot(hit.normal, light) <= 0.0) return {};
     if (instance.model == SurfaceModel::Lambert)
         return sampledBase / kPi;
     if (instance.model == SurfaceModel::AshikhminVelvet)
-        return velvetBrdf(*instance.velvet, hit.normal, view, light);
-    if (instance.model == SurfaceModel::AshikhminSatin)
-        return evaluateSatin(*instance.satin, hit, view, light);
-    if (instance.model == SurfaceModel::AshikhminSlantedVelvet)
-        return evaluateSlantedVelvet(*instance.slantedVelvet, hit, view, light);
+    {
+        // 颜色贴图只调制论文漫反射补全，不能连同介质镜面瓣一起染色。
+        const Vec3 specular{1, 1, 1};
+        const double lobe = velvetSpecular(*instance.velvet, hit.normal, view, light);
+        return (velvetBrdf(*instance.velvet, hit.normal, view, light) -
+            specular * lobe) * clothTexture + instance.clothSpecularTint * lobe;
+    }
+    if (instance.model == SurfaceModel::AshikhminSatin ||
+        instance.model == SurfaceModel::AshikhminSlantedVelvet)
+    {
+        const double rotation = instance.fiberRotationDegrees * kPi / 180.0;
+        const Vec3 base = normalize(hit.dpdu - hit.normal * dot(hit.normal, hit.dpdu));
+        const Vec3 transverse = base * std::cos(rotation) +
+            cross(hit.normal, base) * std::sin(rotation);
+        const Vec3 fiber = cross(hit.normal, transverse);
+        const Vec3 localView{dot(view, transverse), dot(view, fiber), dot(view, hit.normal)};
+        const Vec3 localLight{dot(light, transverse), dot(light, fiber), dot(light, hit.normal)};
+        const bool satin = instance.model == SurfaceModel::AshikhminSatin;
+        const double lobe = satin
+            ? satinSpecular(*instance.satin, localView, localLight)
+            : slantedVelvetSpecular(*instance.slantedVelvet, localView, localLight);
+        const Vec3 response = satin
+            ? satinBrdf(*instance.satin, localView, localLight)
+            : slantedVelvetBrdf(*instance.slantedVelvet, localView, localLight);
+        return (response - Vec3{lobe, lobe, lobe}) * clothTexture +
+            instance.clothSpecularTint * lobe;
+    }
     const double eV = albedo.sample(dot(hit.normal, view), hit.roughness);
     const double eL = albedo.sample(dot(hit.normal, light), hit.roughness);
     const double removed = std::max(eV, eL);
@@ -313,6 +369,40 @@ Vec3 directLight(const Scene& scene, const AlbedoTable& albedo, Hit hit, Vec3 vi
     // Lambert/Sheen 为 f*cos/pdf，不能按命中材质切换灯光测度。
     if (scene.hasAreaEmitter)
         return directFabricAreaLight(scene, albedo, hit, view, lightSamples, rng);
+    if (scene.spotLight)
+    {
+        const Vec3 delta = scene.spotPosition - hit.position;
+        const double distance = length(delta);
+        if (distance <= kEpsilon) return {};
+        const Vec3 direction = delta / distance;
+        const double angle = std::acos(std::clamp(
+            dot(-direction, scene.spotDirection), -1.0, 1.0));
+        if (angle >= scene.spotOuter) return {};
+        const double blend = scene.spotOuter > scene.spotInner
+            ? std::clamp((scene.spotOuter - angle) /
+                (scene.spotOuter - scene.spotInner), 0.0, 1.0) : 1.0;
+        double attenuation = blend * blend * (3.0 - 2.0 * blend);
+        if (scene.spotRadius > 0)
+        {
+            const double ratio = distance * distance /
+                (scene.spotRadius * scene.spotRadius);
+            const double window = std::max(0.0, 1.0 - ratio * ratio);
+            attenuation *= window * window;
+        }
+        const double cosine = dot(hit.normal, direction);
+        const double geometricSide = dot(hit.geometricNormal, direction);
+        if (!yarn && (cosine <= 0 || geometricSide <= 0)) return {};
+        Hit blocker;
+        const Vec3 offset = hit.geometricNormal *
+            (geometricSide < 0 ? -kEpsilon : kEpsilon);
+        if (intersect(scene, {hit.position + offset, direction},
+                      distance - kEpsilon, blocker)) return {};
+        const double irradiance = scene.spotCandela * 10000.0 * attenuation /
+            (distance * distance + 1.0);
+        return (yarn ? microcylinderResponse(hit, view, direction, *fabric)
+                     : evaluateBsdf(albedo, hit, view, direction) * cosine) *
+            scene.spotColor * irradiance;
+    }
     if (!scene.directionalLight) return {};
     const double noL = std::max(0.0, dot(hit.normal, scene.toLight));
     const double geometricSide = dot(hit.geometricNormal, scene.toLight);

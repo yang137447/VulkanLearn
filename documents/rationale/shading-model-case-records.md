@@ -1261,3 +1261,60 @@ Cloth 总览 `/rendering/materials/shading-models/cloth-sheen/` 保留案例入�
 | **导出验证工具** | `tool/validation/offline/verify_ashikhmin_fig13.py BLACK_EXPORT RED_EXPORT`：复用 `verify_vl_export` 检查 PFM/AOV/非空出图，比较冻结 manifest 的相机、光、几何、变换、背景、积分与显示设置；去掉染色后材质必须相同。零反弹白光下，红黑每通道差值除以各自 `Δrho_d` 必须恢复同一 diffuse kernel（误差 `<1e-4`），防止偷偷改变高光或曝光；验证背景带无投影及黑布左侧平均显示亮度高于右侧，并输出同裁切、无调色 PNG/JSON |
 | **最终导出证据** | 两臂均为 1280×720 / 32 spp / 0 bounces / exposure=1；黑色 `Generated/OfflineRenderer/SC_paper_case_ashikhmin_premoze_shirley_2000_fig13_slanted_velvet_black-596e178d0f57-32/`，红色对应 `_red-c09ff63c2dde-32/`，实际 World 加载及正常关闭通过。验证工具完整通过：相机/主光轴夹角 `0.02667°`，线性 diffuse kernel 最大通道误差 `9.68e-6`，黑布左/右平均显示亮度 `42.16/14.86`，背景边带无残留投影。对照图与 JSON：`Generated/OfflineRenderer/Comparisons/ashikhmin2000_fig13_slanted_velvet_black_red.*`；统一裁切 `[420,170,860,690]`，未调色。这些只证明本地左右方向性与同条件染色，不代表论文原图像素标定 |
 | **差异与状态** | ◐ 数值闭包与本地黑/红场景已实现；球顶布面与论文平桌几何不同，颜色、UV 方位、机位、灯位和显示映射是本地选择，不宣称 Fig. 13 像素级复刻。保留论文简单漫反射近似，未模拟纤维间多次反弹染色，不人为把红布右侧涂黑；也没有添加专用各向异性重要性采样或恢复原论文资产 |
+
+### 2026-11-19：三种离线闭包重新建立论文观察条件
+
+- 直接复核论文 §6 开头及 §6.3/6.4：应用图使用单个远处小光源，无间接光。
+  Fig.11 两臂几何相同；Fig.13 相机与光源方向几乎平行，用于呈现倾斜纤维的方向不对称。
+  本轮不以人台影棚的 GI、白色贴图或可见绒毛作为论文验收条件。
+- 复用四份现有 VL 场景、原 `Cloth.fbx`、材质分布和本地方位；
+  64 spp、0 bounces、无贴图/环境。当前方向光资产为 5000 lux，
+  相机 EV100=0，显示额外倍率统一为 0.0012，解析后曝光约 0.001。
+  因而 `5000 × 0.001 = 5`，保持迁移前本地记录的 `5 × 1` 显示参照。
+  该换算不恢复原论文的物理测光值，也没有逐材质调亮。
+- 完整导出摘要：Satin `5a58e83c4065`、Velvet `f7d53a447bf6`、
+  斜绒黑 `34d50c08f1b9`、斜绒红 `0c194efd8e63`，均为 64 spp。
+  输出位于资源根 `Generated/OfflineRenderer/`，完整路径由
+  `artifacts/ashikhmin-paper/results.json` 记录。
+- Fig.11 新增同条件验证脚本 `tool/validation/offline/verify_ashikhmin_fig11.py`：
+  校验光照、相机、几何摘要、TRS、曝光、分布参数和反射率，再做统一裁切；
+  无单独调色，Satin 显示灰度 P95=97、Velvet P95=50。此统计是当前局部模型的
+  特征检查，不是与论文不同几何间的像素误差门槛。
+- Fig.13 验证通过：相机/光轴夹角 0.02667°；黑布左/右显示平均值
+  42.1925/14.8950。红黑差值恢复的漫反射核按入射照度归一化后，
+  最大通道偏差约 2.03e-6；归一化使门槛不依赖资产光强的单位迁移。
+- 入口 `tool/validation/offline/render_ashikhmin_paper_cases.py` 调用现有 VL
+  渲染与导出流程，结束后运行两组外观/输入验证。截图拼图
+  `artifacts/ashikhmin-paper/four_cloth_current.png` 只做相同裁切与排版。
+- 当前可复现三种模型的差异：Satin 窄亮带、Velvet 柔暗掠射响应、
+  斜绒左亮右暗。平桌台面与褶皱几何、原图灯位/机位/染色与显示标定仍未恢复，
+  所以状态保持部分复现；本轮没有修改 BRDF 公式或母材质默认参数。
+
+### 2026-11-19：CPU/GPU 显示统一后的默认参数对照
+
+- 用户要求先统一显示再判断 runtime。离线视口 shader 与 PPM 导出均改为
+  实时 mode 3 的 ACES fitted 系数，sRGB 仅编码一次；PFM 仍为未曝光线性 film。
+  历史 Reinhard 证据保留，不把新旧预览亮度当作 BRDF 回归。
+- 四份原离线论文场景默认 EV100 从 0 改为 9；离线手动倍率默认 1，
+  曝光系数约 0.001627604。Velvet 实时预览原先 EV8、额外点光和
+  rho_d=0.006 的特殊调整改为 EV9、单方向光和 rho_d=0.002。
+  新脚本 `compare_ashikhmin_runtime.py` 冻结四组配对输入，
+  相同网格/TRS/相机/反射率/光照，无环境/贴图，CPU 0 bounces，
+  GPU Bloom=0。纤维方向统一使用导入切线；不通过修改分布修饰观感。
+- 1280×720 / CPU 64 spp 导出摘要：Satin `82f664d7e8a3`、
+  Velvet `ccc9c36df97b`、黑斜绒 `3911c9c8e56a`、红斜绒 `9af85f3064bc`。
+  拼图/JSON 位于 `artifacts/cloth-parity/comparison.*`。
+- 同一 `[420,170,860,690]` 裁切，取两幅图分别与自身背景相差超过
+  3/255 的共同布面像素（92465 个），每通道 8-bit 绝对差的均值/P95：
+  Satin 2.774/4，Velvet 2.119/2，黑斜绒 1.964/1，红斜绒 2.160/2。
+  这是显示空间外观统计，不是完整 BRDF 数值误差，也不是论文像素复现门槛；
+  共同 mask 排除了轮廓不重合像素，不能拿它证明轮廓或 CSM 正确。
+- 实际截图中窄亮带、Velvet 暗主体、斜绒左右不对称均与离线主要特征一致。
+  细褶皱、轮廓与局部阴影仍有差异；LUT 离散、插值及 CSM/精确射线
+  可见性尚未逐项隔离。结论限定为当前默认参数、单光源、无贴图场景。
+- ACES 导出新增测试以 0.18/1/4 线性样值检查显示输出，并确认 film 未改写；
+  coordinator 24 项通过。Fig.11 同条件及 Fig.13 染色/方向性检查通过，
+  新显示下黑斜绒左/右平均值 53.59/13.40。
+- runtime 截图运行仍复现 `vkDestroyDescriptorPool` 的在途引用生命周期校验错误，
+  包括 Satin、斜绒和原始 Velvet 预览的运行日志。既有会话中已观察到该错误；
+  此轮仅建立外观对照，未修复该问题，不能据此宣布 Vulkan 全路径验收通过。

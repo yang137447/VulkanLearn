@@ -195,6 +195,65 @@ namespace
 
         const auto& parameters = effectiveMaterialInstanceJson.at("parameters");
         const auto& macros = effectiveMaterialInstanceJson.at("macros");
+        const bool ashikhminCloth =
+            macros.contains("VL_CLOTH_CLOSURE_SATIN") ||
+            macros.contains("VL_CLOTH_CLOSURE_VELVET") ||
+            macros.contains("VL_CLOTH_CLOSURE_SLANTED_VELVET");
+        if (ashikhminCloth)
+        {
+            if (!parameters.contains("u_clothSheenColor") ||
+                !parameters.contains("u_f0") ||
+                !parameters.contains("u_fiberRotationDegrees"))
+            {
+                throw std::runtime_error(
+                    "Ashikhmin Cloth effective parameters are incomplete: " +
+                    std::string(materialInstancePath));
+            }
+            const auto& sheenColor = parameters.at("u_clothSheenColor");
+            if (!sheenColor.is_array() || sheenColor.size() != 4)
+            {
+                throw std::runtime_error(
+                    "Ashikhmin Cloth specular tint must be a four-component linear RGBA value: " +
+                    std::string(materialInstancePath));
+            }
+            for (const auto& component : sheenColor)
+            {
+                if (!IsFiniteClothValue(component) ||
+                    component.get<double>() < 0.0 ||
+                    component.get<double>() > 1.0)
+                {
+                    throw std::runtime_error(
+                        "Ashikhmin Cloth specular tint must be finite and within [0, 1]: " +
+                        std::string(materialInstancePath));
+                }
+            }
+            if (sheenColor[3].get<double>() != 1.0)
+            {
+                throw std::runtime_error(
+                    "Ashikhmin Cloth specular tint alpha is reserved and must remain 1: " +
+                    std::string(materialInstancePath));
+            }
+            const auto& f0 = parameters.at("u_f0");
+            if (!IsFiniteClothValue(f0) ||
+                f0.get<double>() < 0.0 ||
+                f0.get<double>() > 1.0)
+            {
+                throw std::runtime_error(
+                    "Ashikhmin Cloth f0 must be within [0, 1]: " +
+                    std::string(materialInstancePath));
+            }
+            const auto& fiberRotation =
+                parameters.at("u_fiberRotationDegrees");
+            if (!IsFiniteClothValue(fiberRotation) ||
+                fiberRotation.get<double>() < -360.0 ||
+                fiberRotation.get<double>() > 360.0)
+            {
+                throw std::runtime_error(
+                    "Ashikhmin Cloth fiber rotation must be within [-360, 360]: " +
+                    std::string(materialInstancePath));
+            }
+            return;
+        }
         if (!parameters.contains("u_clothSheenColor") ||
             !parameters.contains("u_clothSheenRoughness") ||
             !parameters.contains("u_clothAnisotropy") ||

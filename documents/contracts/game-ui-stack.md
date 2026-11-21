@@ -40,6 +40,18 @@ viewport modes and offline controls belong to the editor workspace; runtime
 commands remain available independently of the deleted page.
 Destructive validation workflows remain console/launch operations, not buttons.
 
+### 磨砂玻璃背板
+
+展示关卡的面板（`#sc-panel` / `#sc-compare`）可以在背后显示场景的模糊拷贝：
+
+- GT 在 RmlUi 布局完成后从 DOM 取两个面板的 border box，随
+  `UiRenderSnapshot::glassRects` 冻结给 RT；RT 不读 DOM，面板关闭时矩形列表为空。
+- RT 在 UI render pass 之前把当前 swapchain 内容 blit 到每 swapchain image 一张
+  半分辨率 `uiGlass` 图像，再在 pass 内用 `shader/glsl/uiGlass.vert/frag` 画圆角矩形，
+  在矩形内做 9-tap 模糊。swapchain 不能边写边读，所以这张离屏拷贝是必须的。
+- 矩形为空时既不 blit 也不 draw；`sceneViewportEnabled` 的编辑器 docked 路径不启用。
+- 颜色与合成分辨率一致，不经过第二次 tone mapping；圆角 16dp，与面板 RCSS 一致。
+
 `ui/editor-workspace.rml` and `.rcss` define the default workspace:
 
 - Top: command toolbar.

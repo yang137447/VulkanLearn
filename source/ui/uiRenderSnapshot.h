@@ -201,6 +201,17 @@ struct UiDrawCommand
     UiBlendMode blendMode = UiBlendMode::StraightAlpha;
 };
 
+// 磨砂玻璃背板：GT 按 RmlUi 布局冻结的屏幕矩形（左上原点，像素）。
+// RT 只按这些矩形做场景模糊，不读 DOM；面板关闭时列表为空。
+struct UiGlassRect
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float width = 0.0f;
+    float height = 0.0f;
+    float cornerRadius = 16.0f;
+};
+
 struct UiTextureSnapshot
 {
     UiTextureId id = 0;
@@ -228,6 +239,8 @@ struct UiRenderSnapshot
     std::vector<uint32_t> indices;
     std::vector<UiDrawCommand> drawCommands;
     std::vector<UiTextureSnapshot> textures;
+    // 最多两个（参数面板 + 对比卡片）；为空表示不做磨砂背板。
+    std::vector<UiGlassRect> glassRects;
 };
 
 } // namespace VL
