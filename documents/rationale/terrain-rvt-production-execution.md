@@ -420,3 +420,80 @@ quality 的 SetDepthOwnerResolver 当前只搜索到声明/定义，尚无调用
 本轮整树 `py -3 tool/validate-docs.py` exit0，149条路由行、94条生成规则、
 712个树内相对链接通过；224个出仓知识库链接仅提示需主checkout核对，
 不宣称本轮已验证这些外部路径。最终再次运行的结果由任务回复给出。
+
+## 追加：R14 最终包运行、53 机位与性能/Editor 实测（2026-11-22）
+
+本轮在 **R14 冻结核心**（`core-native-r14-lit-r1/checkpoint.json`，SHA256
+`fffc42482f7bbedda03b5817c0ebf63a42952e148ae348d200ae7fbcfa977c0d`，1116 源文件
+manifest `e6e00918…103489`）与两份同版本最终包上执行。P0 冻结文件未改。
+主线程负责窗口与整合，运行/审计由未参与该子项实现的 agent 执行。
+
+### 环境与工具修正（不改变门槛）
+
+- 本机无 `pwsh`（只有 Windows PowerShell 5.1），所有依赖 `console_inject.ps1` 的相机/截图/
+  `quit`/`loadworld` 注入都会 `FileNotFoundError`。用 `powershell.exe` 副本作为
+  `final-delivery/bin/pwsh.exe` 加入 PATH 后恢复；这是测试环境前提。
+- `tool/validation/terrain/rvt_formal_perf.py` 修正四处证据汇编缺陷（不改阈值）：
+  R13/R14 checkpoint 的 `build-input-*.json` 是 120 项而工具只接受 41 项；
+  `incomplete` 对 dict problem 直接 `set()` 崩溃；相机日志实际为
+  `position=(x, y, z), forward=(…)` 而旧正则从未匹配；`execute` 会按 `evidenceRoot`
+  重拼 P0 命令而 `fixed_route_window` 读 plan 的 `reference`，导致收尾帧延长时二者分叉。
+- 正式性能必须在锁定时钟下测量：未锁时 GPU 在 210–1800 MHz 间漂移，同一包的
+  p50 会翻倍以上；P0 的 p50 只在 1800 MHz 量级可复现。本轮用 `nvidia-smi -lgc 1800,1800`
+  测量、结束后 `-rgc` 恢复。
+
+### 已实际通过的子项
+
+- **CoverageAtlas / worker2 / 53 机位全岛巡游**：`final-delivery/s2-cov-w2/cov-w2-batch01..07`，
+  7 批全部 exit0、clean teardown、`packageUnchanged=true`、安装闭包 native verify exit0。
+  53/53 ready；最大到达→就绪 6413.4 ms（`center_1_2`），最小有效比例 99.512%；
+  `bias=0`、`unresolved=0`、`incorrectIdentity=0`、`rootOnly=0`、`uninitialized=0`。
+  独立审计（未参与运行）逐份重解码 563 份 TVQ1 raw、对照 553 条 native STATE，
+  0 数值不符、53/53 ACCEPT，见 `final-delivery/s2-audit/independent-audit.md`。
+- **LocalLayerArray / worker2 / 53 机位全岛巡游**：`final-delivery/s3-loc-w2/loc-w2-batch01..07`，
+  53/53 ready，最小有效比例 99.768%，最大 6436.9 ms，其余条件同上。双权重模式均实跑通过。
+- **worker1 核心/瞬移**：Coverage 与 Local 的 `core`（5 机位）与 `teleport`（4 机位）均 ready；
+  `mid` 在 worker1 下 6.6–7.5 s 收敛，仍 <10 s。
+- **P4 Editor 27 步矩阵**：R14 ABI 适配器重建（`p4-adapter-r14/editor_s4.exe`
+  SHA256 `e43d0b6e…f7fba`），修正资源根后 27/27 步全部执行、54/54 surface 快照、
+  27/27 BMP、child exit0（422 s）。
+
+### 未通过 / 未关闭（保留原始失败，不修饰）
+
+- **正式性能 FAIL**（`final-delivery/s5-formal-performance-record.md`）：
+  同一 P0 九段路线、锁 1800 MHz、1088 帧测量窗口、35/35 相机确认。
+  steady GPU pass sum p99 **12.589 ms** vs 冻结 4.618；geometry+TES p99 **9.060 ms**
+  vs 3.754；CPU interval p99（含 4 Hz quality 回读）**77.752 ms** vs 72.105；p95 40.6 通过。
+  p50 2.545 ms 与 P0 2.059 ms 同量级；尖峰集中在两段近地机位的 6 帧簇
+  （geometry 9.1 ms、feedback 2.7 ms），与 quality 捕获无关，LOD 计数与 TES 宏与 P0 一致。
+  启动 18.6 s、private 5.50 GB、WDDM 5.07 GB 均达标。**不得靠降 tessellation/质量或改门槛通过**。
+- **连续移动 FAIL**：`s3-w1-cov-continuous` 在 `tile00_near→near` 直线插值的中段
+  `QualityGpu visible/resolved counters differ or no visible terrain`（相机穿过山体/地下，
+  0 可见）。该路线不是贴地路径，属测试路线缺陷；需要一条真实贴地移动路线才能验收“快速移动”，
+  不能用瞬移结果代替。
+- **P4 四个阻断**（`final-delivery/p4-adapter-r14-run-report.md`）：
+  A) 热重载重新编译 debug SPIR-V，与 Cook 时 debug artifact 永不相等，而
+  `ValidateProductionGenerator` 连 debug 产物一起比较 → `reload_inflight`/
+  `old_world_action`/`reloaded` 失败、World generation 不前进；
+  B) save_b 的 height 保存被上一次 sculpt 失败重试阻断（paint `.vlpaint` 已写）；
+  C) `paint_undo`/`paint_redo`/`paint_pending_cancel`/`paint_cancel` 4 张截图落在
+  重烘窗口内、近黑（mean byte error 81.6）；
+  D) `native-refresh.jsonl` 无发射方，12 类 native 事件仍缺。
+- **lit ROI / TES 视觉门禁未实现**：R14 已链接 native lit capture（`ee90b975…`），
+  但 lit case（`native-terrain-lit-replay-v1`）、固定 masks、ROI 实际 slot footprint、
+  atlas format/capacity dump、独立参考页绑定和 candidate-vs-actual 校准均无生产者；
+  见 `final-delivery/lit-gate-plan.md`。TES 单项仍沿用 R11r4 已接受的 0.003735 R16。
+- **P1/P2 负例**：`rvtfault` 5/6 hook 已有真实入口（仅 candidate_retention 解析后
+  `pendinghookmissing`），scenario fixtures 已产出并 CPU plan 通过 23/24，
+  但 `run_rvt_case.verify_case` 要求的 `[RVT_EVIDENCE]` 事件族无发射方，
+  因此任何 execute 都只会得到 `incomplete`；尚未产生可签署的 P1/P2 负例收据。
+- **readonly 安装 / 文件读取轨迹 / 默认入口切换 / 19.42 GB 清退全部未执行**：
+  `VukanLearnResources` 根没有 `VT/worldV2/...` 发布与匹配 shader 闭包，
+  直接把 `config.json -> initScene` 指向 V2 变体会让仓库默认入口立即因
+  publication identity 失败；清退前门禁 D01–D10 仍为 false，旧 19.42 GB 保留。
+
+### 结论
+
+P0、53 机位双权重画质/收敛、启动与内存已经实测成立；**正式性能、连续移动、
+P1/P2 负例、P4 完成矩阵、lit/TES 视觉门禁、readonly 取证与旧路径清退仍未关闭**。
+整 P1–P5 继续 pending，不因本轮 53 机位或 Editor 27 步执行而宣告完成。

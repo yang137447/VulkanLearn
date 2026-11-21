@@ -681,7 +681,12 @@ def bind_package(package, receipt_path, mode, output):
     cmake_before, cmake_after = read(archive / "build-input-before.json"), read(archive / "build-input-after.json")
     require(before == after and len(before) == receipt["frozenSourceCount"] == checkpoint["sourceFileCount"]
             and checkpoint["sourceBeforeAfterUnchanged"] is True, "Frozen core source lock differs")
-    require(cmake_before == cmake_after and len(cmake_before) == checkpoint["additionalCmakeInputCount"]
+    # 冻结核心归档有两种记录口径：R9/R10 的 build-input-*.json 只保存
+    # additionalCmakeInputCount 个增量 CMake 输入；R13/R14 保存全部
+    # buildInputCount 个构建输入（含 CMake 与源码列表）。两者都必须 before==after，
+    # 因此按 checkpoint 实际声明的 total 校验，不能把 120 项误判成缺 79 项。
+    expected_build_inputs = checkpoint.get("buildInputCount") or checkpoint["additionalCmakeInputCount"]
+    require(cmake_before == cmake_after and len(cmake_before) == expected_build_inputs
             and checkpoint["additionalCmakeInputsBeforeAfterUnchanged"] is True, "Frozen CMake lock differs")
     inventory_path = receipt_path.parent / "inventory.json"
     expected = json_value(inventory_path)
@@ -763,14 +768,16 @@ def bind_package(package, receipt_path, mode, output):
 def camera_acknowledgements(directory, expected):
     text = "".join((directory / name).read_text(encoding="utf-8") for name in ("runtime.log", "stdout.log")
                    if (directory / name).is_file())
-    pattern = re.compile(r"Camera pose set: position=([^,\n]+), forward=([^\n]+)")
-    def parse_vector(value):
-        values = re.findall(r"[-+]?\d+(?:\.\d*)?(?:[eE][-+]?\d+)?", value)
-        require(len(values) == 3, "Actual camera state vector malformed")
-        return [float(value) for value in values]
-    observed = [{"cameraPosition": parse_vector(position), "cameraLookAt": [
-        first + second for first, second in zip(parse_vector(position), parse_vector(forward))]}
-        for position, forward in pattern.findall(text)]
+    # 实际引擎日志形如 "position=(x, y, z), forward=(x, y, z)"；旧正则假设无括号且用逗号分隔，
+    # 导致 P0/当前构建的真实日志一条都匹配不到。这里同时接受带括号与旧的无括号形式。
+    pattern = re.compile(
+        r"Camera pose set: position=\(?\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*\)?"
+        r",\s*forward=\(?\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*,\s*([-+0-9.eE]+)\s*\)?")
+    observed = [{"cameraPosition": [float(values[0]), float(values[1]), float(values[2])],
+                 "cameraLookAt": [float(values[0]) + float(values[3]),
+                                  float(values[1]) + float(values[4]),
+                                  float(values[2]) + float(values[5])]}
+                for values in pattern.findall(text)]
     from rvt_full_tour import camera_matches
     require(len(observed) == len(expected), "Actual camera acknowledgements do not cover entire fixed trace")
     for actual, command in zip(observed, expected):
@@ -1187,9 +1194,14 @@ def analyze(options, config):
     else:
         problems.append("No matched existing initial CLOCK + PRESENT.loading_released interactive milestone")
     failures = compare(measurements, config["targets"])
+    # 各子分析器历史上返回字符串或结构体两种 problem；结构体不能直接进 set。
+    # 统一序列化为稳定 JSON 文本，既不丢信息也不因 unhashable 崩溃。
+    normalized_problems = sorted({
+        item if isinstance(item, str) else json.dumps(item, ensure_ascii=False, sort_keys=True)
+        for item in problems})
     return {"status": "failed" if failures or ledger_failures else "incomplete",
             "formalPerformancePassed": False, "failures": failures, "budgetFailures": ledger_failures,
-            "incomplete": sorted(set(problems)), "timing": result, "rawAuthority": authority,
+            "incomplete": normalized_problems, "timing": result, "rawAuthority": authority,
             "memory": memory_results, "ledgers": ledgers, "existingNativeFacts": facts,
             "nativeAccounting": accounting, "fixedNineTraceWindow": window, "boundCaptures": captures,
             "acceptanceScope": "Metric evidence only. FullP3 includes all53 poses/the two failed centers "
@@ -1237,7 +1249,9 @@ def execute(options, config):
     (output / "quality").mkdir()
     (output / "present").mkdir()
     save(output / "plan.json", plan)
-    reference = Path(config["evidenceRoot"]) / plan["cases"][options.case]["referenceRun"] / "command.json"
+    # 统一以 plan 中绑定的 case.reference 为唯一路线来源（fixed_route_window 也读这里），
+    # 避免 execute 自行按 evidenceRoot 重拼 P0 路径而在延长收尾帧时与窗口校验分叉。
+    reference = Path(plan["cases"][options.case]["reference"]["path"])
     argv = route_argv(reference, package, output, binding["scene"])
     from rvt_run_conditions import process_conditions, quiet_host_audit
     from runtime_stress import sampled_process
