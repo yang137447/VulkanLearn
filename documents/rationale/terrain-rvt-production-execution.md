@@ -521,3 +521,19 @@ P1/P2 负例、P4 完成矩阵、lit/TES 视觉门禁、readonly 取证与旧路
   实测 steady GPU p99 2.936 ms、geometry+TES p99 2.253 ms、p50 1.832 ms，均优于冻结门槛；
   启动 19.55 s、private 5.50 GB、WDDM 4.65 GB 通过。CPU p99 该 run 因 host audit 检出编译活动
   而无效，需静默窗口重跑。详见 `final-delivery/s5-formal-performance-record.md`。
+
+### 追加：正式性能门禁实测通过（静默 + 双时钟锁定，2026-11-22）
+
+- 条件补齐后，CoverageAtlas 与 LocalLayerArray 的 `warm-nine-section` 全部冻结指标通过：
+  GPU pass-sum p99 **2.934 / 2.635 ms**（上限 4.618）、geometry+TES p99 **2.257 / 1.946 ms**
+  （上限 3.754）、CPU p95 **39.39 / 39.73 ms**（上限 49.025）、CPU p99 **65.09 / 61.50 ms**
+  （上限 72.105）；启动 18.96/19.05 s、private 5.50/5.65 GB、WDDM 5.07/4.68 GB 均达标。
+- 每个 run 都有独立 nvidia-smi 采样：SM 1800、显存 9501 全程保持；host audit
+  `complete/busy=[]/errors=[]`，shader 60 hits/0 miss/0 compiled。
+- `cold-full-reload` 两模式：`loadworld` + 两次 World commit（gen1→2）、exit0；
+  private 7.35/7.68 GB、WDDM 6.17/6.47 GB；WDDM 47/48 有效样本 + 1 个终端不可用，无内部缺口。
+- 撤回旧结论：未锁显存时的双峰（geometry 1.47⇄4.66 ms、21 块、最长 60 帧）是显存频点切换，
+  不是 V2 TES/几何回归；锁定后同一包/路线 p99 2.93/2.62 ms。
+- 仍未证明：143 份 quality capture 的完整帧配对、whole-owner 分账、可选细页缓存冷热对比
+  （`fineDiskCache=disabled` 时该特性不存在）。
+- 记录：`final-delivery/s5-formal-performance-record.md`；独立复核：`final-delivery/s5-audit/`。
