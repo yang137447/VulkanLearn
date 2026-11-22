@@ -18,6 +18,7 @@
 #include "world/world.h"
 #include "sceneNode.h"
 #include "render/frame/terrainCompositedReadiness.h"
+#include "engine/frame/terrainLoadingGate.h"
 #include "core/runtimeEvidence.h"
 
 #include <algorithm>
@@ -27,6 +28,7 @@
 #include <filesystem>
 #include <fstream>
 #include <iostream>
+#include <limits>
 #include <map>
 #include <memory>
 #include <stdexcept>
@@ -69,6 +71,12 @@ public:
             interval = std::stoul(frames);
         if (const char* milliseconds = std::getenv("VL_EDITOR_S4_STAGE_MS"))
             minimumStageMs = std::stoul(milliseconds);
+        if (const char* wait = std::getenv("VL_EDITOR_S4_CAPTURE_WAIT_FRAMES"))
+        {
+            captureWaitLimit = std::stoul(wait);
+            if (captureWaitLimit < 30 || captureWaitLimit > 10000)
+                throw std::runtime_error("VL_EDITOR_S4_CAPTURE_WAIT_FRAMES must be 30..10000.");
+        }
         if (interval < 30 || interval > 3600)
             throw std::runtime_error("VL_EDITOR_S4_FRAMES must be 30..3600.");
         std::filesystem::create_directories(directory);
@@ -305,6 +313,16 @@ private:
         RuntimeEvidence::Record("EDITOR_S4_DIAGNOSTIC", event);
     }
 
+    // 截图节拍证据：记录等待的是引擎自己的地形加载门（IsTerrainWorldLoading ->
+    // TerrainCompositedQualityReady），而不是测试端猜测的黑帧阈值。
+    void CaptureEvent(nlohmann::json event)
+    {
+        event["monotonicMs"] = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now().time_since_epoch()).count();
+        std::cout << "EDITOR_S4_CAPTURE " << event.dump() << std::endl;
+        RuntimeEvidence::Record("EDITOR_S4_CAPTURE", event);
+    }
+
     void FinishDiagnostic(bool success, const std::string& reason)
     {
         DiagnosticEvent({{"event", "outcome"}, {"success", success}, {"reason", reason}});
@@ -471,6 +489,72 @@ private:
         diagnosticStarted = now;
     }
 
+    // 测试节拍：步骤末截图必须等到引擎自己的地形加载门释放后才请求。
+    // 旧 harness 在固定 phase=interval-8 直接请求，绘制快照可能仍是
+    // "Loading terrain..." 黑帧（门在渲染快照之后才在同一 GT tick 内释放），
+    // 因而 undo/redo 像素比较量到的是加载态，而不是地形状态。
+    // 返回 true 表示保持当前 phase 不前进（引擎继续 tick），等门/截图落盘。
+    bool HoldCaptureUntilReady(World& world, const std::string& label, size_t stage, size_t phase)
+    {
+        const size_t capturePhase = interval >= 40 ? interval - 8 : interval - 4;
+        if (phase < capturePhase)
+            return false;
+        if (captureStage != stage)
+        {
+            captureStage = stage;
+            captureState = CaptureState::Waiting;
+            captureStartedSerial = hostTickSerial;
+            captureFalseStreak = 0;
+        }
+        if (captureState == CaptureState::Complete)
+            return false;
+        const auto path = directory / (label + ".bmp");
+        const uint64_t waited = hostTickSerial - captureStartedSerial;
+        // 连续两帧观察到门已释放才请求：engineFramePhases 在本 tick 的
+        // editorHost->Tick 之前已用上一帧的 readiness 生成渲染快照，单帧
+        // false 仍可能对应上一帧的 loading 快照。
+        const bool loading = IsTerrainWorldLoading(&world, init.renderSystem->IsOfflineMode());
+        if (captureState == CaptureState::Waiting)
+        {
+            captureFalseStreak = loading ? 0 : captureFalseStreak + 1;
+            const bool expired = waited >= captureWaitLimit;
+            if ((!loading && captureFalseStreak >= 2) || expired)
+            {
+                init.renderSystem->RequestScreenshot(path.string());
+                captureState = CaptureState::Requested;
+                captureRequestedSerial = hostTickSerial;
+                CaptureEvent({{"event", "capture_requested"}, {"step", label},
+                    {"gate", "IsTerrainWorldLoading(world, offlineMode)"},
+                    {"worldGeneration", world.GetGeneration()}, {"phase", phase},
+                    {"hostTickSerial", hostTickSerial}, {"waitedFrames", waited},
+                    {"loading", loading}, {"expired", expired},
+                    {"waitLimitFrames", captureWaitLimit}});
+            }
+        }
+        if (captureState == CaptureState::Requested && CompleteScreenshot(path))
+        {
+            captureState = CaptureState::Complete;
+            CaptureEvent({{"event", "capture_complete"}, {"step", label},
+                {"worldGeneration", world.GetGeneration()}, {"phase", phase},
+                {"hostTickSerial", hostTickSerial}, {"waitedFrames", waited},
+                {"captureFrames", hostTickSerial - captureRequestedSerial}});
+            return false;
+        }
+        // 第二次兜底：请求已发出但文件迟迟不完整时不能永久占住阶段。
+        if (captureState == CaptureState::Requested && !CompleteScreenshot(path) &&
+            waited >= captureWaitLimit + 300)
+        {
+            CaptureEvent({{"event", "capture_timeout"}, {"step", label},
+                {"worldGeneration", world.GetGeneration()}, {"phase", phase},
+                {"hostTickSerial", hostTickSerial}, {"waitedFrames", waited},
+                {"screenshotComplete", false}, {"waitLimitFrames", captureWaitLimit}});
+            captureState = CaptureState::Complete;
+            return false;
+        }
+        // 只在本阶段最后一帧之后保持 phase；更早的等待仍在 180 帧预算内推进。
+        return phase + 1 >= interval;
+    }
+
     void TickV2(World& world)
     {
         const auto& steps = v2Plan.at("steps");
@@ -544,7 +628,7 @@ private:
                     const auto project = std::filesystem::path(CommonFunction::GetProjectPath());
                     if (!std::filesystem::is_regular_file(project / "editor-s4-v2-marker.json"))
                         throw std::runtime_error("Shader mutation requires a private V2 stage marker");
-                    const auto source = project / "shader/glsl/terrain/terrainCompositedBake.comp";
+                    const auto source = project / "shader/glsl/terrain/terrainCompositedBakeWorld.comp";
                     if (kind == "hotReload")
                     {
                         const auto bytes = ReadBinaryFile(source);
@@ -572,10 +656,9 @@ private:
                     throw std::runtime_error("Unknown V2 editor acceptance operation");
             }
         }
-        if (phase == interval - 8)
-            init.renderSystem->RequestScreenshot((directory / (label + ".bmp")).string());
-        if (phase == interval - 1)
+        if (phase == interval - 1 && snapshotStage != stage)
         {
+            snapshotStage = stage;
             const auto streaming = RendererResourceCache::GetInstance().GetTerrainStreaming();
             if (!streaming || !streaming->composited)
                 throw std::runtime_error("V2 evidence requires the actual composited Service");
@@ -614,6 +697,8 @@ private:
                 .dump() << std::endl;
             streaming->composited->ReportStats();
         }
+        if (HoldCaptureUntilReady(world, label, stage, phase))
+            return;
         ++tick;
     }
 
@@ -754,6 +839,15 @@ private:
     size_t tick = 0;
     size_t interval = 180;
     static constexpr size_t RapidStamps = 24;
+    // 截图等待：只影响截图请求的节拍，不改 180 帧/步、步骤顺序或渲染。
+    enum class CaptureState { Waiting, Requested, Complete };
+    CaptureState captureState = CaptureState::Complete;
+    size_t captureStage = std::numeric_limits<size_t>::max();
+    size_t snapshotStage = std::numeric_limits<size_t>::max();
+    uint64_t captureStartedSerial = 0;
+    uint64_t captureRequestedSerial = 0;
+    size_t captureFalseStreak = 0;
+    size_t captureWaitLimit = 600;
     uint64_t hostTickSerial = 0;
     int64_t minimumStageMs = 2000;
     bool done = false;
