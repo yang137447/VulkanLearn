@@ -63,7 +63,47 @@ def scenario(surface_a, surface_b, link):
             "fullCookPrerequisite": False, "requiresExistingValidatedV2CoarsePublication": True}
 
 
-def prepare(resource, scene, stage, worker, expected_surfaces):
+# E3: the layer-parameter plan drives a real TR edit through the editor asset API
+# (Console `editor <JSON>` facade: get_document -> modify -> validate -> save) and
+# then reloads the World, because a TR layer parameter is a production/catalog
+# input and must not be live-patched.
+LAYER_EDIT_VALUES = {"uvScale": 6.0, "noise": 0.35}
+
+
+def layer_plan(surface_a, surface_b, link, targets, values, prefix="layer_param_edit",
+               ids=("baseline", "layer_param_reload", "layer_param_reloaded")):
+    """One TR document edit per step, then a reload step.
+
+    A layer key is World-global and every TR that repeats the key must carry the
+    same parameters (TerrainLayerRegistry::LayersEquivalent), so a real layer edit
+    touches every TR that authors that layer; editing one tile would be rejected
+    by the World load with "Terrain layer key conflict".
+    """
+    plan = scenario(surface_a, surface_b, link)
+    steps = [{"id": ids[0], "operations": []}]
+    for index, (terrain_path, layer_name) in enumerate(targets):
+        changes = [{"field": field, "layerIndex": 1, "expectedLayerName": layer_name,
+                    "value": value} for field, value in values.items()]
+        steps.append({"id": f"{prefix}_{index:02d}", "operations": [{
+            "kind": "layerParameter", "assetPath": terrain_path,
+            "expectedLayerName": layer_name, "changes": changes, "reload": False,
+            "step": f"{prefix}_{index:02d}"}]})
+    steps.append({"id": ids[1], "operations": [{"kind": "reloadWorld"}]})
+    steps.append({"id": ids[2], "operations": []})
+    plan["steps"] = steps
+    plan["layerEdits"] = {"targets": len(targets), "values": values}
+    return plan
+
+
+def baseline_plan(surface_a, surface_b, link, ids=("baseline",)):
+    plan = scenario(surface_a, surface_b, link)
+    plan["steps"] = [{"id": name, "operations": []} for name in ids]
+    return plan
+
+
+
+def prepare(resource, scene, stage, worker, expected_surfaces, plan_kind="matrix",
+            shader_spv_root=None):
     resource = resource.resolve(strict=True)
     stage = stage.resolve()
     if stage.exists() or stage.is_relative_to(resource) or resource.is_relative_to(stage):
@@ -81,6 +121,24 @@ def prepare(resource, scene, stage, worker, expected_surfaces):
         raise ValueError("Cross-surface evidence requires explicit adjacent placements")
     link = recipe["adjacency"][0]
     plan = scenario(link["sourceSurfaceId"], link["targetSurfaceId"], link)
+    surface_tr = read_json(inside(resource, placements[link["sourceSurfaceId"]]["terrainPath"]))
+    layer_targets = [(item["terrainPath"], read_json(inside(resource, item["terrainPath"]))["layers"][1]["name"])
+                     for item in placements.values()]
+    if plan_kind == "layer":
+        plan = layer_plan(link["sourceSurfaceId"], link["targetSurfaceId"], link,
+                          layer_targets, LAYER_EDIT_VALUES)
+    elif plan_kind == "layer-restore":
+        restore_path = os.environ.get("VL_EDITOR_S4_RESTORE_VALUES")
+        if not restore_path:
+            raise ValueError("layer-restore needs VL_EDITOR_S4_RESTORE_VALUES (JSON of field:value)")
+        restore = json.loads(Path(restore_path).read_text(encoding="utf-8"))
+        plan = layer_plan(link["sourceSurfaceId"], link["targetSurfaceId"], link,
+                          layer_targets, restore, prefix="layer_param_restore",
+                          ids=("restore_before", "restore_reload", "restore_after"))
+    elif plan_kind == "baseline":
+        plan = baseline_plan(link["sourceSurfaceId"], link["targetSurfaceId"], link)
+    elif plan_kind != "matrix":
+        raise ValueError("Unknown plan kind: " + plan_kind)
     manifest = inside(resource, settings["packagePath"])
     publication = read_json(manifest)
     if publication.get("version") != 2:
@@ -117,9 +175,31 @@ def prepare(resource, scene, stage, worker, expected_surfaces):
     project = stage / "p"
     project.mkdir()
     stage_project(PROJECT, project, copied)
+    # 固定 SPV 闭包：stage 的 shader/spv 必须来自本次发布的游戏缓存归档，
+    # 而不是工作树里最近一次本地编译留下的输出。归档是私有只读输入，
+    # 这里只替换 stage 自己的副本，从不回写工作树。
+    spv_source = None
+    if shader_spv_root is not None:
+        spv_source = shader_spv_root.resolve(strict=True)
+        if not (spv_source / "shader-build-cache.json").is_file():
+            raise ValueError("SPV closure root lacks shader-build-cache.json")
+        shutil.rmtree(project / "shader/spv")
+        shutil.copytree(spv_source, project / "shader/spv", copy_function=shutil.copy2)
     write_json(project / "editor-s4-v2-marker.json", {"privateStage": str(stage)})
     plan.update(scene=scene, worker=worker, framesPerStep=180)
     write_json(stage / "plan.json", plan)
+    # 阶段元数据：不改 plan.json（27 步矩阵文件与已发布证据保持同形），
+    # 只把 E3/E7 需要的作者身份单列一份。
+    write_json(stage / "meta.json", {
+        "scene": scene,
+        "worker": worker,
+        "surfaceATerrainPath": placements[link["sourceSurfaceId"]]["terrainPath"],
+        "surfaceALayerName": surface_tr["layers"][1]["name"],
+        "layerTargets": [list(target) for target in layer_targets],
+        "packagePath": settings["packagePath"],
+        "resourceRoot": str(copied),
+        "projectRoot": str(project),
+        "planKind": plan_kind})
     inventory = {path.relative_to(resource).as_posix():
                  {"bytes": path.stat().st_size, "sha256": digest(path)} for path in sorted(files)}
     write_json(stage / "preparation.json", {
@@ -127,6 +207,11 @@ def prepare(resource, scene, stage, worker, expected_surfaces):
         "files": inventory, "optionalMissingOutputs": optional,
         "publicationManifest": settings["packagePath"],
         "publicationBefore": digest(copied / settings["packagePath"]),
+        "shaderSpvRoot": str(spv_source) if spv_source else None,
+        "shaderSpvClosure": ({"files": sum(1 for _ in spv_source.rglob("*") if _.is_file()),
+                              "cacheSha256": digest(spv_source / "shader-build-cache.json")}
+                             if spv_source else None),
+        "planKind": plan_kind,
         "rendererStarted": False, "cookStarted": False, "copyMethod": "copy2; no hardlinks",
         "worldSurfaceCount": len(world["terrains"]) if "terrains" in world else len(placements)})
     return plan
@@ -387,6 +472,10 @@ def main():
     preparer.add_argument("--stage", type=Path, required=True)
     preparer.add_argument("--worker", type=int, choices=(1, 2), default=2)
     preparer.add_argument("--expected-surfaces", type=int, default=16)
+    preparer.add_argument("--plan-kind", choices=("matrix", "layer", "layer-restore", "baseline"),
+                          default="matrix")
+    preparer.add_argument("--shader-spv-root", type=Path, default=None,
+                          help="Published shader/spv closure copied into the private stage")
     runner = commands.add_parser("run", help="Only after Cicero finishes and coordinator releases GPU window")
     runner.add_argument("--stage", type=Path, required=True)
     runner.add_argument("--exe", type=Path, required=True)
@@ -413,7 +502,8 @@ def main():
         print(f"Prepared {len(plan['steps'])} steps; no renderer, Cook or payload copy")
         return 0
     if args.command == "prepare":
-        prepare(args.resource_root, args.scene, args.stage, args.worker, args.expected_surfaces)
+        prepare(args.resource_root, args.scene, args.stage, args.worker,
+                args.expected_surfaces, args.plan_kind, args.shader_spv_root)
         print("Prepared V2 stage; rendererStarted=false; cookStarted=false")
         return 0
     if args.command == "run":

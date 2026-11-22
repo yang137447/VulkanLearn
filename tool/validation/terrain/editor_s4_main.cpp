@@ -25,12 +25,14 @@
 #include <cmath>
 #include <chrono>
 #include <cstdlib>
+#include <deque>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <limits>
 #include <map>
 #include <memory>
+#include <optional>
 #include <stdexcept>
 
 namespace
@@ -276,6 +278,19 @@ private:
         uint64_t generation = 0;
     };
 
+    // E3 层参数修改链：直接使用编辑器 Console 的资产 facade
+    // （IEditorConsoleSink -> MaterialInstanceEditorRuntime::SubmitJson ->
+    // EditorCommandBus -> AssetCommandExecutor -> 文档服务），因此与面板上的
+    // terrain-layer-uv-scale + Save TR 是同一条作者路径。这里只投递请求并轮询
+    // 结果；不改 World、不写资产文件、不做 UI-only 假改动。
+    enum class AssetPhase { Idle, Get, Modify, Validate, Save, Done };
+
+    struct ArtifactGuard
+    {
+        std::string digest;
+        size_t files = 0;
+    };
+
     static std::string InputDigest(
         const std::shared_ptr<const TerrainLayerPaintData>& paint,
         const std::shared_ptr<const HostImage>& height)
@@ -291,8 +306,31 @@ private:
         return hash.Finalize().ToHex();
     }
 
-    static bool CompleteScreenshot(const std::filesystem::path& path)
+    // E3：TR 层表身份。层参数（uvScale/uvRotation/noise/height/slope 区间、
+    // sourceSet、displacement）既进 layer catalog（因此进 production 身份），
+    // 也决定 shader 采样；任何一项变化都必须让此摘要变化。
+    static std::string LayerTableDigest(const TerrainAssetDesc& desc)
     {
+        CanonicalFieldHasher hash("editor-s4-layer-table");
+        hash.AddUInt64("layers", desc.layers.size());
+        for (const auto& layer : desc.layers)
+        {
+            hash.AddString("name", layer.name);
+            hash.AddString("key", layer.key);
+            const float scalars[] = {layer.heightMin, layer.heightMax, layer.slopeMin,
+                layer.slopeMax, layer.noise, layer.uvScale, layer.uvRotation, layer.displacementM};
+            hash.AddBytes("scalars", scalars, sizeof(scalars));
+            const float color[] = {layer.avgColor.x(), layer.avgColor.y(), layer.avgColor.z()};
+            hash.AddBytes("avgColor", color, sizeof(color));
+            hash.AddUInt32("sourceResolution", layer.sourceResolution);
+            hash.AddUInt32("sourceSet", layer.sourceSet);
+            hash.AddUInt32("flags", layer.flags);
+            hash.AddBool("hasHeight", layer.hasHeight);
+        }
+        return hash.Finalize().ToHex();
+    }
+
+    static bool CompleteScreenshot(const std::filesystem::path& path)    {
         std::ifstream input(path, std::ios::binary);
         unsigned char header[14]{};
         if (!input.read(reinterpret_cast<char*>(header), sizeof(header)) ||
@@ -573,11 +611,18 @@ private:
         for (const auto& frozen : frozenObservations)
             if (InputDigest(frozen.paint, frozen.height) != frozen.digest)
                 throw std::runtime_error("Published World input snapshot mutated: " + frozen.surface);
+        if (assetPhase != AssetPhase::Idle)
+            PumpAssetCommands();
         if (phase == 0)
         {
             std::cout << "EDITOR_S4_V2 " << nlohmann::json({
                 {"event", "step"}, {"step", label}, {"generation", world.GetGeneration()},
                 {"hostTickSerial", hostTickSerial}}).dump() << std::endl;
+            // E6：陈旧 action 之前/之后各锁一次产物清单；两次必须同值。
+            if (label == "old_world_action")
+                CaptureArtifactGuard(world, label.c_str(), "before-stale-action");
+            if (label == "reloaded")
+                CaptureArtifactGuard(world, label.c_str(), "after-stale-action");
             for (const auto& candidate : world.GetTerrainCollisionInstances())
                 if (candidate.placementId == v2Plan.at("surfaceA") ||
                     candidate.placementId == v2Plan.at("surfaceB"))
@@ -652,6 +697,12 @@ private:
                         throw std::runtime_error("Missing V2 material preview surface");
                     Preview(world, *found, kind == "material" ? 8 : kind == "materialRestore" ? 9 : 10);
                 }
+                else if (kind == "layerParameter")
+                {
+                    if (assetPhase != AssetPhase::Idle)
+                        throw std::runtime_error("A layer-parameter edit is already in flight.");
+                    BeginLayerParameterEdit(operation, world);
+                }
                 else
                     throw std::runtime_error("Unknown V2 editor acceptance operation");
             }
@@ -688,6 +739,9 @@ private:
                     {"authorHeightDigest", fileDigest(candidate.plan.desc.heightmapPath)},
                     {"authorPaintDigest", fileDigest(candidate.plan.desc.paintPath)},
                     {"gameManifestDigest", fileDigest(candidate.plan.desc.compositedVT.packagePath)},
+                    {"terrainDigest", fileDigest(candidate.plan.desc.assetPath)},
+                    {"layerTableDigest", LayerTableDigest(candidate.plan.desc)},
+                    {"layerCount", candidate.plan.desc.layers.size()},
                     {"immutableHeldSnapshots", frozenObservations.size()},
                     {"immutableWorldInputsIntact", true}}).dump() << std::endl;
             }
@@ -696,16 +750,255 @@ private:
                 {"message", init.scripts ? init.scripts->View(world.GetGeneration()).feedback : ""}})
                 .dump() << std::endl;
             streaming->composited->ReportStats();
+            if (label == "old_world_action")
+                CaptureArtifactGuard(world, label.c_str(), "after-stale-step");
         }
         if (HoldCaptureUntilReady(world, label, stage, phase))
             return;
         ++tick;
     }
 
+    // E3：把一次 TR 层参数修改投进生产资产链。get_document 提供 revision，
+    // modify 只在隔离副本上应用并验证，validate 不写盘，save 走与面板相同的
+    // 同目录暂存 + 摘要复核 + 原子替换。链结束（可选）后按作者语义重载场景，
+    // 因为 TR 层参数属于 production/catalog 输入，不能 live 打补丁。
+    void BeginLayerParameterEdit(const nlohmann::json& operation, const World& world)
+    {
+        auto* sink = host.ConsoleSink();
+        if (sink == nullptr || !sink->IsAvailable())
+            throw std::runtime_error("Layer-parameter edit needs the Editor asset command host.");
+        assetTrPath = operation.at("assetPath").get<std::string>();
+        assetChanges = operation.at("changes");
+        if (!assetChanges.is_array() || assetChanges.empty() || assetChanges.size() > 128)
+            throw std::runtime_error("Layer-parameter edit needs 1..128 typed changes.");
+        for (const auto& change : assetChanges)
+            if (!change.contains("field") || !change.contains("value") ||
+                !change.contains("layerIndex"))
+                throw std::runtime_error("Layer-parameter change lacks field/layerIndex/value.");
+        assetLayerField = assetChanges.front().at("field").get<std::string>();
+        assetLayerIndex = assetChanges.front().at("layerIndex").get<size_t>();
+        assetLayerName = assetChanges.front().value("expectedLayerName", std::string{});
+        assetValue = assetChanges.front().at("value").get<double>();
+        assetReload = operation.value("reload", false);
+        assetStepLabel = operation.value("step", std::string("layer_parameter"));
+        scenePath = world.GetScenePath();
+        reloadGeneration = world.GetGeneration();
+        const auto root = std::filesystem::path(CommonFunction::GetResourcePath());
+        const auto path = root / assetTrPath;
+        if (!std::filesystem::is_regular_file(path))
+            throw std::runtime_error("Layer-parameter edit targets a missing TR: " + assetTrPath);
+        assetTrDigestBefore = ContentHasher::HashFile(path).ToHex();
+        assetPhase = AssetPhase::Get;
+        assetCommandPending = false;
+        // 命令 id 必须在整个进程内唯一：EditorCommandBus 按 commandId 去重，
+        // 复用已用过的 id 会拿回那条旧结果而不再执行。基址避开 UI 的递增序列，
+        // 计数器只在进程启动时初始化一次。
+        assetRevision = 0;
+        assetPollFrames = 0;
+        std::cout << "EDITOR_S4_LAYERPARAM " << nlohmann::json({
+            {"event", "begin"}, {"step", assetStepLabel}, {"assetPath", assetTrPath},
+            {"field", assetLayerField}, {"layerIndex", assetLayerIndex},
+            {"expectedLayerName", assetLayerName}, {"value", assetValue},
+            {"reload", assetReload}, {"trDigestBefore", assetTrDigestBefore},
+            {"hostTickSerial", hostTickSerial}}).dump() << std::endl;
+        RuntimeEvidence::Record("EDITOR_S4_LAYERPARAM", {
+            {"event", "begin"}, {"step", assetStepLabel}, {"assetPath", assetTrPath},
+            {"field", assetLayerField}, {"layerIndex", assetLayerIndex}, {"value", assetValue}});
+    }
+
+    void SubmitAssetCommand(const std::string& command, nlohmann::json payload,
+        bool hasExpectedRevision, uint64_t expectedRevision)
+    {
+        auto* sink = host.ConsoleSink();
+        nlohmann::json request{{"protocolVersion", 1}, {"commandId", ++assetSerial},
+            {"source", "ai"}, {"command", command}, {"payload", std::move(payload)}};
+        if (hasExpectedRevision)
+            request["expectedDocumentRevision"] = expectedRevision;
+        const auto submitted = sink->SubmitJson(request.dump());
+        assetCommandId = submitted.commandId;
+        if (!submitted.queued)
+            throw std::runtime_error("Asset command was not admitted: " + submitted.text);
+        std::cout << "EDITOR_S4_ASSETAPI " << nlohmann::json({
+            {"event", "submit"}, {"step", assetStepLabel}, {"command", command},
+            {"commandId", submitted.commandId}, {"queued", submitted.queued},
+            {"immediate", submitted.text}, {"expectedRevision", hasExpectedRevision ?
+                nlohmann::json(expectedRevision) : nlohmann::json()},
+            {"hostTickSerial", hostTickSerial}}).dump() << std::endl;
+    }
+
+    void AdvanceAssetPhase(const std::string& command, const nlohmann::json& result)
+    {
+        const auto revision = result.value("documentRevision", uint64_t(0));
+        if (result.contains("documentRevision") && revision != 0)
+            assetRevision = revision;
+        std::cout << "EDITOR_S4_ASSETAPI " << nlohmann::json({
+            {"event", "result"}, {"step", assetStepLabel}, {"command", command},
+            {"status", result.value("status", std::string{})},
+            {"errorCode", result.value("errorCode", std::string{})},
+            {"message", result.value("message", std::string{})},
+            {"documentRevision", revision}, {"hostTickSerial", hostTickSerial}}).dump()
+            << std::endl;
+        if (result.value("status", std::string{}) != "succeeded")
+            throw std::runtime_error("Asset command failed: " + command + " " +
+                result.value("errorCode", std::string{}) + " " +
+                result.value("message", std::string{}));
+        if (command == "terrain.get_document")
+        {
+            if (revision == 0)
+                throw std::runtime_error("terrain.get_document returned no document revision.");
+            assetPhase = AssetPhase::Modify;
+        }
+        else if (command == "terrain.modify")
+            assetPhase = AssetPhase::Validate;
+        else if (command == "terrain.validate")
+            assetPhase = AssetPhase::Save;
+        else if (command == "terrain.save")
+            assetPhase = AssetPhase::Done;
+    }
+
+    void PumpAssetCommands()
+    {
+        if (assetPhase == AssetPhase::Idle)
+            return;
+        auto* sink = host.ConsoleSink();
+        if (sink == nullptr || !sink->IsAvailable())
+            throw std::runtime_error("Layer-parameter edit lost the Editor asset host.");
+        if (assetPhase == AssetPhase::Done)
+        {
+            const auto root = std::filesystem::path(CommonFunction::GetResourcePath());
+            const auto after = ContentHasher::HashFile(root / assetTrPath).ToHex();
+            std::cout << "EDITOR_S4_LAYERPARAM " << nlohmann::json({
+                {"event", "saved"}, {"step", assetStepLabel}, {"assetPath", assetTrPath},
+                {"trDigestBefore", assetTrDigestBefore}, {"trDigestAfter", after},
+                {"fileChanged", after != assetTrDigestBefore},
+                {"documentRevision", assetRevision}, {"hostTickSerial", hostTickSerial}})
+                .dump() << std::endl;
+            RuntimeEvidence::Record("EDITOR_S4_LAYERPARAM", {
+                {"event", "saved"}, {"step", assetStepLabel}, {"assetPath", assetTrPath},
+                {"trDigestBefore", assetTrDigestBefore}, {"trDigestAfter", after},
+                {"fileChanged", after != assetTrDigestBefore}, {"documentRevision", assetRevision}});
+            assetPhase = AssetPhase::Idle;
+            if (assetReload)
+            {
+                initialGeneration = reloadGeneration;
+                RuntimeCommand reload;
+                reload.type = RuntimeCommandType::LoadWorld;
+                reload.stringValue = scenePath;
+                init.commandBus->Queue(std::move(reload));
+                std::cout << "EDITOR_S4_LAYERPARAM " << nlohmann::json({
+                    {"event", "reload-queued"}, {"step", assetStepLabel},
+                    {"expectedNewGeneration", reloadGeneration + 1},
+                    {"hostTickSerial", hostTickSerial}}).dump() << std::endl;
+            }
+            return;
+        }
+        if (!assetCommandPending)
+        {
+            if (assetPhase == AssetPhase::Get)
+                SubmitAssetCommand("terrain.get_document", {{"assetPath", assetTrPath}}, false, 0);
+            else if (assetPhase == AssetPhase::Modify)
+            {
+                nlohmann::json changes = nlohmann::json::array();
+                for (const auto& change : assetChanges)
+                {
+                    nlohmann::json item{{"field", change.at("field")},
+                        {"layerIndex", change.at("layerIndex")}, {"value", change.at("value")}};
+                    if (change.contains("expectedLayerName"))
+                        item["expectedLayerName"] = change.at("expectedLayerName");
+                    changes.push_back(std::move(item));
+                }
+                SubmitAssetCommand("terrain.modify",
+                    {{"assetPath", assetTrPath}, {"changes", changes}},
+                    true, assetRevision);
+            }
+            else if (assetPhase == AssetPhase::Validate)
+                SubmitAssetCommand("terrain.validate", {{"assetPath", assetTrPath}}, false, 0);
+            else if (assetPhase == AssetPhase::Save)
+                SubmitAssetCommand("terrain.save", {{"assetPath", assetTrPath}}, true, assetRevision);
+            assetCommandPending = true;
+            return;
+        }
+        bool isFinal = false;
+        const auto text = sink->PollResult(assetCommandId, isFinal);
+        if (!text)
+        {
+            if (++assetPollFrames > 1200)
+                throw std::runtime_error("Asset command did not reach a final status.");
+            return;
+        }
+        assetPollFrames = 0;
+        assetCommandPending = false;
+        const auto result = nlohmann::json::parse(*text);
+        const auto command = assetPhase == AssetPhase::Get ? "terrain.get_document" :
+            assetPhase == AssetPhase::Modify ? "terrain.modify" :
+            assetPhase == AssetPhase::Validate ? "terrain.validate" : "terrain.save";
+        AdvanceAssetPhase(command, result);
+    }
+
+    // E6 产物守卫：陈旧 action 之后必须能证明没有任何页表/预览产物被写。
+    // 页表本身只存在于 GPU，这里锁定磁盘上所有可能被陈旧写回污染的产物
+    // （作者高度图 / paint / paint 元数据 / 层预览缓存），并把两份 publication
+    // revision 一起记录，供读者把“没有变化”绑定到真实计数。
+    ArtifactGuard CaptureArtifactGuard(const World& world, const char* label, const char* when)
+    {
+        const auto root = std::filesystem::path(CommonFunction::GetResourcePath());
+        std::vector<std::filesystem::path> files;
+        for (const auto& candidate : world.GetTerrainCollisionInstances())
+        {
+            if (candidate.placementId != v2Plan.value("surfaceA", std::string()) &&
+                candidate.placementId != v2Plan.value("surfaceB", std::string()))
+                continue;
+            const std::string paths[] = {candidate.plan.desc.heightmapPath,
+                candidate.plan.desc.paintPath, candidate.plan.desc.paintPath + ".meta.json"};
+            for (const auto& path : paths)
+                if (!path.empty() && std::filesystem::is_regular_file(root / path))
+                    files.push_back(root / path);
+        }
+        const auto preview = root / "Generated/TerrainPreview/PreviewCache";
+        if (std::filesystem::is_directory(preview))
+            for (const auto& entry : std::filesystem::recursive_directory_iterator(preview))
+                if (entry.is_regular_file())
+                    files.push_back(entry.path());
+        std::sort(files.begin(), files.end());
+        CanonicalFieldHasher hash("editor-s4-artifact-guard-v1");
+        nlohmann::json revision;
+        const auto streaming = RendererResourceCache::GetInstance().GetTerrainStreaming();
+        for (const char* surface : {"surfaceA", "surfaceB"})
+        {
+            const auto id = v2Plan.value(surface, std::string());
+            const auto published = streaming && streaming->composited ?
+                streaming->composited->RefreshRevision(world.GetGeneration(), id) : 0;
+            hash.AddString("surface", id);
+            hash.AddUInt64("publishedRevision", published);
+            revision[surface] = {{"surface", id}, {"publishedRevision", published}};
+        }
+        for (const auto& path : files)
+        {
+            const auto relative = std::filesystem::relative(path, root).generic_string();
+            const auto size = static_cast<uint64_t>(std::filesystem::file_size(path));
+            const auto digest = ContentHasher::HashFile(path);
+            hash.AddString("path", relative);
+            hash.AddUInt64("bytes", size);
+            hash.AddDigest("digest", digest);
+        }
+        ArtifactGuard guard;
+        guard.digest = hash.Finalize().ToHex();
+        guard.files = files.size();
+        std::cout << "EDITOR_S4_ARTIFACTGUARD " << nlohmann::json({
+            {"event", "inventory"}, {"step", label}, {"when", when},
+            {"guard", guard.digest}, {"files", guard.files},
+            {"worldGeneration", world.GetGeneration()},
+            {"revisions", revision}, {"hostTickSerial", hostTickSerial}}).dump()
+            << std::endl;
+        RuntimeEvidence::Record("EDITOR_S4_ARTIFACTGUARD", {
+            {"event", "inventory"}, {"step", label}, {"when", when},
+            {"guard", guard.digest}, {"files", guard.files},
+            {"worldGeneration", world.GetGeneration()}});
+        return guard;
+    }
+
     void ObserveFeedback(const char* stageName, size_t phase, uint64_t generation)
     {
-        if (!init.scripts)
-            return;
         const auto feedback = init.scripts->View(generation).feedback;
         const bool changed = feedback != lastFeedback;
         if (changed || phase == 0 || phase == interval - 1)
@@ -857,6 +1150,25 @@ private:
     uint64_t overrideGeneration = 0;
     float brushV = 0.5f;
     std::string shaderBaseline;
+    // E3 生产资产链状态；只在 layerParameter 操作里非 Idle。
+    AssetPhase assetPhase = AssetPhase::Idle;
+    bool assetCommandPending = false;
+    bool assetReload = false;
+    uint64_t assetCommandId = 0;
+    // 0x40000000 只避开 UI/RmlUi 自己的低号递增序列；跨步骤绝不复位。
+    uint64_t assetSerial = 0x40000000ULL;
+    uint64_t assetRevision = 0;
+    size_t assetPollFrames = 0;
+    size_t assetLayerIndex = 0;
+    double assetValue = 0.0;
+    std::string assetTrPath;
+    std::string assetTrDigestBefore;
+    std::string assetLayerField;
+    std::string assetLayerName;
+    std::string assetStepLabel;
+    nlohmann::json assetChanges = nlohmann::json::array();
+    std::string scenePath;
+    uint64_t reloadGeneration = 0;
     std::string diagnosticPhase;
     std::string diagnosticBaseline;
     uint64_t diagnosticWorld = 0;
