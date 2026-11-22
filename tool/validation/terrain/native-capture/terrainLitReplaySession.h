@@ -21,6 +21,9 @@ struct TerrainLitReplayConfig
     std::string originalEvaluatorSha256;
     std::string referencePageSetSha256;
     std::vector<uint32_t> allActualRoiSampledSlots;
+    // 页面身份绑定：key -> 实际 slot 的解析结果与来源（同一次运行的 TVQ1 导出帧）。
+    std::string resolvedPageSlotJson;
+    std::string pageMappingSource;
 };
 
 class TerrainLitReplaySession

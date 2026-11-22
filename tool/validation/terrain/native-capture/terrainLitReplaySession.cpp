@@ -195,6 +195,8 @@ TerrainLitReplaySession::TerrainLitReplaySession(const TerrainCaptureFrameInfo& 
     state->factory=frame.backend->CreatePipelineFactory();state->factory->SetShaderCompiler(&state->compiler);
     state->identity={{"frame",frame.frame},{"submissionEpoch",frame.submissionEpoch},{"worldGeneration",frame.worldGeneration},
         {"poseId",frame.poseId},{"actualBaseFineResidentPages",frame.actualBaseFineResidentPages},
+        {"pageMappingSource",state->config.pageMappingSource},
+        {"resolvedPageSlots",state->config.resolvedPageSlotJson.empty()?Json::object():Json::parse(state->config.resolvedPageSlotJson)},
         {"inputClosureSha256",state->config.inputClosureSha256},
         {"originalEvaluatorSha256",state->config.originalEvaluatorSha256},{"referencePageSetSha256",state->config.referencePageSetSha256},
         {"rect",{state->config.rect.x,state->config.rect.y,128,128}},{"lightingArtifacts",Json::array()},

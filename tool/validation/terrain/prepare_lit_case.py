@@ -92,7 +92,7 @@ def resolve_pose_id(pose_name, explicit, log_path):
 
 def build_case(name, pose_name, mapping, capture_override, pose_id, pose_id_source,
                asset_root, manifest, delivery, page_source, fragment_dir, extra_reports=None,
-               slot_capacity=None, allow_fine_resident=False):
+               slot_capacity=None, allow_fine_resident=False, minimum_frame=0):
     position, look_at, plan_path = T.resolve_pose(pose_name)
     direction = T._normalize([T._f32(look_at[i] - position[i]) for i in range(3)])
     if capture_override:
@@ -218,6 +218,11 @@ def build_case(name, pose_name, mapping, capture_override, pose_id, pose_id_sour
         "actualSlotCapacity": capacity,
         "actualAtlasFormats": [T.VK_FORMATS[name] for name in T.ATLAS_CHANNELS],
         "allowFineResidentPages": bool(allow_fine_resident),
+        "minimumFrame": int(minimum_frame),
+        "referencePages": [{"surfaceId": row["surfaceId"], "mip": int(row["mip"]),
+                             "x": int(row["x"]), "y": int(row["y"]),
+                             "path": row["path"], "blake3": row["blake3"]}
+                            for row in pages["entries"]],
         "pinnedInputs": [{"path": item["path"], "blake3": item["blake3"]} for item in pinned],
         # Non-loader provenance (the loader only reads the keys it calls at() on).
         "poseName": pose_name,
@@ -314,6 +319,7 @@ def main():
                         default=T.DELIVERY / "tes" / "junction-one-patch.json")
     parser.add_argument("--slot-capacity", type=int, default=None,
                         help="reference atlas layer count; must cover every observed slot")
+    parser.add_argument("--minimum-frame", type=int, default=0)
     parser.add_argument("--allow-fine-resident", action="store_true",
                         help="lit-only near-field case: do not require zero non-root page residency")
     parser.add_argument("--allow-incomplete-pages", action="store_true")
@@ -324,7 +330,7 @@ def main():
         name, options.pose, options.mapping, options.capture, pose_id, pose_id_source,
         options.asset_root, options.manifest, options.delivery, options.page_source,
         options.fragment_dir, options.extra_page_report, options.slot_capacity,
-        options.allow_fine_resident)
+        options.allow_fine_resident, options.minimum_frame)
     sha256 = T.sha256(T.LIT_EXE)
     launch = write_launch(case, plan, name, options.delivery, options.asset_root,
                           options.tes_case, T.LIT_EXE, sha256, options.command_delay)
