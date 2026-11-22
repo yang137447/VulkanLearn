@@ -988,6 +988,12 @@ void RenderGraph::RenderInitialize(
         {
             continue;
         }
+        // 同一个 graph 可能在上一轮 RenderInitialize 中途失败后被重跑
+        // （例如编辑器缩略图会话缺少 terrainFeedback 的 worldTexture 输入）。
+        // 在触碰该 pass 的任何新状态之前先释放已有 descriptor 批次，避免新
+        // handle 覆盖旧值：旧批次一旦失去 owner，RenderGraph::Shutdown 只看到
+        // 最后一组，整批 layout/pool/set 会泄漏到 vkDestroyDevice。
+        renderpass.DestroyPassDescriptors(rendererBackend);
         renderpass.CreateUniformBuffers();
         renderpass.SetupDescriptors(*this, rendererBackend, descriptorContext);
         if (auto passMaterialInstance = renderpass.materialInstance.lock())

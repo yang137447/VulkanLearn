@@ -23,6 +23,8 @@ void EnvironmentGpuTimer::Initialize(RendererBackendVulkan& rendererBackend)
     timestampValidBits = rendererBackend.GetGraphicsTimestampValidBits();
     const uint32_t swapchainImageCount = rendererBackend.GetSwapchainImageCount();
     frameQueryStates.resize(swapchainImageCount);
+    hasRecordingFrame = false;
+    recordingImageIndex = 0;
 
     timingSnapshot = EnvironmentGpuTimingSnapshot{};
     timingSnapshot.supported = timestampPeriodNanoseconds > 0.0f && timestampValidBits > 0;
@@ -51,6 +53,8 @@ void EnvironmentGpuTimer::Shutdown(RendererBackendVulkan& rendererBackend)
     timingSnapshot = EnvironmentGpuTimingSnapshot{};
     timestampPeriodNanoseconds = 0.0f;
     timestampValidBits = 0;
+    hasRecordingFrame = false;
+    recordingImageIndex = 0;
     this->rendererBackend = nullptr;
     initialized = false;
 }
@@ -59,6 +63,7 @@ void EnvironmentGpuTimer::BeginFrame(
     vk::CommandBuffer commandBuffer,
     uint32_t swapchainImageIndex)
 {
+    hasRecordingFrame = false;
     if (!initialized || !timingSnapshot.supported)
     {
         return;
@@ -68,10 +73,16 @@ void EnvironmentGpuTimer::BeginFrame(
         throw std::runtime_error("Environment GPU timer swapchain image index is invalid.");
     }
 
-    CollectFrameResults(swapchainImageIndex);
     FrameQueryState& frameState = frameQueryStates[swapchainImageIndex];
-    frameState.used.fill(false);
-    frameState.open.fill(false);
+    // 先读回上一轮真正提交过的完整批次；被废弃帧的批次已在 AbortFrame 里作废。
+    if (frameState.batch.HasSubmitted())
+    {
+        CollectFrameResults(swapchainImageIndex);
+        frameState.batch.Consumed();
+    }
+    frameState.batch.BeginRecording();
+    recordingImageIndex = swapchainImageIndex;
+    hasRecordingFrame = true;
 
     const uint32_t firstQuery = swapchainImageIndex * kQueriesPerImage;
     commandBuffer.resetQueryPool(queryPool, firstQuery, kQueriesPerImage);
@@ -94,13 +105,12 @@ void EnvironmentGpuTimer::BeginProduct(
     }
 
     FrameQueryState& frameState = frameQueryStates[swapchainImageIndex];
-    if (frameState.used[productIndex] || frameState.open[productIndex])
+    // 同一 product 每帧只允许一次 begin；重复会覆盖同一对 query。
+    if (!frameState.batch.Begin(productIndex))
     {
         throw std::runtime_error("Environment GPU product can only be timed once per frame.");
     }
 
-    frameState.used[productIndex] = true;
-    frameState.open[productIndex] = true;
     commandBuffer.writeTimestamp(
         vk::PipelineStageFlagBits::eTopOfPipe,
         queryPool,
@@ -120,7 +130,7 @@ void EnvironmentGpuTimer::EndProduct(
     const uint32_t productIndex = static_cast<uint32_t>(product);
     if (swapchainImageIndex >= frameQueryStates.size() ||
         productIndex >= kProductCount ||
-        !frameQueryStates[swapchainImageIndex].open[productIndex])
+        !frameQueryStates[swapchainImageIndex].batch.IsOpen(productIndex))
     {
         throw std::runtime_error("Environment GPU timer product was not opened.");
     }
@@ -129,7 +139,22 @@ void EnvironmentGpuTimer::EndProduct(
         vk::PipelineStageFlagBits::eBottomOfPipe,
         queryPool,
         GetQueryIndex(swapchainImageIndex, product, true));
-    frameQueryStates[swapchainImageIndex].open[productIndex] = false;
+    frameQueryStates[swapchainImageIndex].batch.End(productIndex);
+}
+
+void EnvironmentGpuTimer::FrameSubmitted() noexcept
+{
+    if (hasRecordingFrame && recordingImageIndex < frameQueryStates.size())
+        frameQueryStates[recordingImageIndex].batch.Submitted();
+    hasRecordingFrame = false;
+}
+
+void EnvironmentGpuTimer::AbortFrame() noexcept
+{
+    // 本帧命令已被丢弃：query 从未在 GPU 上执行，禁止下一次复用该 image 时读回。
+    if (hasRecordingFrame && recordingImageIndex < frameQueryStates.size())
+        frameQueryStates[recordingImageIndex].batch.Aborted();
+    hasRecordingFrame = false;
 }
 
 uint32_t EnvironmentGpuTimer::GetQueryIndex(
@@ -150,9 +175,14 @@ void EnvironmentGpuTimer::CollectFrameResults(uint32_t swapchainImageIndex)
     }
 
     const FrameQueryState& frameState = frameQueryStates[swapchainImageIndex];
+    if (!frameState.batch.HasSubmitted())
+    {
+        return;
+    }
+
     for (uint32_t productIndex = 0; productIndex < kProductCount; ++productIndex)
     {
-        if (!frameState.used[productIndex])
+        if (!frameState.batch.WasRecorded(productIndex))
         {
             continue;
         }

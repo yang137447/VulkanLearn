@@ -1312,6 +1312,8 @@ void RenderSystem::RecordAndSubmitCurrentRenderScene()
             RecordParticleSoftDepthPass(commandBuffer, renderPass);
         },
         [this] { LogLocalShadowCasterStatistics(); },
+        [this] { SubmitFrameGpuQueries(); },
+        [this] { AbandonFrameGpuQueries(); },
     };
     frameRecorder.RecordAndSubmitCurrentRenderScene(context);
 }
@@ -1605,6 +1607,18 @@ void RenderSystem::RecordEnvironmentIbl(vk::CommandBuffer commandBuffer, uint32_
         VL::RendererResourceCache::GetInstance(),
         proceduralSkyCubeGenerator,
         environmentIblBaker);
+}
+
+void RenderSystem::SubmitFrameGpuQueries()
+{
+    environmentRuntime.FrameSubmitted();
+    particleGpuTimer.FrameSubmitted();
+}
+
+void RenderSystem::AbandonFrameGpuQueries()
+{
+    environmentRuntime.AbandonFrameQueries();
+    particleGpuTimer.AbortFrame();
 }
 
 void RenderSystem::RefreshEnvironmentUpdateDiagnostics()

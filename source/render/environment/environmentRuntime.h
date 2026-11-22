@@ -60,6 +60,11 @@ public:
         ProceduralSkyCubeGenerator& proceduralSkyCubeGenerator,
         EnvironmentIblBaker& environmentIblBaker);
 
+    // 帧命令成功提交 / 被丢弃的显式边界，转发给 environmentGpuTimer。
+    // 丢弃的帧必须作废本帧 query，避免下一次复用 image 读取未写入的槽位。
+    void FrameSubmitted() noexcept { environmentGpuTimer.FrameSubmitted(); }
+    void AbandonFrameQueries() noexcept { environmentGpuTimer.AbortFrame(); }
+
 private:
     EnvironmentGpuTimer environmentGpuTimer;
     EnvironmentUpdateScheduler environmentUpdateScheduler;

@@ -1131,6 +1131,7 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
         // Debug/render scope 已结束，先弃录制再让外层事务 Abort；尚未登记 feedback/screenshot。
         ctx.backend.DiscardFrameCommands(frameContext);
         ctx.gpuTimer.AbortFrame();
+        if (ctx.abandonFrameGpuQueries) ctx.abandonFrameGpuQueries();
         if (terrainCaptureBridge)
             terrainCaptureBridge->AbortProvenUnsubmitted(frameContext.disposition.Phase());
         throw;
@@ -1143,6 +1144,7 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
             // helper/实际 draw 异常也先弃命令，再展开外层 Service/Terrain 事务。
             ctx.backend.DiscardFrameCommands(frameContext);
             ctx.gpuTimer.AbortFrame();
+            if (ctx.abandonFrameGpuQueries) ctx.abandonFrameGpuQueries();
             terrainCaptureBridge->AbortProvenUnsubmitted(frameContext.disposition.Phase());
         }
         throw;
@@ -1158,6 +1160,7 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
             // 所有 render/debug scope 已闭合；先废弃命令，再展开 terrain/quality RAII。
             ctx.backend.DiscardFrameCommands(frameContext);
             ctx.gpuTimer.AbortFrame();
+            if (ctx.abandonFrameGpuQueries) ctx.abandonFrameGpuQueries();
             if (terrainCaptureBridge)
                 terrainCaptureBridge->AbortProvenUnsubmitted(frameContext.disposition.Phase());
             throw FrameAbortIntent{std::move(*fault)};
@@ -1249,6 +1252,8 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
         if (terrainCaptureBridge)
             terrainCaptureBridge->SubmitAttempted();
         ctx.backend.SubmitFrame(frameContext, ctx.currentFrame);
+        // 提交成功是 query 批次的唯一确认点：此后本帧 timestamp 才允许下一轮读回。
+        if (ctx.submitFrameGpuQueries) ctx.submitFrameGpuQueries();
         if (terrainCaptureBridge)
         {
             terrainCaptureBridge->Submitted(frameContext.disposition.Phase(), feedbackSubmittedEpoch);
@@ -1342,6 +1347,13 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
     }
     catch (...)
     {
+        // 提交前失败的帧命令同样不会到达 GPU：作废本帧 query 批次，
+        // 否则下一次复用该 image 会读取从未写入的 timestamp 槽位。
+        if (frameContext.disposition.Phase() != AcquiredFramePhase::Submitted)
+        {
+            ctx.gpuTimer.AbortFrame();
+            if (ctx.abandonFrameGpuQueries) ctx.abandonFrameGpuQueries();
+        }
         if (terrainCaptureBridge && terrainCaptureBridge->HasCurrent())
         {
             const auto original = std::current_exception();

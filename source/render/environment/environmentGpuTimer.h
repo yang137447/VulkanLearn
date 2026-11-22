@@ -6,6 +6,8 @@
 
 #include <vulkan/vulkan.hpp>
 
+#include "render/backend/gpuTimestampQueryBatch.h"
+
 namespace VL
 {
 
@@ -57,6 +59,10 @@ public:
         vk::CommandBuffer commandBuffer,
         uint32_t swapchainImageIndex,
         EnvironmentGpuProduct product);
+    // 帧命令成功提交 / 被丢弃的显式边界。只有提交成功后，本帧 query 才允许在
+    // 下一次复用该 image 时读回；被丢弃的帧必须作废，否则会读到 GPU 从未写入的槽位。
+    void FrameSubmitted() noexcept;
+    void AbortFrame() noexcept;
 
     EnvironmentGpuTimingSnapshot GetSnapshot() const { return timingSnapshot; }
     bool IsSupported() const { return timingSnapshot.supported; }
@@ -69,8 +75,9 @@ private:
 
     struct FrameQueryState
     {
-        std::array<bool, kProductCount> used{};
-        std::array<bool, kProductCount> open{};
+        // 每个 image 独占一组 query；batch 状态机保证只有真正提交过的
+        // 完整 begin/end 对才会在下一轮被读回。
+        GpuTimestampQueryBatch batch{ kProductCount };
     };
 
     uint32_t GetQueryIndex(
@@ -87,6 +94,9 @@ private:
     float timestampPeriodNanoseconds = 0.0f;
     uint32_t timestampValidBits = 0;
     bool initialized = false;
+    // 本帧 BeginFrame 选中的 image 只在录制期有效；提交/废弃后清空。
+    uint32_t recordingImageIndex = 0;
+    bool hasRecordingFrame = false;
 };
 
 const char* ToString(EnvironmentGpuProduct product);

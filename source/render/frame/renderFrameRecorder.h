@@ -88,6 +88,10 @@ struct RenderFrameRecorderContext
     std::function<void(vk::CommandBuffer&, const Renderpass&)>
         recordParticleSoftDepth;
     std::function<void()> logLocalShadowCasterStatistics;
+    // 帧命令成功提交后确认 GPU query 批次；命令被丢弃时作废本帧录制。
+    // 只有确认过的完整批次才允许在下一帧读回。
+    std::function<void()> submitFrameGpuQueries;
+    std::function<void()> abandonFrameGpuQueries;
 };
 // Owns the per-frame CPU plumbing that does not depend on RenderSystem's
 // lifetime: dynamic-mesh queue drain, global/shadow UBO construction and the

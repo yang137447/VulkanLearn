@@ -86,6 +86,10 @@ struct Renderpass
         const VL::RendererDescriptorContext& descriptorContext);
     void CreatePassDescriptorSetLayout(VL::RendererBackendVulkan& rendererBackend);
     void CreateDescriptorSets(VL::RendererBackendVulkan& rendererBackend);
+    // pass 的 descriptor layout / pool / set 是不可拆分的所有权单元。
+    // RenderInitialize 允许在上一轮中途失败后重跑；重跑前必须先释放旧一组，
+    // 否则新 handle 覆盖旧值，Shutdown 只能释放最后一组，旧的一整批泄漏。
+    void DestroyPassDescriptors(VL::RendererBackendVulkan& rendererBackend);
     void UpdateDescriptorSets(
         VL::RendererBackendVulkan& rendererBackend,
         const VL::RendererDescriptorContext& descriptorContext,

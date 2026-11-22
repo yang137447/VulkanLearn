@@ -604,6 +604,10 @@ private:
     void RecordEnvironmentIbl(
         vk::CommandBuffer commandBuffer,
         uint32_t swapchainImageIndex);
+    // 帧命令成功提交 / 被丢弃时更新环境与粒子 GPU 计时器：
+    // 只有提交后的完整 query 批次才允许下一次读回，丢弃帧必须作废。
+    void SubmitFrameGpuQueries();
+    void AbandonFrameGpuQueries();
     // 在 renderPassOrdered 之前推进所有 GPU backend 的 TressFX guide 位置。
     void RecordHairSimulation(
         vk::CommandBuffer commandBuffer,
