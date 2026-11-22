@@ -40,6 +40,15 @@ struct ShaderBuildOutputRecord
     std::string digest;
 };
 
+// ShaderBuildArtifactRecord::outputs 以角色名为键（source/shaderCompilerInternal.h）：
+// runtimeVertex/runtimeFragment/runtimeTessControl/runtimeTessEvaluation/runtimeCompute
+// 是真正进入 Vulkan 管线的 SPIR-V；debug* 是同一源码为反射/调试另行编译的副本
+// （带 -g 调试信息与 ENABLE_DEBUG_VIEW）。只有 runtime 角色属于运行时闭包身份。
+inline bool IsShaderRuntimeOutputRole(const std::string& role)
+{
+    return role.rfind("runtime", 0) == 0;
+}
+
 struct ShaderBuildArtifactRecord
 {
     std::string logicalBuildId;

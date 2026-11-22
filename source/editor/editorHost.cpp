@@ -555,6 +555,15 @@ bool EditorHost::ApplyTerrainEditAction(const UiAction& action, World* world)
         {
             if (!ApplyTerrainEditUpdate(*world))
                 error = "Previous terrain sculpt update failed; retry after the renderer recovers.";
+            else
+            {
+                // 旧 session 的 CPU dirty 已经交给 GPU/刷新票据；切到新 session 后
+                // BuildUpdate 不再包含这些 chunk，若不在此清除，新 session 会被
+                // 误判为仍有未应用编辑（SaveHeightmap 随后对空 dirty 再 Apply 一次
+                // 并静默失败）。BeginUiActionBatch 也会因未 ack 的 composited dirty
+                // 重新置位该标记，因此成功路径必须在这里消费掉它。
+                terrainEditNeedsRebuild = false;
+            }
         }
         if (error.empty())
         {

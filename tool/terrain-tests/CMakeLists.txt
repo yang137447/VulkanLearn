@@ -59,7 +59,9 @@ ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerRegistry.cpp
 ${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerSources.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedVT.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedVTStore.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedVerifiedInputs.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedProduction.cpp
+    ${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedProductionIdentity.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedAdjacency.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedDirty.cpp
     ${PROJECT_SOURCE_DIR}/source/terrain/terrainRvtBudget.cpp

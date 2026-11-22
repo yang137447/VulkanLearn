@@ -30,6 +30,7 @@
 #include "terrain/terrainCompositedDependencies.h"
 #include "terrain/terrainCompositedAuthorRecipe.h"
 #include "terrain/terrainCompositedFeedback.h"
+#include "terrain/terrainCompositedProductionIdentity.h"
 #include "terrain/terrainCompositedWeightOverlay.h"
 #include "terrain/terrainHeightmap.h"
 #include "terrain/terrainWeightMap.h"
@@ -1093,30 +1094,10 @@ struct TerrainCompositedService::Impl : TerrainFaultOwnerRegistration
         const auto actual = pipelineFactory.GetShaderCompiler().CaptureManifestSnapshot();
         Require(actual.compilePolicy == expected.generator.compilePolicy,
             "runtime compute policy differs from V2 production generator");
-        std::set<std::string> expectedSources;
-        std::set<std::string> expectedArtifacts;
-        expectedSources.insert(expected.Object(expected.generator.computeSource).digest.ToHex());
-        for (const auto& id : expected.generator.includeSources)
-            expectedSources.insert(expected.Object(id).digest.ToHex());
-        for (const auto& id : expected.generator.compiledArtifacts)
-            expectedArtifacts.insert(expected.Object(id).digest.ToHex());
-        std::set<std::string> actualSources;
-        std::set<std::string> actualArtifacts;
-        uint32_t kernels = 0;
-        for (const auto& artifact : actual.artifacts)
-        {
-            if (artifact.second.normalizedKey.find("terrain/terrainCompositedBakeWorld.comp") == std::string::npos &&
-                artifact.second.normalizedKey.find("terrain/terrainCompositedBakeWorldPadding.comp") == std::string::npos)
-                continue;
-            ++kernels;
-            for (const auto& source : artifact.second.primarySources)
-                actualSources.insert(source.digest);
-            for (const auto& source : artifact.second.dependencies)
-                actualSources.insert(source.digest);
-            for (const auto& output : artifact.second.outputs)
-                actualArtifacts.insert(output.second.digest);
-        }
-        Require(kernels == 2 && actualSources == expectedSources && actualArtifacts == expectedArtifacts,
+        // 生产身份只比较 compute 源码/include 与 runtime 角色 SPIR-V；publication 里
+        // 同源编译出的 debug reflection 摘要会随调试信息重写，不能参与比较。原因与
+        // 精确对比规则集中在 MatchesTerrainCompositedGeneratorClosure 内注释。
+        Require(MatchesTerrainCompositedGeneratorClosure(expected, actual),
             "runtime compute source/SPV closure differs from V2 production identity; rebuild the publication");
     }
 

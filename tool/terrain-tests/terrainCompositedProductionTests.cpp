@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 #include "terrainCompositedProductionFixture.h"
+#include "terrain/terrainCompositedProductionIdentity.h"
 #include "terrain/terrainCompositedShaderPath.h"
 
 #include <atomic>
@@ -484,4 +485,148 @@ TEST_F(TerrainCompositedProductionTest, RejectsPreviousFilterAndEncodingIdentiti
         closure.generator.encoding = encoding;
         EXPECT_THROW(closure.Validate(), std::exception);
     }
+}
+
+namespace
+{
+using namespace VL;
+
+// 生产身份只认编译 manifest 的 runtime* 输出角色；debug* 是反射/调试副本。
+TEST(TerrainCompositedProductionIdentityRoleTest, RuntimeOutputRolesExcludeDebugReflection)
+{
+    for (const auto* role : {"runtimeVertex", "runtimeFragment",
+        "runtimeTessControl", "runtimeTessEvaluation", "runtimeCompute"})
+        EXPECT_TRUE(IsShaderRuntimeOutputRole(role)) << role;
+    for (const auto* role : {"debugVertex", "debugFragment",
+        "debugTessControl", "debugTessEvaluation", "debugCompute"})
+        EXPECT_FALSE(IsShaderRuntimeOutputRole(role)) << role;
+}
+
+class TerrainCompositedProductionIdentityTest : public testing::Test
+{
+protected:
+    TerrainCompositedProductionIdentityTest()
+    {
+        const auto add = [this](const std::string& id,
+            TerrainCompositedProductionObjectKind kind, const std::string& digest)
+        {
+            TerrainCompositedProductionObject object;
+            object.objectId = id;
+            object.kind = kind;
+            object.digest = ContentDigest::FromHex(digest);
+            object.relativePath = "objects/" + digest + ".bin";
+            expected.objects.push_back(std::move(object));
+            return id;
+        };
+        worldSource = Hash("world.comp source");
+        paddingSource = Hash("padding.comp source");
+        sharedInclude = Hash("shared bake include source");
+        worldRuntime = Hash("world runtime spv");
+        worldDebug = Hash("world debug reflection spv");
+        paddingRuntime = Hash("padding runtime spv");
+        paddingDebug = Hash("padding debug reflection spv");
+        expected.generator.computeSource = add("world-source",
+            TerrainCompositedProductionObjectKind::ShaderSource, worldSource);
+        expected.generator.includeSources = {
+            add("padding-source", TerrainCompositedProductionObjectKind::ShaderSource, paddingSource),
+            add("shared-include", TerrainCompositedProductionObjectKind::ShaderSource, sharedInclude)};
+        // publication 冻结时 runtime 与 debug 输出都作为 ShaderArtifact 记录。
+        expected.generator.compiledArtifacts = {
+            add("world-runtime-artifact", TerrainCompositedProductionObjectKind::ShaderArtifact, worldRuntime),
+            add("world-debug-artifact", TerrainCompositedProductionObjectKind::ShaderArtifact, worldDebug),
+            add("padding-runtime-artifact", TerrainCompositedProductionObjectKind::ShaderArtifact, paddingRuntime),
+            add("padding-debug-artifact", TerrainCompositedProductionObjectKind::ShaderArtifact, paddingDebug)};
+    }
+
+    static std::string Hash(const std::string& text)
+    {
+        return ContentHasher::HashString(text).ToHex();
+    }
+
+    static void AddKernel(ShaderBuildManifestSnapshot& manifest, const std::string& logicalBuildId,
+        const std::string& path, const std::string& primaryDigest,
+        const std::vector<std::string>& dependencyDigests,
+        const std::string& runtimeDigest, const std::string& debugDigest)
+    {
+        ShaderBuildArtifactRecord artifact;
+        artifact.logicalBuildId = logicalBuildId;
+        artifact.kind = "StageEntry";
+        artifact.normalizedKey = "kind=StageEntry|path=" + path + "|stage=compute";
+        artifact.primarySources.push_back({path, primaryDigest});
+        for (const std::string& digest : dependencyDigests)
+            artifact.dependencies.push_back(
+                {"materialFunction/terrainCompositedBake.glsl", digest, {}, 0});
+        artifact.outputs.emplace("runtimeCompute",
+            ShaderBuildOutputRecord{"spv/terrain/" + logicalBuildId + "_comp.spv", runtimeDigest});
+        artifact.outputs.emplace("debugCompute",
+            ShaderBuildOutputRecord{"spv/terrain/" + logicalBuildId + "_comp.debug", debugDigest});
+        manifest.artifacts.emplace(logicalBuildId, std::move(artifact));
+    }
+
+    ShaderBuildManifestSnapshot Manifest() const
+    {
+        ShaderBuildManifestSnapshot manifest;
+        AddKernel(manifest, "world", "terrain/terrainCompositedBakeWorld.comp",
+            worldSource, {sharedInclude}, worldRuntime, worldDebug);
+        AddKernel(manifest, "padding", "terrain/terrainCompositedBakeWorldPadding.comp",
+            paddingSource, {sharedInclude}, paddingRuntime, paddingDebug);
+        return manifest;
+    }
+
+    TerrainCompositedProductionClosure expected;
+    std::string worldSource;
+    std::string paddingSource;
+    std::string sharedInclude;
+    std::string worldRuntime;
+    std::string worldDebug;
+    std::string paddingRuntime;
+    std::string paddingDebug;
+};
+
+TEST_F(TerrainCompositedProductionIdentityTest, DebugReflectionRewriteKeepsProductionIdentity)
+{
+    // 模拟 P4 hotreload：源码只加一个换行，runtime SPV 不变，debug 产物重编译。
+    auto actual = Manifest();
+    actual.artifacts.at("world").outputs.at("debugCompute").digest =
+        Hash("rewritten world debug reflection spv");
+    actual.artifacts.at("padding").outputs.at("debugCompute").digest =
+        Hash("rewritten padding debug reflection spv");
+    EXPECT_TRUE(MatchesTerrainCompositedGeneratorClosure(expected, actual));
+}
+
+TEST_F(TerrainCompositedProductionIdentityTest, ChangedRuntimeSpvStillFails)
+{
+    auto actual = Manifest();
+    actual.artifacts.at("world").outputs.at("runtimeCompute").digest =
+        Hash("changed world runtime spv");
+    EXPECT_FALSE(MatchesTerrainCompositedGeneratorClosure(expected, actual));
+
+    actual = Manifest();
+    actual.artifacts.at("padding").outputs.at("runtimeCompute").digest =
+        Hash("changed padding runtime spv");
+    EXPECT_FALSE(MatchesTerrainCompositedGeneratorClosure(expected, actual));
+}
+
+TEST_F(TerrainCompositedProductionIdentityTest, MissingOrExtraKernelStillFails)
+{
+    auto actual = Manifest();
+    actual.artifacts.erase("padding");
+    EXPECT_FALSE(MatchesTerrainCompositedGeneratorClosure(expected, actual));
+
+    actual = Manifest();
+    actual.artifacts.at("world").outputs.erase("runtimeCompute");
+    EXPECT_FALSE(MatchesTerrainCompositedGeneratorClosure(expected, actual));
+
+    actual = Manifest();
+    AddKernel(actual, "extra", "terrain/terrainCompositedBakeWorld.comp",
+        worldSource, {sharedInclude}, Hash("extra runtime spv"), Hash("extra debug spv"));
+    EXPECT_FALSE(MatchesTerrainCompositedGeneratorClosure(expected, actual));
+}
+
+TEST_F(TerrainCompositedProductionIdentityTest, ChangedIncludeSourceStillFails)
+{
+    auto actual = Manifest();
+    actual.artifacts.at("world").dependencies.front().digest = Hash("changed include source");
+    EXPECT_FALSE(MatchesTerrainCompositedGeneratorClosure(expected, actual));
+}
 }
