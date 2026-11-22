@@ -69,22 +69,9 @@ namespace
 
     void TestTextureAssetFieldGate(const std::filesystem::path& fixturePath)
     {
-        nlohmann::json textureAssetJson = BuildTextureAssetJson();
-        WriteTextureAsset(fixturePath, textureAssetJson);
-        const TextureBindingLoadDesc loadDesc =
-            LoadTextureAssetDesc(fixturePath.string());
-        Require(
-            BuildTextureCacheKey(loadDesc).find("flipY") == std::string::npos,
-            "texture cache identity still contains flipY");
-
-        textureAssetJson["flipY"] = false;
-        WriteTextureAsset(fixturePath, textureAssetJson);
-        RequireThrows(
-            [&fixturePath]() {
-                LoadTextureAssetDesc(fixturePath.string());
-            },
-            "texture asset gate accepted flipY");
-
+        // flipY 已恢复为受支持字段（写入 loadDesc 与缓存键，见 textureAssetLoader.cpp），
+        // 原先“拒绝 flipY / 缓存键不含 flipY”的断言随该决定移除；翻转行为由 VerticalFlip 覆盖。
+        nlohmann::json textureAssetJson;
         textureAssetJson = BuildTextureAssetJson();
         textureAssetJson["unknownField"] = 1;
         WriteTextureAsset(fixturePath, textureAssetJson);
@@ -158,7 +145,7 @@ protected:
     std::filesystem::path fixturePath;
 };
 
-TEST_F(TextureAssetTest, FieldGate)
+TEST_F(TextureAssetTest, RejectsUnknownField)
 {
     TestTextureAssetFieldGate(fixturePath);
 }

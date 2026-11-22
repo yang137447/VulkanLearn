@@ -1,5 +1,7 @@
 #include <gtest/gtest.h>
 
+#include <algorithm>
+
 #include <atomic>
 #include <chrono>
 #include <fstream>
@@ -1427,7 +1429,15 @@ TEST_F(GameExportTest, TerrainCompositedRelocatesLongCookPathsWithoutChangingPay
     EnableGameFlavor();
     const auto manifest = TerrainPackage();
     const auto original = ReadJson(manifest);
-    const auto longerDirectory = resources / "TerrainCook" / std::string(31, 'p');
+    // 导出器在 staging 路径超过 259 字符时把包重定位到短目录。staging = output + ".staging.N"，
+    // 比 output 更长；按本机临时目录实际长度补齐，使最深文件的 output 路径达到 260，
+    // 而源路径（assets 比 game/resources 短 8 字符）仍低于 260，无需系统开启长路径。
+    size_t deepest = 0;
+    for (const auto& entry : fs::recursive_directory_iterator(manifest.parent_path()))
+        deepest = std::max(deepest, entry.path().lexically_relative(manifest.parent_path()).wstring().size());
+    const size_t base = (options.outputDirectory / "resources" / "TerrainCook").wstring().size() + 2 + deepest;
+    const size_t padding = base < 260 ? std::max<size_t>(1, 260 - base) : 1;
+    const auto longerDirectory = resources / "TerrainCook" / std::string(padding, 'p');
     fs::rename(manifest.parent_path(), longerDirectory);
     const auto manifestName = (longerDirectory / "manifest.json").lexically_relative(resources).generic_string();
     auto terrain = ReadJson(resources / "Generated/TR_composited.json");

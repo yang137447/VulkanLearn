@@ -73,9 +73,9 @@ TEST(TerrainFeedbackGraph, CompilesDedicatedColorAndDepthPass)
     EXPECT_TRUE(feedbackPass->needCreateMaterial);
     EXPECT_FALSE(feedbackPass->needMsaa);
     EXPECT_TRUE(feedbackPass->outputsDepth);
-    // 覆盖页 1 张 + L4b 层页 4 张；深度固定在最后。
-    EXPECT_EQ(feedbackPass->colorOutputCount, 5u);
-    ASSERT_EQ(feedbackPass->outputResources.size(), 6u);
+    // 覆盖页 1 张 + L4b 层页 4 张 + quality winner 2 张（7-MRT）；深度固定在最后。
+    EXPECT_EQ(feedbackPass->colorOutputCount, 7u);
+    ASSERT_EQ(feedbackPass->outputResources.size(), 8u);
     EXPECT_EQ(
         feedbackPass->outputResources[0].resource,
         "terrainFeedback");
@@ -87,6 +87,12 @@ TEST(TerrainFeedbackGraph, CompilesDedicatedColorAndDepthPass)
         "terrainCompositedFeedback3");
     EXPECT_EQ(
         feedbackPass->outputResources[5].resource,
+        "terrainQualityWinner0");
+    EXPECT_EQ(
+        feedbackPass->outputResources[6].resource,
+        "terrainQualityWinner1");
+    EXPECT_EQ(
+        feedbackPass->outputResources[7].resource,
         "terrainFeedbackDepth");
 
     bool foundResource = false;

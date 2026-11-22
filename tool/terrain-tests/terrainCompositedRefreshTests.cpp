@@ -5,6 +5,8 @@
 #include "editor/terrain/terrainPaintSession.h"
 #include "editor/terrain/terrainCompositedAuthorMonitor.h"
 #include "terrain/terrainCompositedDependencies.h"
+#include "terrain/terrainCompositedVerifiedInputs.h"
+#include "terrain/terrainRvtBudget.h"
 #include "terrainCompositedProductionFixture.h"
 
 #include <chrono>
@@ -604,8 +606,15 @@ protected:
                 ContentHasher::HashString("height-before").ToHex(), {"frame-normal"}}};
         TerrainCompositedVTStore::Publish(manifestPath, publication, pages);
         auto store = std::make_shared<TerrainCompositedVTStore>(TerrainCompositedVTStore::Open(manifestPath));
+        // LoadBaseline 只接受带作用域校验会话的 baseline（与 TerrainCompositedService 一致）；
+        // 缺 verificationOwner 时所有用例都会因同一原因被拒，拒绝类用例会无意义地通过。
+        TerrainRvtBudgetCaps caps;
+        caps.totalCpuBytes = uint64_t{512} * 1024 * 1024;
+        caps.workspaceCpuBytes = caps.totalCpuBytes;
+        auto verification = TerrainCompositedVerifiedInputs::Begin(store, 12,
+            store->Production().ContentHash(), std::make_shared<TerrainRvtBudgetOwner>(caps));
         baseline = {12, surface.surfaceId, store->Production().SurfaceContentHash(surface.surfaceId),
-            store, store->Production().surfaces.front().authorDependencies};
+            store, store->Production().surfaces.front().authorDependencies, verification};
     }
 };
 }

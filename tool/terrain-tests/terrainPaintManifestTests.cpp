@@ -33,8 +33,10 @@ class TerrainPaintManifestTest : public testing::Test
 protected:
     void SetUp() override
     {
+        // ctest 将每个用例作为独立进程并行运行；固定目录名会让用例互相 remove_all，故按用例名隔离。
         root = std::filesystem::temp_directory_path() /
-            "vl-terrain-paint-manifest-tests";
+            (std::string("vl-terrain-paint-manifest-tests-") +
+                ::testing::UnitTest::GetInstance()->current_test_info()->name());
         std::error_code ignored;
         std::filesystem::remove_all(root, ignored);
         std::filesystem::create_directories(root);

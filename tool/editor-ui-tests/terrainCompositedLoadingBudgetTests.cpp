@@ -61,7 +61,9 @@ TEST(TerrainCompositedLoadingBudget, PendingFrameLeaseKeepsParentChargeUntilLast
     auto frameLease = cacheLease;
     cacheLease.reset();
     EXPECT_EQ(parent->Statistics().current.gpuBytes, quote.gpuBytes);
-    EXPECT_EQ(parent->Statistics().current.cpuBytes, quote.cpuBytes);
+    // 子 owner 的 lease 另向父级计入自身簿记 CPU 字节，故父级 CPU 至少为 quote；
+    // 本用例关心的是最后一个持有者释放前不归零，释放后完整归还。
+    EXPECT_GE(parent->Statistics().current.cpuBytes, quote.cpuBytes);
     frameLease.reset();
     EXPECT_EQ(parent->Statistics().current.gpuBytes, 0u);
     EXPECT_EQ(parent->Statistics().current.cpuBytes, 0u);
