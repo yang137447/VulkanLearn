@@ -57,7 +57,8 @@ struct TerrainLitTarget::Impl
     }
 };
 TerrainLitTarget::TerrainLitTarget(RendererBackendVulkan& backend,
-    std::shared_ptr<TerrainRvtBudgetOwner> workspace,const RenderPassCompatibilityKey& key,TerrainLitRect rect)
+    std::shared_ptr<TerrainRvtBudgetOwner> workspace,const RenderPassCompatibilityKey& key,TerrainLitRect rect,
+    bool swapChainOutput)
 {
     RectValid(rect);
     Require(workspace&&workspace->Caps().workspaceGpuBytes<=32ull*1024*1024&&
@@ -120,15 +121,28 @@ TerrainLitTarget::TerrainLitTarget(RendererBackendVulkan& backend,
     if(!resolves.empty())subpass.setResolveAttachments(resolves);
     if(key.hasDepthAttachment)subpass.setPDepthStencilAttachment(&depth);
     if(key.hasDepthResolveAttachment)subpass.setPNext(&depthInfo);
-    std::array<vk::SubpassDependency2,2> dependencies;
-    dependencies[0].setSrcSubpass(VK_SUBPASS_EXTERNAL).setDstSubpass(0)
-        .setSrcStageMask(vk::PipelineStageFlagBits::eAllGraphics).setDstStageMask(vk::PipelineStageFlagBits::eAllGraphics)
-        .setSrcAccessMask(vk::AccessFlagBits::eShaderRead).setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite|vk::AccessFlagBits::eDepthStencilAttachmentWrite);
-    dependencies[1].setSrcSubpass(0).setDstSubpass(VK_SUBPASS_EXTERNAL)
-        .setSrcStageMask(vk::PipelineStageFlagBits::eAllGraphics)
-        .setDstStageMask(vk::PipelineStageFlagBits::eAllGraphics|vk::PipelineStageFlagBits::eTransfer)
+    // 兼容性不只比较附件，也要求 subpass dependency 的个数/subpass 对与真实 pass 一致
+    // （VUID-vkCmdDrawIndexed-renderPass-02684）。真实 RenderGraph pass 恒定有一个
+    // 0->0 颜色/深度写依赖，只有输出 swapChain 的 pass（toneMapping）额外有一条
+    // EXTERNAL->0 的 viewport 依赖，这里逐字镜像，不能用固定两条依赖。
+    std::vector<vk::SubpassDependency2> dependencies(1);
+    dependencies[0].setSrcSubpass(0).setDstSubpass(0)
+        .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput|vk::PipelineStageFlagBits::eLateFragmentTests)
         .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite|vk::AccessFlagBits::eDepthStencilAttachmentWrite)
-        .setDstAccessMask(vk::AccessFlagBits::eShaderRead|vk::AccessFlagBits::eTransferRead);
+        .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput|vk::PipelineStageFlagBits::eEarlyFragmentTests)
+        .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentWrite|vk::AccessFlagBits::eDepthStencilAttachmentWrite)
+        .setDependencyFlags(vk::DependencyFlagBits::eByRegion);
+    if(swapChainOutput)
+    {
+        vk::SubpassDependency2 viewportDependency;
+        viewportDependency.setSrcSubpass(VK_SUBPASS_EXTERNAL).setDstSubpass(0)
+            .setSrcStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput|vk::PipelineStageFlagBits::eFragmentShader)
+            .setDstStageMask(vk::PipelineStageFlagBits::eColorAttachmentOutput)
+            .setSrcAccessMask(vk::AccessFlagBits::eColorAttachmentWrite|vk::AccessFlagBits::eShaderRead)
+            .setDstAccessMask(vk::AccessFlagBits::eColorAttachmentRead|vk::AccessFlagBits::eColorAttachmentWrite)
+            .setDependencyFlags(vk::DependencyFlagBits::eByRegion);
+        dependencies.push_back(viewportDependency);
+    }
     vk::RenderPassCreateInfo2 pass;
     pass.setAttachments(attachments).setSubpasses(subpass).setDependencies(dependencies);
     state->pass=backend.CreateRenderPass(pass,"TestOnlyCompatible128LitPass");

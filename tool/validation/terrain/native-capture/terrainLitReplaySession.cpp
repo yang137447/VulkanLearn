@@ -13,6 +13,7 @@
 #include "terrainEvidenceWriter.h"
 #include <algorithm>
 #include <fstream>
+#include <iostream>
 #include <set>
 #include <nlohmann/json.hpp>
 
@@ -104,7 +105,20 @@ struct TerrainLitReplaySession::Impl
             {clone->buffers.push_back({*source.pBufferInfo});write.pBufferInfo=clone->buffers.back().data();}
             writes.push_back(write);
         }
-        Require(patched.size()==replace.size()&&!writes.empty(),"Actual pass input override binding missing");
+        // 图只写真实 pass 材质实际声明的 set3 binding；裁剪片元未必采样全部 GBuffer 通道。
+        // 只要求“裁剪片元确实采样且属于被替换集合”的 binding 都已替换，其余缺失仅记录，
+        // 否则会把未使用通道的缺失误判成证据失败。
+        std::set<uint32_t> sampled;
+        for(const auto& binding:pipeline.GetShaderBindings())
+            if(binding.set==3)sampled.insert(binding.binding);
+        std::vector<uint32_t> missing;
+        for(const auto& item:replace)
+            if(!patched.count(item.first)&&sampled.count(item.first))missing.push_back(item.first);
+        Require(!writes.empty()&&missing.empty(),"Actual pass input override binding missing");
+        for(const auto& item:replace)
+            if(!patched.count(item.first))
+                std::cerr<<"[LitReplay] set3 binding "<<item.first
+                    <<" is not written by the actual pass and is not sampled by the crop fragment"<<std::endl;
         frame.backend->UpdateDescriptorSets(writes);descriptors.push_back(clone);return clone;
     }
 
@@ -180,7 +194,8 @@ TerrainLitReplaySession::TerrainLitReplaySession(const TerrainCaptureFrameInfo& 
     state->compiler.Initialize(std::filesystem::path(CommonFunction::GetProjectPath())/"shader");
     state->factory=frame.backend->CreatePipelineFactory();state->factory->SetShaderCompiler(&state->compiler);
     state->identity={{"frame",frame.frame},{"submissionEpoch",frame.submissionEpoch},{"worldGeneration",frame.worldGeneration},
-        {"poseId",frame.poseId},{"inputClosureSha256",state->config.inputClosureSha256},
+        {"poseId",frame.poseId},{"actualBaseFineResidentPages",frame.actualBaseFineResidentPages},
+        {"inputClosureSha256",state->config.inputClosureSha256},
         {"originalEvaluatorSha256",state->config.originalEvaluatorSha256},{"referencePageSetSha256",state->config.referencePageSetSha256},
         {"rect",{state->config.rect.x,state->config.rect.y,128,128}},{"lightingArtifacts",Json::array()},
         {"actualDraws",Json::array()},
@@ -192,6 +207,9 @@ void TerrainLitReplaySession::AfterActualPass(PassRuntimeContext& context)
 {
     auto& state=*impl;
     if(!state.failure.empty())throw std::runtime_error(state.failure);
+    std::cerr<<"[LitReplay] pass="<<context.renderPass.name<<" type="<<uint32_t(context.renderPass.type)
+        <<" geometry="<<state.geometryRecorded<<" lighting="<<state.lightingRecorded
+        <<" display="<<state.displayRecorded<<" submitted="<<state.submitted<<std::endl;
     Require(context.renderScene.worldGeneration==state.frame.worldGeneration,"Lit frame World changed");
     if(state.actualScene)
         Require(state.actualScene==&context.renderScene&&state.actualCommand==context.commandBuffer&&
@@ -308,7 +326,7 @@ void TerrainLitReplaySession::AfterActualPass(PassRuntimeContext& context)
         for(uint32_t branch=0;branch<2;++branch)
         {
             state.display[branch]=std::make_unique<TerrainLitTarget>(*state.frame.backend,state.frame.actualWorldBudget,
-                context.renderPass.pipelineContractKey.renderPassCompatibilityKey,state.config.rect);
+                context.renderPass.pipelineContractKey.renderPassCompatibilityKey,state.config.rect,true);
             const auto clone=state.ClonePassInputs(context,*pipeline,{{0,state.lighting[branch]->Channel(0)}});
             state.Fullscreen(context,*state.display[branch],*pipeline,*clone);
             state.litReadbacks[branch]=std::make_unique<TerrainLitReadback>(*state.frame.backend,state.frame.actualWorldBudget,
@@ -326,6 +344,10 @@ void TerrainLitReplaySession::AfterActualPass(PassRuntimeContext& context)
 }
 std::shared_ptr<const void> TerrainLitReplaySession::Submitted(uint64_t epoch)
 {
+    if(!(epoch==impl->frame.submissionEpoch&&impl->displayRecorded&&!impl->submitted))
+        std::cerr<<"[LitReplay] submit mismatch epoch="<<epoch<<" expected="<<impl->frame.submissionEpoch
+            <<" geometry="<<impl->geometryRecorded<<" lighting="<<impl->lightingRecorded
+            <<" display="<<impl->displayRecorded<<" submitted="<<impl->submitted<<std::endl;
     Require(epoch==impl->frame.submissionEpoch&&impl->displayRecorded&&!impl->submitted,"Lit replay submission/incomplete pass chain mismatch");
     impl->submitted=epoch;return impl;
 }

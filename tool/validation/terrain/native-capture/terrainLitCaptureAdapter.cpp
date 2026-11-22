@@ -1,5 +1,7 @@
 #include "terrainLitCaptureAdapter.h"
 #include "render/diagnostics/terrainLitCaptureHooks.h"
+#include "material.h"
+#include <iostream>
 #include <stdexcept>
 
 namespace VL
@@ -13,6 +15,7 @@ struct CombinedFlight
 };
 class LitAdapter final : public ITerrainCaptureHooks, public ITerrainLitCaptureHooks
 {
+    // 允许没有 TES case：lit-only 模式下只记录 lit replay，不评估任何 TES witness。
     std::shared_ptr<ITerrainCaptureHooks> actualTes;
     TerrainLitSessionFactory factory;
     std::shared_ptr<TerrainLitReplaySession> session;
@@ -24,12 +27,17 @@ public:
     LitAdapter(std::shared_ptr<ITerrainCaptureHooks> tes,TerrainLitSessionFactory prepare)
         :actualTes(std::move(tes)),factory(std::move(prepare))
     {
-        if(!actualTes||!factory)throw std::invalid_argument("Explicit lit test adapter requires TES and native session factory");
+        if(!factory)throw std::invalid_argument("Explicit lit test adapter requires a native session factory");
+        std::cerr<<"[TerrainLit] mode="<<(actualTes?"tes+lit":"lit-only")
+            <<" (lit-only: no TES witness is evaluated)\n";
     }
-    bool RequiresTesVertexStores()const noexcept override {return actualTes->RequiresTesVertexStores();}
+    bool RequiresTesVertexStores()const noexcept override
+    {
+        return actualTes?actualTes->RequiresTesVertexStores():false;
+    }
     void BeforeGeometry(PassRuntimeContext& context,const TerrainCaptureFrameInfo& frame)override
     {
-        actualTes->BeforeGeometry(context,frame);
+        if(actualTes)actualTes->BeforeGeometry(context,frame);
         if(completed||epoch)return;
         if(session)session->AbortProvenUnsubmitted();
         if(!referencePool)throw std::runtime_error("Explicit lit replay requires a legal native peak/outer reference owner");
@@ -43,14 +51,33 @@ public:
     }
     std::shared_ptr<PipelineBase> SelectActualDraw(const TerrainCaptureDrawInputs& draw)override
     {
-        auto pipeline=actualTes->SelectActualDraw(draw);
+        if(actualTes)
+        {
+            auto pipeline=actualTes->SelectActualDraw(draw);
+            if(pipeline)selected=true;
+            return pipeline;
+        }
+        // lit-only：选中实际地形 draw，但保持真实 pipeline（不改变生产拓扑/绑定）。
+        auto pipeline=draw.materialOwner?draw.materialOwner->GetRenderPipeline():std::shared_ptr<PipelineBase>{};
         if(pipeline)selected=true;
+        else {static uint32_t reported=0;if(reported<3){++reported;
+            std::cerr<<"[TerrainLit] lit-only select miss: materialOwner="<<(draw.materialOwner!=nullptr)
+                <<std::endl;}}
         return pipeline;
     }
     void BindActualDraw(vk::CommandBuffer command,const TerrainCaptureDrawInputs& draw,
-        const PipelineBase& pipeline)override {actualTes->BindActualDraw(command,draw,pipeline);}
-    void ActualDrawRecorded(const TerrainCaptureDrawInputs& draw)override {actualTes->ActualDrawRecorded(draw);}
-    void AfterGeometry(vk::CommandBuffer command)override {actualTes->AfterGeometry(command);}
+        const PipelineBase& pipeline)override
+    {
+        if(actualTes)actualTes->BindActualDraw(command,draw,pipeline);
+    }
+    void ActualDrawRecorded(const TerrainCaptureDrawInputs& draw)override
+    {
+        if(actualTes)actualTes->ActualDrawRecorded(draw);
+    }
+    void AfterGeometry(vk::CommandBuffer command)override
+    {
+        if(actualTes)actualTes->AfterGeometry(command);
+    }
     void AfterActualPass(PassRuntimeContext& context)override
     {
         if(session&&selected&&!epoch&&!completed)session->AfterActualPass(context);
@@ -58,8 +85,9 @@ public:
     std::shared_ptr<const void> Submitted(uint64_t actualEpoch)override
     {
         auto flight=std::make_shared<CombinedFlight>();
-        flight->tes=actualTes->Submitted(actualEpoch);
-        if(session&&selected)
+        if(actualTes)flight->tes=actualTes->Submitted(actualEpoch);
+        // 一次 replay 只提交一次：后续帧的 Submitted 不能重复提交同一 session。
+        if(session&&selected&&!epoch)
         {
             flight->lit=session->Submitted(actualEpoch);
             epoch=actualEpoch;
@@ -68,17 +96,17 @@ public:
     }
     void AbortUnsubmitted()override
     {
-        actualTes->AbortUnsubmitted();
+        if(actualTes)actualTes->AbortUnsubmitted();
         if(session&&!epoch){session->AbortProvenUnsubmitted();session.reset();}
     }
     void ConsumeCompleted(uint64_t completedEpoch)override
     {
-        actualTes->ConsumeCompleted(completedEpoch);
+        if(actualTes)actualTes->ConsumeCompleted(completedEpoch);
         if(session&&epoch&&session->ConsumeCompleted(completedEpoch))completed=true;
     }
     void CloseAfterDeviceIdle()override
     {
-        actualTes->CloseAfterDeviceIdle();
+        if(actualTes)actualTes->CloseAfterDeviceIdle();
         if(session)
         {
             if(epoch&&!completed)completed=session->ConsumeCompleted(epoch);

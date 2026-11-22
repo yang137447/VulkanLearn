@@ -216,8 +216,8 @@ def compare_tes(capture_path, metadata_path, manifest_path):
     limits, frozen_hash = thresholds()
     return {"scope": "Bounded actual TES records vs independent double source-mip2 oracle; not scene-lit or all-edge acceptance",
             "records": len(records), "heightSamples": active_samples, "sourceMip2": identity,
-            "maxHeightErrorR16Units": maximum, "gateR16Units": limits["tesMaxHeightErrorR16Units"],
-            "heightGatePassed": maximum <= limits["tesMaxHeightErrorR16Units"],
+            "maxHeightErrorR16Units": float(maximum), "gateR16Units": float(limits["tesMaxHeightErrorR16Units"]),
+            "heightGatePassed": bool(maximum <= limits["tesMaxHeightErrorR16Units"]),
             "predictedWorldMaxAbsCm": float(np.max(np.abs(np.asarray(predicted_world) - records[:, 2, :3]))),
             "worldDiagnosticScope": "Float64 reconstruction reported without inventing a world-coordinate gate",
             "frozenSha256": frozen_hash, "overallP5Passed": False}

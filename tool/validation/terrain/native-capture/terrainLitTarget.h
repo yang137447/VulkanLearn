@@ -30,7 +30,8 @@ class TerrainLitTarget
 {
 public:
     TerrainLitTarget(RendererBackendVulkan& backend,std::shared_ptr<TerrainRvtBudgetOwner> actualWorkspace,
-        const RenderPassCompatibilityKey& exactPassCompatibility,TerrainLitRect rect);
+        const RenderPassCompatibilityKey& exactPassCompatibility,TerrainLitRect rect,
+        bool swapChainOutput=false);
     ~TerrainLitTarget();
     void Begin(vk::CommandBuffer command,const std::vector<vk::ClearValue>& actualClearValues);
     void End(vk::CommandBuffer command);

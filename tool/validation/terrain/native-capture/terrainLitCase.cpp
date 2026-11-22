@@ -2,6 +2,7 @@
 #include "render/pass/passRuntime.h"
 #include "shader/build/contentHash.h"
 #include <fstream>
+#include <iostream>
 #include <nlohmann/json.hpp>
 #include <stdexcept>
 
@@ -41,14 +42,32 @@ TerrainLitSessionFactory LoadNativeTerrainLitCase(const std::filesystem::path& p
     }
     const auto capacity=document.at("actualSlotCapacity").get<uint32_t>();
     const auto minimumPose=document.at("poseId").get<uint64_t>();
-    return [config,document,pages,capacity,minimumPose](PassRuntimeContext& context,
+    // 该零常驻细页条件来自 TES 高度闭包；lit-only 近场回放需要非根 mip 常驻，
+    // 因此仅当用例显式声明 allowFineResidentPages=true 时豁免，并仍把实际值写入回放身份。
+    const bool allowFineResident=document.value("allowFineResidentPages",false);
+    return [config,document,pages,capacity,minimumPose,allowFineResident](PassRuntimeContext& context,
         const TerrainCaptureFrameInfo& frame,std::shared_ptr<TerrainRvtBudgetOwner> pool)
         ->std::shared_ptr<TerrainLitReplaySession>
     {
-        if(frame.poseId!=minimumPose||frame.actualBaseFineResidentPages!=0)return {};
+        if(frame.poseId!=minimumPose||(!allowFineResident&&frame.actualBaseFineResidentPages!=0))
+        {
+            static uint32_t skipReported=0;
+            if(skipReported<6){++skipReported;std::cerr<<"[TerrainLit] factory skip: poseId="<<frame.poseId
+                <<" expected="<<minimumPose<<" fineBase="<<frame.actualBaseFineResidentPages
+                <<" allowFine="<<allowFineResident<<std::endl;}
+            return {};
+        }
         Eigen::Vector3f expected;
         for(int axis=0;axis<3;++axis)expected[axis]=document.at("cameraPosition").at(axis).get<float>();
-        if((context.renderScene.camera.position-expected).cwiseAbs().maxCoeff()>.02f)return {};
+        if((context.renderScene.camera.position-expected).cwiseAbs().maxCoeff()>.02f)
+        {
+            static uint32_t reported=0;
+            if(reported<4){++reported;std::cerr<<"[TerrainLit] factory skip: poseId="<<frame.poseId
+                <<" expected="<<minimumPose<<" fineBase="<<frame.actualBaseFineResidentPages
+                <<" camera="<<context.renderScene.camera.position.transpose()
+                <<" expectedCamera="<<expected.transpose()<<std::endl;}
+            return {};
+        }
         const auto& values=document.at("actualAtlasFormats");
         std::array<vk::Format,3> formats{vk::Format(values.at(0).get<uint32_t>()),
             vk::Format(values.at(1).get<uint32_t>()),vk::Format(values.at(2).get<uint32_t>())};
