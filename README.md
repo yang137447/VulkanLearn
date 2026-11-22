@@ -66,6 +66,33 @@ Editor/Cook 另需共享 `productionSourcePath` 配方。旧 TR 预算字段和 
 
 当前仓库使用的是 MinGW 工具链，现有 `build/` 目录记录的 CMake generator 为 `MinGW Makefiles`。
 
+已验证的 Windows 工具链（与依赖缓存的 `win64-mingw-16.2.0-ucrt` 一致）：
+
+```powershell
+winget install --id BrechtSanders.WinLibs.POSIX.UCRT -e
+winget install --id Kitware.CMake -e
+winget install --id Python.Python.3.13 -e
+```
+
+WinLibs 自带的 `cmake` 也在其 `mingw64/bin` 中；`PATH` 上请让 Kitware CMake 排在前面，
+WinLibs 版本的 TLS 证书校验经本地代理下载依赖时会失败（`status_code: 60`）。
+Vulkan SDK 头文件、库和 Shaderc 已随仓库放在 `extern/`，其余重依赖在 configure 时从 GitHub 拉取。
+
+### 编译并发：按机器设置，不写进仓库
+
+`CMakePresets.json` 与文档命令都不写 `-j`。`cmake --build` 在未给 `-j` 时读取环境变量
+`CMAKE_BUILD_PARALLEL_LEVEL`，每台机器按自身逻辑核数与内存设置一次即可：
+
+```powershell
+setx CMAKE_BUILD_PARALLEL_LEVEL 32
+```
+
+经验值：内存充足时取逻辑核数（16C/32T、96 GB 的机器用 32）；内存紧张时按每个编译进程约
+2–3 GB 下调。未设置时 Makefiles 生成器退化为串行编译。测试同理，用 `ctest -j <逻辑核数>`。
+
+RelWithDebInfo 请保持 `-g1`（`development` preset 已设置）：MinGW 会把完整 `-g` 的 DWARF
+段计入 PE 映像，`main_game.exe` 超过约 2 GB 后 Windows 拒绝加载（`Exec format error`）。
+
 ## 构建指南
 
 ### 1. 配置项目
@@ -79,7 +106,7 @@ cmake -S . -B build -G "MinGW Makefiles"
 执行以下命令进行编译：
 
 ```bash
-cmake --build build --target main_editor main_game main -j 4
+cmake --build build --target main_editor main_game main
 ```
 
 ### 3. 构建类型：日常迭代用 development，Debug 只用来查问题
@@ -185,7 +212,7 @@ Editing 时 BP JSON 内容变化自动走 World 事务重载，播放时延后�
 开发包（dev flavor）可直接导出到一个尚不存在的目录：
 
 ```powershell
-cmake --build build --target main_editor vl_export_game -j 4
+cmake --build build --target main_editor vl_export_game
 .\build\bin\vl_export_game.exe --project-root . --initial-scene Maps/SC_actor_gameplay/SC_actor_gameplay.json --output artifacts/game-export
 ```
 
@@ -194,7 +221,7 @@ cmake --build build --target main_editor vl_export_game -j 4
 
 ```powershell
 cmake -S . -B build-game -G "MinGW Makefiles" -DCMAKE_BUILD_TYPE=Release -DVULKANLEARN_ENABLE_EDITOR=OFF
-cmake --build build-game --target main_game vl_export_game -j 4
+cmake --build build-game --target main_game vl_export_game
 build-game\bin\main_game.exe --shader-force-rebuild --exit-after-frames 2
 build-game\bin\vl_export_game.exe --project-root . --flavor game `
   --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json `

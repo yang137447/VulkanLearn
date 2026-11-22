@@ -200,7 +200,7 @@ mirror; this is the only third-party download in the default configure path.
 Build:
 
 ```powershell
-cmake --build build --target main_editor main_game main -j 4
+cmake --build build --target main_editor main_game main
 ```
 
 Executable output:
@@ -237,7 +237,7 @@ build\bin\main_game.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_
 Game-flavor packaging requires a Release game cache and the game binary:
 
 ```powershell
-cmake --build build-game --target main_game vl_export_game -j 4
+cmake --build build-game --target main_game vl_export_game
 build-game\bin\main_game.exe --shader-force-rebuild --exit-after-frames 2
 build-game\bin\vl_export_game.exe --project-root . --flavor game `
   --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json `

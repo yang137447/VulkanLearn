@@ -641,3 +641,39 @@ R14→R17 已多次进入这一循环。经用户决定，本轮不再以该核�
 | 已披露差异 | ABI 文档字节数、`meanRgb` 通道标注、post-run 摘要不可复现、`material_revert` 瞬态、save→reload 高度不回环 |
 
 重新开启任一延期项时，应单独立项并给出可终止的退出条件，不恢复整表同时达标的要求。
+
+### 追加：换机后的构建、测试与冒烟（2026-11-23）
+
+环境：AMD Ryzen 9 7950X（16C/32T）、95 GB；WinLibs GCC 16.2.0 POSIX UCRT
+（与依赖缓存 `win64-mingw-16.2.0-ucrt` 一致）、Kitware CMake 4.4.4、Python 3.13；
+`build/`，RelWithDebInfo `-O2 -g1`，source 依赖模式，`CMAKE_BUILD_PARALLEL_LEVEL=32`。
+资源 `Generated/` 与 `artifacts/` 仍不在本机，默认 RVTv2 场景与 R17 包均未运行。
+
+换机暴露并已修复的问题（均与 RVT 门禁无关）：
+
+- 测试默认关闭（preset `VULKANLEARN_BUILD_TESTS: false`）导致 8 个测试目标源码清单过期：
+  缺 `tracingIfstream.cpp`/`runtimeFileTrace.cpp`、RVT 已验证输入/预算/dirty/邻接/VT 布局定义，
+  以及一处 `{}` 回调重载二义性。
+- `terrainRvtP0Frozen.json` 被 `core.autocrlf` 检出为 CRLF，字节 SHA256 与冻结摘要不符；
+  `.gitattributes` 改为 `eol=lf`。运行时与 exporter 均会因此拒绝。
+- `-fmacro-prefix-map` 使 `__FILE__` 变为相对路径；`vulkanlearn_add_gtest` 默认在源码根运行测试。
+- 完整 `-g` 使 `main_game.exe` 达 2.7 GB 而无法加载；保持 `-g1`。
+- source 模式未部署 MinGW 运行时 DLL，按 PATH 加载 Git for Windows 的 `libstdc++-6.dll`，
+  退出时在 `VulkanManager` 静态析构 `std::mutex::unlock` 处 abort；现与 prebuilt 模式一样复制到 `bin/`。
+
+结果：全量构建通过（44 个可执行）；ctest `-j 32` 4060 项中 4051 通过。
+`main_game`（worker 2 ×3、worker 1）与 `main_editor` 在 `SC_fracture_playground` 上 `--exit-after-frames` 均退出码 0；
+未安装 `VK_LAYER_KHRONOS_validation`，故无 validation 结论。
+
+未修复、保留原样的失败（判断属于测试期望与代码的分歧或环境相关，需各自 owner 裁决，不改断言凑通过）：
+
+| 测试 | 现象 |
+| --- | --- |
+| `TerrainCompositedRefreshV2Baseline` ×2 | `LoadBaseline` 报 "Baseline object verification requires an open scoped Store session" |
+| `TerrainCompositedLoadingBudget.PendingFrameLeaseKeepsParentChargeUntilLastOwner` | 父 owner CPU 33424 ≠ quote 32912（差 512 B 元数据） |
+| `TerrainFeedbackGraph.CompilesDedicatedColorAndDepthPass` | 实际 7 色 + 深度，测试仍期望 5 色（7-MRT 之前的断言） |
+| `TextureAssetTest.FieldGate` | "texture cache identity still contains flipY" |
+| `GameExportTest.TerrainCompositedRelocatesLongCookPathsWithoutChangingPayload` | 是否重定位取决于本机临时目录长度 |
+
+`TerrainPaintManifestTest`/`TerrainPaintFileTest` 在 `-j 32` 下偶发失败或超时，串行 27/27 通过（共享临时目录竞争）。
+文档门禁 4 处失败均为指向被忽略 `artifacts/` 的链接，原执行机器上存在。
