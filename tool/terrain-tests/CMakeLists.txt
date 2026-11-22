@@ -175,6 +175,13 @@ target_include_directories(terrain_capture_frame_lifecycle_tests PRIVATE ${PROJE
 target_link_libraries(terrain_capture_frame_lifecycle_tests PRIVATE vl_runtime)
 vulkanlearn_add_gtest(terrain_capture_frame_lifecycle_tests)
 
+# R15 CPU p99 诊断：质量回读内存类型与固定 1,619,200 字节 payload 解码。
+# 纯 CPU，不需要图形设备。
+add_executable(terrain_quality_readback_tests terrainCompositedQualityReadbackTests.cpp)
+target_include_directories(terrain_quality_readback_tests PRIVATE ${PROJECT_SOURCE_DIR}/source)
+target_link_libraries(terrain_quality_readback_tests PRIVATE Vulkan::Vulkan Eigen3 Json)
+vulkanlearn_add_gtest(terrain_quality_readback_tests)
+
 add_executable(terrain_request_diagnostics_tests
     terrainCompositedRequestDiagnosticsTests.cpp
     ${PROJECT_SOURCE_DIR}/source/render/terrain/terrainCompositedRuntime.cpp

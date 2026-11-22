@@ -170,8 +170,17 @@ TerrainCompositedQualityGpu::TerrainCompositedQualityGpu(
     };
     state.output = create(Abi::Bytes, outputUsage, vk::MemoryPropertyFlagBits::eDeviceLocal,
         "TerrainQualityOutput");
+    // 1.6 MiB 固定 payload 每个 capture（约 4 Hz）都由 TryConsume 在帧线程整块
+    // memcpy 读回。只要求 HOST_VISIBLE|HOST_COHERENT 时，离散卡会落到
+    // write-combined/非 cached 的系统内存，CPU 逐字读 1.6 MiB 约需 10 ms，
+    // 且偶发 PCIe/MMIO 抖动会放大到 100 ms 以上，直接计入 CPU 帧间隔。
+    // terrainFeedbackGpu / terrainCompositedFeedbackGpu 的回读环早已按同一约定
+    // 申请 HOST_CACHED；这里补齐，让同样的 1.6 MiB 读走 cache line。
+    // HOST_CACHED 只是性能提示：CommonFunction::FindMemoryType 在该组合不存在时
+    // 会退回 HOST_VISIBLE|HOST_COHERENT，不改变功能与证据内容。
     state.host = create(Abi::Bytes, vk::BufferUsageFlagBits::eTransferDst,
-        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent,
+        vk::MemoryPropertyFlagBits::eHostVisible | vk::MemoryPropertyFlagBits::eHostCoherent |
+            vk::MemoryPropertyFlagBits::eHostCached,
         "TerrainQualityReadback");
     state.mapped = backend.MapMemory(state.host.memory, Abi::Bytes);
     for (auto& selector : state.selectors)
