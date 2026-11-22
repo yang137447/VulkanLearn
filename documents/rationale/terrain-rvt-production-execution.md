@@ -537,3 +537,18 @@ P1/P2 负例、P4 完成矩阵、lit/TES 视觉门禁、readonly 取证与旧路
 - 仍未证明：143 份 quality capture 的完整帧配对、whole-owner 分账、可选细页缓存冷热对比
   （`fineDiskCache=disabled` 时该特性不存在）。
 - 记录：`final-delivery/s5-formal-performance-record.md`；独立复核：`final-delivery/s5-audit/`。
+
+### 追加：R15 一致核心、运行时重跑与性能裁决（2026-11-22）
+
+- R15 冻结：`core-native-r15/checkpoint.json` `14a1ffe5…0350`，1,118 源/120 build inputs/41 CMake；
+  main_game `cc8fe5c8…`、main_editor `844aa97c…`、libvl_runtime `5fbd6c48…`、libvl_editor `b532a5e3…`；
+  导出器 `de183d72…`。发布/缓存与 R14 相同（C010 `1f92ee66…`/`17738a88…`）。
+- 重导出：`p5g/C010r15` 626 文件/627,523,885 B、`p5g/L010r15` 634/744,700,658 B，export/verify 0/0；
+  每包与 R14 仅 `main_game.exe` + `game-export-manifest.json` 不同（624/632 逐字节相同）。
+- R15 运行时：双模式 53 机位、worker1 core/teleport、只读离线 Game（0 外部作者读取、0 shader miss）、
+  7 项文件级负例全部通过；记录在 `final-delivery/r15/`。
+- R15 正式性能：GPU pass-sum p99 3.074/2.762、geometry 2.284/1.967、启动 19.5/20.0 s、
+  private/WDDM 峰值全部达标，6/6 run 双时钟锁定且 host 静默；**CPU interval p99 140.182/78.582 ms
+  超过 72.105，Local warm reload WDDM 采样 1 个内部不可用** → 正式性能整体未通过。
+- 裁决与下一步见 `final-delivery/r15/R15-PERF-VERDICT.md`：先降低 4 Hz quality capture 的
+  ~200 ms CPU 停顿（异步/分帧 readback），不得靠重跑碰运气；WDDM helper 稳定性同时修复后重测。
