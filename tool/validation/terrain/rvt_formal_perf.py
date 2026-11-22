@@ -690,8 +690,16 @@ def bind_package(package, receipt_path, mode, output):
             and checkpoint["additionalCmakeInputsBeforeAfterUnchanged"] is True, "Frozen CMake lock differs")
     inventory_path = receipt_path.parent / "inventory.json"
     expected = json_value(inventory_path)
-    inventory_identity = hashlib.sha256(json.dumps(
+    canonical_identity = hashlib.sha256(json.dumps(
         expected, sort_keys=True, separators=(",", ":")).encode()).hexdigest()
+    # R14 收据把 inventory 对象的规范化哈希写进 inventorySha256；R15 收据显式声明
+    # “sha256 of the receipt-side inventory.json file bytes”。两种口径都必须只改变
+    # “如何给同一份 inventory 取哈希”，不得改写收据/inventory，也不放宽任何门槛：
+    # 文件闭包、逐文件大小与 sha256、总量、发布清单与 shader cache 仍全部逐项校验。
+    if receipt.get("inventorySha256Algorithm") == "sha256 of the receipt-side inventory.json file bytes":
+        inventory_identity = digest(inventory_path)
+    else:
+        inventory_identity = canonical_identity
     require(inventory_identity == receipt["inventorySha256"], "Package canonical inventory identity changed")
     actual_paths = []
     for path in sorted(package.rglob("*")):

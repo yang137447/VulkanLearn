@@ -2,6 +2,10 @@
 
 与 run_rvt_case 不同：本脚本只做真实安装副本的文件级负例与真实 console fault 注入，
 记录原始日志/退出码/关键行，不依赖尚未实现的 [RVT_EVIDENCE] 事件族，也不改冻结门槛。
+
+R15 工具参数化：--package/--private-root/--output/--scenario-dir 均可覆盖，
+默认值仍指向 R14 的旧路径以保持向后兼容；新增每个 case 的 RuntimeEvidence footer 记录
+与源包 inventory 前后不变证明。
 """
 import argparse
 import hashlib
@@ -31,11 +35,65 @@ def read_json(path):
     return json.loads(Path(path).read_text(encoding='utf-8'))
 
 
-def copy_package(name):
-    target = PRIVATE / ('pkg-' + name)
+def inventory(root):
+    return {p.relative_to(root).as_posix(): {'bytes': p.stat().st_size, 'sha256': sha(p)}
+            for p in sorted(root.rglob('*')) if p.is_file()}
+
+
+def evidence_footer(path):
+    """Validate the dedicated RuntimeEvidence JSONL: sequence, last footer, byte accounting."""
+    result = {'path': str(path), 'present': path.is_file()}
+    if not result['present']:
+        result.update(complete=False, reason='runtime evidence file absent (sink never initialized)')
+        return result
+    raw = path.read_bytes()
+    result.update(bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+    if not raw.endswith(b'\n'):
+        result.update(complete=False, reason='file does not end with newline')
+        return result
+    lines = raw.splitlines()
+    records, sequence_ok, first_error = [], True, None
+    for index, line in enumerate(lines):
+        try:
+            record = json.loads(line.decode('utf-8'))
+        except Exception as error:
+            sequence_ok, first_error = False, f'line {index + 1}: {error}'
+            break
+        if record.get('sequence') != index + 1:
+            sequence_ok, first_error = False, f"line {index + 1}: sequence={record.get('sequence')}"
+            break
+        records.append(record)
+    result['lines'] = len(lines)
+    result['sequenceContiguous'] = sequence_ok
+    result['sequenceError'] = first_error
+    if not records:
+        result.update(complete=False, reason='empty evidence file')
+        return result
+    footer = records[-1]
+    footer_bytes = len(lines[-1]) + 1
+    result['footer'] = footer
+    result['footerIsLast'] = footer.get('eventClass') == 'runtimeEvidenceEnd'
+    payload = footer.get('payload') or {}
+    result['recordsBeforeTerminal'] = payload.get('recordsBeforeTerminal')
+    result['bytesBeforeTerminal'] = payload.get('bytesBeforeTerminal')
+    result['byteAccountingMatches'] = (
+        payload.get('bytesBeforeTerminal') is not None and
+        payload['bytesBeforeTerminal'] + footer_bytes == len(raw))
+    result['recordAccountingMatches'] = (
+        payload.get('recordsBeforeTerminal') is not None and
+        payload['recordsBeforeTerminal'] + 1 == len(lines))
+    result['incomplete'] = payload.get('incomplete')
+    result['complete'] = bool(sequence_ok and result['footerIsLast'] and
+                              result['byteAccountingMatches'] and
+                              result['recordAccountingMatches'] and result['incomplete'] is False)
+    return result
+
+
+def copy_package(package, private_root, name):
+    target = private_root / ('pkg-' + name)
     if target.exists():
         shutil.rmtree(target)
-    shutil.copytree(PKG, target)
+    shutil.copytree(package, target)
     return target
 
 
@@ -96,7 +154,7 @@ def run_case(case, frames, expect_failure):
         print('SKIP', case)
         return None
     output.mkdir(parents=True)
-    package = copy_package(case)
+    package = copy_package(PKG, PRIVATE, case)
     mutation = mutate(package, case) if case in (
         'root_corrupt', 'input_corrupt', 'v1_reject', 'legacy_switch_reject') else None
     config = read_json(package / 'config/config.json')
@@ -106,10 +164,15 @@ def run_case(case, frames, expect_failure):
             '--console-command-delay', '1']
     for command in commands_for(case):
         args.extend(['--console-command', command])
+    evidence = output / 'runtime-events.jsonl'
+    environment = {k: v for k, v in os.environ.items() if not k.startswith('VL_')
+                   and not k.startswith('VULKANLEARN_')}
+    environment['VULKANLEARN_RUNTIME_EVIDENCE'] = str(evidence)
     log = output / 'runtime.log'
     started = time.monotonic()
     with log.open('wb') as handle:
-        process = subprocess.Popen(args, cwd=package, stdout=handle, stderr=subprocess.STDOUT)
+        process = subprocess.Popen(args, cwd=package, stdout=handle, stderr=subprocess.STDOUT,
+                                   env=environment)
         try:
             code = process.wait(timeout=1500)
             timed_out = False
@@ -124,6 +187,7 @@ def run_case(case, frames, expect_failure):
     committed = any('World/graph transaction committed' in line for line in lines)
     init_failed = any(('EngineLoop init failed' in line) or ('LoadWorld transaction failed' in line)
                       or ('WorldTransition.LoadFailed' in line) for line in lines)
+    teardown = any('EngineLoop teardown complete' in line for line in lines)
     faults = [line for line in lines if ('fault-injection' in line or 'production-failure' in line
                                          or 'submit-' in line or 'candidate-budget-admission' in line)]
     errors = [line for line in lines if ('[Error]' in line or 'VUID-' in line or 'Validation Error' in line)]
@@ -132,8 +196,9 @@ def run_case(case, frames, expect_failure):
     record = {
         'case': case, 'expectFailure': expect_failure, 'exitCode': code, 'timedOut': timed_out,
         'elapsedSeconds': round(elapsed, 1), 'worldCommitted': committed, 'initFailed': init_failed,
-        'mutation': mutation, 'package': str(package),
+        'cleanTeardown': teardown, 'mutation': mutation, 'package': str(package),
         'packageMainSha256': sha(package / 'main_game.exe'),
+        'runtimeEvidence': evidence_footer(evidence),
         'runtimeLog': {'path': str(log), 'bytes': log.stat().st_size, 'sha256': sha(log)},
         'errorLines': errors[:40], 'faultTelemetryLines': faults[:60],
         'keyLines': markers[:80],
@@ -142,23 +207,46 @@ def run_case(case, frames, expect_failure):
     }
     (output / 'result.json').write_text(json.dumps(record, ensure_ascii=False, indent=1), encoding='utf-8')
     print(json.dumps({'case': case, 'exit': code, 'committed': committed, 'initFailed': init_failed,
+                      'teardown': teardown, 'evidenceComplete': record['runtimeEvidence'].get('complete'),
                       'verdict': record['verdict'], 'elapsed': record['elapsedSeconds']}, ensure_ascii=False))
     return record
 
 
 def main():
+    global PKG, PRIVATE, OUT, SCEN
     parser = argparse.ArgumentParser()
+    parser.add_argument('--package', type=Path, default=PKG)
+    parser.add_argument('--private-root', type=Path, default=PRIVATE)
+    parser.add_argument('--output', type=Path, default=OUT)
+    parser.add_argument('--scenario-dir', type=Path, default=SCEN)
     parser.add_argument('--cases', nargs='*', default=['closure'])
     parser.add_argument('--frames', type=int, default=1200)
     parser.add_argument('--expect-failure', nargs='*', default=[])
     options = parser.parse_args()
+    PKG = options.package.resolve(strict=True)
+    PRIVATE = options.private_root.resolve()
+    OUT = options.output.resolve()
+    SCEN = options.scenario_dir.resolve(strict=True)
+    PRIVATE.mkdir(parents=True, exist_ok=True)
     OUT.mkdir(parents=True, exist_ok=True)
+    source_before = inventory(PKG)
     records = []
     for case in options.cases:
         record = run_case(case, options.frames, case in options.expect_failure)
         if record:
             records.append(record)
     (OUT / 'summary.json').write_text(json.dumps(records, ensure_ascii=False, indent=1), encoding='utf-8')
+    source_after = inventory(PKG)
+    unchanged = source_before == source_after
+    (OUT / 'source-package-unchanged.json').write_text(json.dumps({
+        'package': str(PKG), 'unchanged': unchanged,
+        'files': len(source_after), 'bytes': sum(entry['bytes'] for entry in source_after.values()),
+        'mainGameSha256': sha(PKG / 'main_game.exe'),
+        'changedFiles': sorted(set(source_before) ^ set(source_after)),
+        'scope': 'Source package inventory before/after all mutated private-copy cases'},
+        ensure_ascii=False, indent=1), encoding='utf-8')
+    print(json.dumps({'cases': len(records), 'sourcePackageUnchanged': unchanged,
+                      'verdicts': {row['case']: row['verdict'] for row in records}}, ensure_ascii=False))
     return 0
 
 

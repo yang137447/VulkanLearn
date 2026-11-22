@@ -51,10 +51,33 @@ def validate_owned_package(package, ownership, evidence):
     package = package.resolve(strict=True)
     evidence = evidence.resolve(strict=True)
     receipt = json.loads(ownership.read_text(encoding="utf-8"))
-    require(receipt.get("kind") == "rvt-runner-owned-package" and receipt.get("status") == "exported"
-            and Path(receipt["package"]).resolve() == package
-            and receipt["exportExitCode"] == receipt["verificationExitCode"] == 0,
-            "Read-only ACL requires a new package's actual runner export/verify receipt")
+    kind = receipt.get("kind")
+    # R15: a package exported by another owner may be used only when the runtime owner
+    # independently re-ran the native --verify-package on this exact package and the
+    # independent receipt is bound into the ownership document. The original
+    # runner-owned path stays byte-for-byte identical.
+    require(kind in ("rvt-runner-owned-package", "rvt-runtime-owner-verified-package"),
+            "Read-only ACL requires an owned or runtime-owner independently verified package receipt")
+    require(Path(receipt["package"]).resolve() == package,
+            "Receipt package differs from the ACL-protected package")
+    require(receipt["exportExitCode"] == 0, "Receipt package export did not exit 0")
+    if kind == "rvt-runner-owned-package":
+        require(receipt.get("status") == "exported" and receipt["verificationExitCode"] == 0,
+                "Read-only ACL requires a new package's actual runner export/verify receipt")
+    else:
+        require(receipt.get("status") == "verified", "Runtime-owner receipt is not verified")
+        verification = receipt.get("independentVerify") or {}
+        require(verification.get("exitCode") == 0,
+                "Runtime-owner independent package verify did not exit 0")
+        argv = verification.get("argv") or []
+        require(len(argv) >= 2 and "--verify-package" in argv and Path(argv[-1]).resolve() == package,
+                "Independent verify argv does not target this exact package")
+        validator = Path(argv[0])
+        require(validator.is_file() and artifact(validator)["sha256"] ==
+                verification.get("validatorSha256"),
+                "Independent verify validator identity differs from the recorded artifact")
+        require(receipt["verificationExitCode"] == verification["exitCode"],
+                "Receipt verification exit code differs from the independent verify")
     require(not evidence.is_relative_to(package) and not package.is_relative_to(evidence),
             "ACL backup/evidence must be outside the installation")
     require(not ownership.resolve(strict=True).is_relative_to(package),
