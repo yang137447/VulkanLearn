@@ -590,3 +590,25 @@ P1/P2 负例、P4 完成矩阵、lit/TES 视觉门禁、readonly 取证与旧路
   lit near-field 页身份绑定；P1/P2 故障真实消费与 whole-owner 分账；P5 默认入口切换与 19.42 GB 清退。
 - 已披露差异：ABI 文档仍写 1,606,912 B（实际 1,619,200）、`meanRgb` 标注 B,G,R、
   post-run stage 摘要不可复现、`material_revert` 6,337 px 瞬态、save→reload 高度不回环。
+
+### 追加：P1/P2 真实故障消费与分账（R16，2026-11-22）
+
+- **statusNonzero 真实消费**：`fault-injection` epoch 8 slot 30 `originalStatus=0→injectedStatus=1` +
+  `production-failure publishedChannels=0`；`RVT_PRODUCTION_RAW` epoch 8 为 `status=0/effectiveStatus=1`，
+  同页 epoch 11 重试 status 0；17 次生产 raw-status 全 0、per-surface stale=0、0 错误。
+- **submitFail 真实消费**：`submit-fault-consumed`（renderFrame 7）+ `submit-abort-observed`
+  （abortedTasks 1、publishedChannels 0、sceneSubmitCalls 0）+ `old-world-frame-completed`；
+  随后 `Vulkan timestamp query was not ready` → exit 2（clean teardown）。恢复路径存在缺陷。
+- **budgetReject 未消费**：两个消费点都在 `ConsumeUpdates` 内且被 `GlobalAuthoringMode` 门控，
+  Game 包没有该路径；`loadworld` 后旧代请求返回 `pendinghookmissing`。需 Editor 作者态运行。
+- **staleRevision 仅 hold 消费**：revision 在 Game 中恒为 0（`shaderreload changed changedSources=0`），
+  无法投递旧 revision。
+- **slotReuse 未消费**：3 次 `slot-watch-identity-rejected`；池 `publishEpoch` 未打印，单进程未超 325 次发布。
+- **分账**（`s2-cov-w2` batch05 Full16，epochs 119–719）：physicalPool 226,492,416/234,881,024（0.964）、
+  input 407,358,464/805,306,368（0.506）、totalGpu 720,974,880/1,073,741,824（0.671）、
+  CPU 254,428,419/536,870,912（0.474）、slots 512、tasks 2/4、rejected 0。
+  A→B→A 峰值 1,525,858,368 GPU / 472,419,772 CPU / 1024 slots，低于 peak-owner 与 outer 3 GiB caps。
+  Workspace 聚合 87,124,000 不可归因（outer ledger 合并 owner，peakByClass/peakByPhase 为 null）；
+  `terrainvt stats` 不是 owner 总量（accountedGpuPayloadBytes 比 ledger 低 295,952,110）。
+- 仍未关闭：authoring 态 budgetReject/staleRevision、slot publishEpoch 可见性、submitFail 恢复路径、
+  per-class 峰值/workspace 归因/geometry/WDDM、`verify_case` 所需 admission/identity 事件族。
