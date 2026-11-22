@@ -4,7 +4,7 @@
     1280,
     720
   ],
-  "initScene": "Generated/Validation/TerrainCompositedVT/Variants/Full4x4_R8192_Default/SC_composited_vt_4x4.json",
+  "initScene": "Generated/Validation/TerrainCompositedVT/Variants/RVTv2_Full4x4_R8192_Default_CoverageAtlas/SC_composited_vt_4x4.json",
   "msaa": 2,
   "workerThreadCount": 2,
   "ui": {
