@@ -415,7 +415,8 @@ TEST(TerrainCompositedSculptApply, WorldCommitRejectsMissingPlacementAndRefreshS
         [&](const VL::TerrainBuildPlan&) { ++refreshes; }, stats, error));
     PopulateWorld(world, baseline);
     EXPECT_FALSE(VL::ApplyCompositedTerrainSculptUpdate(
-        world, sculpt, baseline, {}, stats, error));
+        world, sculpt, baseline,
+        std::function<void(const VL::TerrainBuildPlan&)>{}, stats, error));
     EXPECT_EQ(refreshes, 0u);
     EXPECT_EQ(stats.worldChunks, 0u);
     EXPECT_EQ(world.GetTerrainCollisionInstances().front().plan.heightmap, baseline.heightmap);

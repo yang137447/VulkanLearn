@@ -233,3 +233,8 @@ if(VULKANLEARN_BUILD_TERRAIN_CAPTURE_VALIDATION)
     target_include_directories(terrain_evidence_writer_tests PRIVATE
         ${PROJECT_SOURCE_DIR}/tool/validation/terrain/native-capture)
 endif()
+
+# Refresh/Dirty 测试经作者监控走已验证输入与 World 预算所有者，需要两者定义。
+target_sources(terrain_composited_refresh_tests PRIVATE
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedVerifiedInputs.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainRvtBudget.cpp")

@@ -25,3 +25,8 @@ target_link_libraries(texture_asset_tests
 )
 
 vulkanlearn_add_gtest(texture_asset_tests)
+
+# commonFunction.h 的路径/配置读取经 TracingIfstream/RuntimeFileTrace 记账，需要两者定义。
+target_sources(texture_asset_tests PRIVATE
+    "${PROJECT_SOURCE_DIR}/source/core/runtimeFileTrace.cpp"
+    "${PROJECT_SOURCE_DIR}/source/core/tracingIfstream.cpp")

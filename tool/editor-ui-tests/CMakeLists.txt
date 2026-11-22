@@ -190,3 +190,9 @@ target_include_directories(terrain_loading_cpu_tests PRIVATE
     "$<TARGET_PROPERTY:Vulkan::Vulkan,INTERFACE_INCLUDE_DIRECTORIES>")
 target_link_libraries(terrain_loading_cpu_tests PRIVATE Eigen3 Json Threads::Threads)
 vulkanlearn_add_gtest(terrain_loading_cpu_tests)
+
+# 地形编辑/Paint 会话登记 dirty 区域，需要 Dirty、邻接图与 VT 布局的定义。
+target_sources(editor_ui_tests PRIVATE
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedDirty.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedAdjacency.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedVT.cpp")
