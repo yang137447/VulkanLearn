@@ -141,9 +141,13 @@ def run(stage, exe, runtime_bin, timeout):
     shutil.copy2(exe.resolve(strict=True), target)
     output = stage / "evidence"
     output.mkdir(exist_ok=False)
+    # 180 ticks/step and step order are unchanged. The extra 600-frame budget is
+    # only the bounded loading-gate wait the adapter may spend holding a step's
+    # last phase before it requests that step's screenshot; it is not a step
+    # length or an acceptance threshold.
     command = [str(target), "--initial-scene", plan["scene"], "--no-dev-ui", "--validation",
                "--worker-thread-count", str(plan["worker"]), "--frame-limit", "60",
-               "--exit-after-frames", str(len(plan["steps"]) * plan["framesPerStep"] + 120)]
+               "--exit-after-frames", str(len(plan["steps"]) * plan["framesPerStep"] + 120 + 600)]
     overrides = {
         "VL_EDITOR_S4_V2_PLAN": str(stage / "plan.json"),
         "VL_EDITOR_S4_OUTPUT": str(output), "VL_EDITOR_S4_PLACEMENT": plan["surfaceA"],
