@@ -103,6 +103,9 @@ public:
     // Initialize 不在此列：它是引导入口，负责创建设备与目标 0。
     void RecreateSwapchain(VL::PresentTarget& target, int width, int height);
     void WaitForFence(vk::Fence fence);
+    // 有界等待：只用于“已知提交”的 fence（例如截图回读）。超时返回 false，
+    // 不修改 fence，也不隐式退回 device-wide WaitIdle；调用方决定安全失败路径。
+    bool WaitForFence(vk::Fence fence, uint64_t timeoutNanoseconds);
     void ResetFence(vk::Fence fence);
     SwapchainFrameResult AcquireNextSwapchainImage(
         VL::PresentTarget& target,

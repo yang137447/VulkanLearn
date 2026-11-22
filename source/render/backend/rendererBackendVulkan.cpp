@@ -5,6 +5,7 @@
 #include <filesystem>
 #include <fstream>
 #include <mutex>
+#include <optional>
 #include <shared_mutex>
 #include <sstream>
 #include <stdexcept>
@@ -17,6 +18,7 @@
 #include "profiler.h"
 #include "render/backend/frameEpochRing.h"
 #include "render/backend/frameAbandonVulkan.h"
+#include "render/backend/screenshotReadback.h"
 #include "render/rhi/vulkan/rhiDeviceVulkan.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/resource/rendererThumbnailImages.h"
@@ -27,25 +29,6 @@ namespace VL
 namespace
 {
 
-void WriteLittleEndianU32(
-    std::array<uint8_t, 54>& header,
-    size_t offset,
-    uint32_t value)
-{
-    header[offset + 0] = static_cast<uint8_t>(value & 0xffu);
-    header[offset + 1] = static_cast<uint8_t>((value >> 8u) & 0xffu);
-    header[offset + 2] = static_cast<uint8_t>((value >> 16u) & 0xffu);
-    header[offset + 3] = static_cast<uint8_t>((value >> 24u) & 0xffu);
-}
-
-void WriteLittleEndianI32(
-    std::array<uint8_t, 54>& header,
-    size_t offset,
-    int32_t value)
-{
-    WriteLittleEndianU32(header, offset, static_cast<uint32_t>(value));
-}
-
 bool WriteScreenshotBmp(
     const std::filesystem::path& path,
     const uint8_t* pixels,
@@ -54,16 +37,15 @@ bool WriteScreenshotBmp(
     vk::Format format,
     std::string& outError)
 {
-    if (pixels == nullptr || width == 0 || height == 0)
+    const std::optional<ScreenshotReadback::BmpLayout> layout =
+        ScreenshotReadback::MakeBmpLayout(width, height);
+    if (pixels == nullptr || !layout.has_value())
     {
         outError = "Screenshot readback returned an empty image.";
         return false;
     }
 
-    if (format != vk::Format::eB8G8R8A8Unorm &&
-        format != vk::Format::eB8G8R8A8Srgb &&
-        format != vk::Format::eR8G8B8A8Unorm &&
-        format != vk::Format::eR8G8B8A8Srgb)
+    if (!ScreenshotReadback::IsSupportedScreenshotFormat(format))
     {
         outError = "Unsupported swapchain screenshot format: " + vk::to_string(format);
         return false;
@@ -77,21 +59,8 @@ bool WriteScreenshotBmp(
             std::filesystem::create_directories(parent);
         }
 
-        const uint32_t rowBytes = width * 3u;
-        const uint32_t paddedRowBytes = (rowBytes + 3u) & ~3u;
-        const uint32_t pixelBytes = paddedRowBytes * height;
-        const uint32_t fileBytes = 54u + pixelBytes;
-        std::array<uint8_t, 54> header{};
-        header[0] = 'B';
-        header[1] = 'M';
-        WriteLittleEndianU32(header, 2, fileBytes);
-        WriteLittleEndianU32(header, 10, 54u);
-        WriteLittleEndianU32(header, 14, 40u);
-        WriteLittleEndianI32(header, 18, static_cast<int32_t>(width));
-        WriteLittleEndianI32(header, 22, -static_cast<int32_t>(height));
-        header[26] = 1;
-        header[28] = 24;
-        WriteLittleEndianU32(header, 34, pixelBytes);
+        const std::array<uint8_t, 54> header =
+            ScreenshotReadback::MakeBmpHeader(*layout);
 
         std::ofstream output(path, std::ios::binary);
         if (!output)
@@ -101,29 +70,18 @@ bool WriteScreenshotBmp(
         }
         output.write(reinterpret_cast<const char*>(header.data()), header.size());
 
-        std::vector<uint8_t> row(paddedRowBytes, 0);
-        const bool isBgra = format == vk::Format::eB8G8R8A8Unorm ||
-            format == vk::Format::eB8G8R8A8Srgb;
+        std::vector<uint8_t> row(layout->paddedRowBytes, 0);
+        const bool isBgra = ScreenshotReadback::IsBgraFormat(format);
         for (uint32_t pixelY = 0; pixelY < height; ++pixelY)
         {
             const uint8_t* sourceRow =
                 pixels + static_cast<size_t>(pixelY) * width * 4u;
             for (uint32_t pixelX = 0; pixelX < width; ++pixelX)
             {
-                const uint8_t* source = sourceRow + pixelX * 4u;
-                uint8_t* destination = row.data() + pixelX * 3u;
-                if (isBgra)
-                {
-                    destination[0] = source[0];
-                    destination[1] = source[1];
-                    destination[2] = source[2];
-                }
-                else
-                {
-                    destination[0] = source[2];
-                    destination[1] = source[1];
-                    destination[2] = source[0];
-                }
+                ScreenshotReadback::ConvertPixelToBgr24(
+                    sourceRow + pixelX * 4u,
+                    isBgra,
+                    row.data() + pixelX * 3u);
             }
             output.write(reinterpret_cast<const char*>(row.data()), row.size());
         }
@@ -212,6 +170,25 @@ void RendererBackendVulkan::Initialize(
 void RendererBackendVulkan::WaitIdle()
 {
     rhiDevice->WaitIdle();
+    ReleasePendingScreenshotAfterIdle();
+}
+
+void RendererBackendVulkan::ReleasePendingScreenshotAfterIdle()
+{
+    // 只允许在 device idle 之后调用。失败/被丢弃的截图请求可能留下 staging buffer；
+    // 正常情况下 CompleteSwapchainScreenshot 已经释放，这里只是安全兜底。
+    if (!pendingScreenshot.readbackBuffer && !pendingScreenshot.readbackMemory)
+        return;
+    try
+    {
+        DestroyBuffer(
+            pendingScreenshot.readbackBuffer,
+            pendingScreenshot.readbackMemory);
+    }
+    catch (...)
+    {
+    }
+    pendingScreenshot = {};
 }
 
 bool RendererBackendVulkan::RecordSwapchainScreenshot(
@@ -251,8 +228,7 @@ bool RendererBackendVulkan::RecordSwapchainScreenshot(
         std::tie(readbackBuffer, readbackMemory) = CreateBuffer(
             readbackSize,
             vk::BufferUsageFlagBits::eTransferDst,
-            vk::MemoryPropertyFlagBits::eHostVisible |
-                vk::MemoryPropertyFlagBits::eHostCoherent,
+            ScreenshotReadback::StagingMemoryFlags,
             "DebugScreenshotReadback");
 
         vk::CommandBuffer commandBuffer = frameContext.commandBuffer;
@@ -316,6 +292,11 @@ bool RendererBackendVulkan::RecordSwapchainScreenshot(
         pendingScreenshot.extent = extent;
         pendingScreenshot.format = format;
         pendingScreenshot.path = path;
+        // copy 已经录进这一帧的命令缓冲；记下槽位与 fence，Complete 只等这次提交。
+        pendingScreenshot.frameIndex = frameContext.frameIndex;
+        pendingScreenshot.submitFence =
+            rhiDevice->GetFrameSyncResources(frameContext.frameIndex).taskFinishedFence;
+        pendingScreenshot.submittedEpoch = 0;
         return true;
     }
     catch (const std::exception& exception)
@@ -332,11 +313,30 @@ bool RendererBackendVulkan::CompleteSwapchainScreenshot(std::string& outError)
         return false;
     }
 
+    // 录制阶段已经在 acquired image 上完成 copy，且 SubmitFrame 把这次提交的 epoch
+    // 盖进了 pendingScreenshot。epoch 为 0 说明 copy 从未随某一帧提交（例如录制后
+    // 命令被丢弃），此时既不能等 fence，也不能读 staging。
+    if (pendingScreenshot.submittedEpoch == 0 ||
+        lastSubmittedFrameIndex != pendingScreenshot.frameIndex)
+    {
+        outError = "Screenshot readback was recorded but never submitted.";
+        return false;
+    }
+
     try
     {
-        // 录制阶段已经在 acquired image 上完成 copy；这里只等待该提交完成，
-        // 再映射 staging buffer 写盘，避免把 present 后的 image 当作仍可访问资源。
-        rhiDevice->WaitIdle();
+        // R15 的截图停顿来自 device-wide WaitIdle（含 present 队列排空）+ 非 cached
+        // 3.7 MiB 主机读。现在只等承载 copy 的那次提交自己的 frame fence：GPU 执行完
+        // 本帧命令即返回，与其它在途/已 present 的帧无关。等待仍有上限，超时说明 GPU
+        // 已挂起，由调用方按失败上报；pending 保留到下一个 device idle 安全点释放。
+        if (!rhiDevice->WaitForFence(
+                pendingScreenshot.submitFence,
+                ScreenshotReadback::FenceTimeoutNanoseconds))
+        {
+            outError = "Timed out waiting for the screenshot readback fence.";
+            return false;
+        }
+
         const vk::DeviceSize readbackSize =
             static_cast<vk::DeviceSize>(pendingScreenshot.extent.width) *
             static_cast<vk::DeviceSize>(pendingScreenshot.extent.height) * 4u;
@@ -427,6 +427,7 @@ void RendererBackendVulkan::RecreateSwapchain(int width, int height)
     // 让渲染线程停在安全点；这里额外等待 device idle，确保在途 submit/present
     // 不会与销毁并发。共享 command pool 不在重建路径里销毁。
     rhiDevice->WaitIdle();
+    ReleasePendingScreenshotAfterIdle();
     rhiDevice->RecreateSwapchain(rhiDevice->GetPresentTarget(), width, height);
     // RHI 重建前已等待 device idle；旧 fence 对应的提交和退休 epoch 均已完成。
     ResourceRetireQueue::GetInstance().CollectCompletedEpoch(
@@ -614,6 +615,14 @@ void RendererBackendVulkan::SubmitFrame(
     ResourceRetireQueue::GetInstance().MarkFrameSubmitted(submitPlan.submittedEpoch);
     hasSubmittedFrame = true;
     lastSubmittedFrameIndex = submitPlan.frameIndex;
+    // 截图 copy 就在刚提交的命令缓冲里：把提交 epoch 绑定到 pending 请求，
+    // Complete 用它确认“允许读 staging”，并只等这一次提交的 fence。
+    if (pendingScreenshot.readbackBuffer &&
+        pendingScreenshot.submittedEpoch == 0 &&
+        pendingScreenshot.frameIndex == submitPlan.frameIndex)
+    {
+        pendingScreenshot.submittedEpoch = submitPlan.submittedEpoch;
+    }
 
     {
         PROFILE_SCOPE("Render:Present");
@@ -634,6 +643,22 @@ void RendererBackendVulkan::DiscardFrameCommands(const RendererFrameContext& fra
     if (!frameContext.ready ||
         frameContext.disposition.Phase() != AcquiredFramePhase::Recording)
         throw std::logic_error("Only unsubmitted acquired frame commands can be discarded");
+    // 本帧如果登记了截图 copy，命令被丢弃后 staging 再也不会被写；这里立即释放，
+    // 避免 pending 卡住后续截图请求（buffer 里没有已提交的 GPU 访问）。
+    if (pendingScreenshot.readbackBuffer && pendingScreenshot.submittedEpoch == 0 &&
+        pendingScreenshot.frameIndex == frameContext.frameIndex)
+    {
+        try
+        {
+            DestroyBuffer(
+                pendingScreenshot.readbackBuffer,
+                pendingScreenshot.readbackMemory);
+        }
+        catch (...)
+        {
+        }
+        pendingScreenshot = {};
+    }
     frameContext.commandBuffer.reset();
     frameContext.disposition.Discarded();
 }

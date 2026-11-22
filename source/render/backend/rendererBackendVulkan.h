@@ -467,6 +467,8 @@ private:
     std::unordered_map<VkDescriptorPool, std::vector<RHIDescriptorSetHandle>> descriptorSetHandlesByPool;
     std::unordered_map<VkRenderPass, RHIRenderPassHandle> renderPassHandlesByRenderPass;
     std::unordered_map<VkFramebuffer, RHIFramebufferHandle> framebufferHandlesByFramebuffer;
+    // 等待 device idle 后释放失败/被丢弃的截图 staging，确保后续截图请求不被卡住。
+    void ReleasePendingScreenshotAfterIdle();
     struct PendingScreenshot
     {
         vk::Buffer readbackBuffer;
@@ -474,6 +476,11 @@ private:
         vk::Extent2D extent;
         vk::Format format = vk::Format::eUndefined;
         std::string path;
+        // copy 录进哪个 frame 槽、该槽的提交 fence，以及提交后的 epoch。
+        // epoch 为 0 = 尚未提交；Complete 只在非 0 时等待/读取。
+        uint32_t frameIndex = 0;
+        vk::Fence submitFence;
+        uint64_t submittedEpoch = 0;
     } pendingScreenshot;
 };
 

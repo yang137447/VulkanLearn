@@ -85,6 +85,17 @@ void RHIDeviceVulkan::WaitForFence(vk::Fence fence)
     }
 }
 
+bool RHIDeviceVulkan::WaitForFence(vk::Fence fence, uint64_t timeoutNanoseconds)
+{
+    const vk::Result result =
+        GetDevice().waitForFences(fence, true, timeoutNanoseconds);
+    if (result == vk::Result::eSuccess)
+        return true;
+    if (result == vk::Result::eTimeout)
+        return false;
+    throw std::runtime_error("Failed to wait for fence: " + vk::to_string(result));
+}
+
 void RHIDeviceVulkan::ResetFence(vk::Fence fence)
 {
     GetDevice().resetFences(fence);
