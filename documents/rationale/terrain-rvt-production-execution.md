@@ -552,3 +552,20 @@ P1/P2 负例、P4 完成矩阵、lit/TES 视觉门禁、readonly 取证与旧路
   超过 72.105，Local warm reload WDDM 采样 1 个内部不可用** → 正式性能整体未通过。
 - 裁决与下一步见 `final-delivery/r15/R15-PERF-VERDICT.md`：先降低 4 Hz quality capture 的
   ~200 ms CPU 停顿（异步/分帧 readback），不得靠重跑碰运气；WDDM helper 稳定性同时修复后重测。
+
+### 追加：P4 实现范围独立接受（R15，2026-11-22）
+
+- 证据：`final-delivery/r15/p4-w2`（27 步/54 快照/27 BMP，exit0，六项像素 0.0，reload gen2，
+  save 摘要与磁盘 heightmap 哈希改变，旧 world 拒绝，identity 无错）。
+- 独立复核：`final-delivery/r15/p4-review/independent-review.md`。复核者自行重算 27 BMP 哈希/尺寸、
+  六对像素（逐字节 0.0）、日志中的 generation/错误/teardown，并核对 R15 checkpoint/库/adapter/
+  publication 哈希。
+- 结论：**P4 实现范围（identity + save + reload + pixel）ACCEPTED**（CoverageAtlas/worker2 编辑链）；
+  **整个 P4 仍未接受**。复核指出的未覆盖/部分项：paint 边界/ancestry、sculpt frame/collision、
+  旧 revision 写回、save→preview→game 三态分离、layer 参数步骤、worker1/Local、12 类 native
+  telemetry、独立视觉复核、独立 Game 发布/重开收据；另有 3 个待查不符点（adapter 源码未提交已修复、
+  material 预览帧语义、reload 后不渲染保存的 paint）。
+- 复核同时确认：debug 不参与生产身份的判据是正确且最小的（source/include/kernel/runtime SPV 仍严格）；
+  `editorHost` 的 sculpt 状态修复有代码路径与日志差支持。
+- 已提交 adapter 源码（`53c8cc5`，SHA256 `76a3d95a…`），HEAD 可重建；此前 tracked 版本指向不存在的
+  shader 的问题已消除。
