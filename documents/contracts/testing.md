@@ -2286,5 +2286,5 @@ RawAuthorSource kind3回归须分别检查raw对象bytes摘要、作者投影dig
 Full16 的16块近景、24内部边、9交点和4外角，双权重/双worker、正常LOD/TES、
 根payload损坏恢复与输入损坏拒绝、candidate/active/retiring峰值，
 以及无显式场景参数的默认启动均需绑定最终源码/包证据。
-当前默认 config 尚未切换至新 RVTv2；历史入口存在不是迁移通过。
+当前默认 config 已指向 `RVTv2_Full4x4_R8192_Default_CoverageAtlas`；默认入口切换不等于上述项目全部通过。
 本轮文档 gate 只验证分层、链接、路由和已声明规则名，不证明上述运行行为。

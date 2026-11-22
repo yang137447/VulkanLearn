@@ -22,9 +22,10 @@ Repeat保留完整评价域，Clamp裁剪证明不推广为Repeat等价。
 - 资源：同级 `VukanLearnResources`，经 `config/config.json -> resourcePath` 访问，
   不修改共享 master 或重置本 topic 的现存 Height/Paint。
 - 构建入口：`build-vt-release/bin`；执行前由集成 owner 锁定最新二进制/shader 快照。
-- 当前 `config/config.json -> initScene` 仍是
-  `Generated/Validation/TerrainCompositedVT/Variants/Full4x4_R8192_Default/SC_composited_vt_4x4.json`。
-  **未切换为新 RVTv2 默认**；旧 TR/包与新 Store 不兼容时不能靠 V1 fallback 启动。
+- 当前 `config/config.json -> initScene` 是
+  `Generated/Validation/TerrainCompositedVT/Variants/RVTv2_Full4x4_R8192_Default_CoverageAtlas/SC_composited_vt_4x4.json`
+  （R17 切换）；旧 TR/包与新 Store 不兼容时不能靠 V1 fallback 启动。
+  该发布产物位于被忽略的 `Generated/`，换机或全新 clone 后须先本地生成。
 
 新作者命名空间分别为
 `RVTv2_Full4x4_R8192_Default_CoverageAtlas` 和

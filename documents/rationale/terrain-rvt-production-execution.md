@@ -1,6 +1,6 @@
 # 地形 RVT 实施与独立验收台账
 
-> 状态：实施进行中，未完成交付。2026-11-21。本文是执行记录，不是当前实现契约。
+> 状态：已按范围收窄收尾（2026-11-23），未按原最终核对表完整交付；延期项见文末。本文是执行记录，不是当前实现契约。
 
 执行范围以 [按需生产方案](../plan/rendering/terrain-runtime-virtual-texture-production-plan.md)
 为准：P0–P5 全部完成，P6 给出评估结论。完整 Full16 飞马岛、独立离线 Game、
@@ -612,3 +612,32 @@ P1/P2 负例、P4 完成矩阵、lit/TES 视觉门禁、readonly 取证与旧路
   `terrainvt stats` 不是 owner 总量（accountedGpuPayloadBytes 比 ledger 低 295,952,110）。
 - 仍未关闭：authoring 态 budgetReject/staleRevision、slot publishEpoch 可见性、submitFail 恢复路径、
   per-class 峰值/workspace 归因/geometry/WDDM、`verify_case` 所需 admission/identity 事件族。
+
+## 收尾裁决：范围收窄与延期清单（2026-11-23）
+
+原“最终交付核对表”要求正确性、性能与预算同时达标、每阶段由未参与实现者签署，
+且收据绑定二进制/shader 身份；任一生产源码修复都会使冻结包失效并触发整轮重跑，
+R14→R17 已多次进入这一循环。经用户决定，本轮不再以该核对表为退出条件，
+改为下列有限收尾集；未列入者显式延期，**延期不等于通过**。
+
+收尾集：
+
+- 合入 master 最新提交；文档中的默认入口描述与 R17 切换后的 `config/config.json` 一致。
+- 在可用工具链上完成构建、地形相关 GoogleTest 与默认场景 `main_game` 冒烟。
+  本收尾所在机器为全新 clone：无编译器/CMake/Python/.NET，资源 `Generated/` 与
+  `artifacts/` 均不存在（二者被忽略，原证据留在原执行机器），因此该项待工具链与
+  发布产物就绪后执行，结果另行记录。
+
+显式延期（保留原始失败与证据，不修饰为通过）：
+
+| 项 | 延期时状态 |
+| --- | --- |
+| R17 冻结与重导出 | 两项缺陷修复改变 `main_game`/`main_editor`，R16 包内为旧二进制；数据包不需重 Cook |
+| P4 全量 | 实现范围已接受（R16）；Cook→reopen→reload、layer 参数、worker1+Local、telemetry、视觉/Game 收据未完成 |
+| P1/P2 作者态故障 | `budgetReject`、`staleRevision` 需 Editor 作者态运行；`slotReuse` 未消费；`publishEpoch` 不可见 |
+| 分账 | per-class 峰值、workspace 87,124,000 B 归因、geometry/WDDM 未分账 |
+| 各阶段独立签署 | P0/P6 PASS；R16 运行时、性能复核与 P4 实现范围为独立接受；其余阶段未签署 |
+| V1 产物清退 | 资产工作树 19.42 GB 旧发布产物未删除；删除不可逆，需用户单独决定 |
+| 已披露差异 | ABI 文档字节数、`meanRgb` 通道标注、post-run 摘要不可复现、`material_revert` 瞬态、save→reload 高度不回环 |
+
+重新开启任一延期项时，应单独立项并给出可终止的退出条件，不恢复整表同时达标的要求。

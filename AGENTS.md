@@ -489,11 +489,17 @@ Rendering requires validated real production inputs, not dependency hashes alone
 material-page residency/feedback, height atlas/LUT, budgets and publication rules belong to
 [the composited VT contract](documents/contracts/terrain-composited-vt.md).
 The default scene in `config/config.json` is
-`Generated/Validation/TerrainCompositedVT/Variants/Full4x4_R8192_Default/SC_composited_vt_4x4.json`.
+`Generated/Validation/TerrainCompositedVT/Variants/RVTv2_Full4x4_R8192_Default_CoverageAtlas/SC_composited_vt_4x4.json`
+(the RVTv2 V2 Full16 CoverageAtlas publication). It lives under the gitignored resource
+`Generated/` tree, so a fresh clone of the resources worktree does not contain it and the
+default startup fails until that publication is produced locally; pass `--initial-scene` for
+another scene in that case.
 Default selection is not proof of complete runtime/package acceptance; check the scoped evidence
 linked from [the acceptance entry](documents/reference/rendering/terrain-composited-vt-acceptance.md).
-This default has not switched to the new RVTv2 author namespace. P3 performance, Full16 Game
-and P4 real editing remain unaccepted. The active producer uses World + WorldPadding compute;
+Gates that were explicitly deferred rather than passed (full P4 editing, authoring-mode fault
+consumption, per-class memory attribution, per-phase independent sign-off, R17 re-export and
+V1 artifact removal) are listed in the deferral section of
+`documents/rationale/terrain-rvt-production-execution.md`. The active producer uses World + WorldPadding compute;
 the old five compute stages and depth-replay capture pass are deleted. Quality imports the
 original feedback pass's 7-MRT winner payload (two 128² RGBA32_UINT images) plus final depth,
 not a second visibility replay. Complete captures are module evidence, not interactive acceptance.
