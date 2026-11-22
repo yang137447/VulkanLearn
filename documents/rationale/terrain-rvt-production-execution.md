@@ -569,3 +569,24 @@ P1/P2 负例、P4 完成矩阵、lit/TES 视觉门禁、readonly 取证与旧路
   `editorHost` 的 sculpt 状态修复有代码路径与日志差支持。
 - 已提交 adapter 源码（`53c8cc5`，SHA256 `76a3d95a…`），HEAD 可重建；此前 tracked 版本指向不存在的
   shader 的问题已消除。
+
+### 追加：R16 最终核心与各门禁状态（2026-11-22）
+
+- R16 核心 `core-native-r16/checkpoint.json` `f7343124…68a4`（1,120 源/122 build inputs/580 产物）；
+  导出器 `7ae6139f…`；`p5g/C010r16` 626 文件/627,526,428 B、`p5g/L010r16` 634/744,703,201 B，
+  两包 export/verify 0/0，仅 main_game(`ad8445c0…`)+manifest 与 R15 不同。
+- 性能修复：截图回读改为提交 fence + `HOST_CACHED` staging（去掉 device-wide `WaitIdle`），
+  quality 回读补 `HOST_CACHED`。R16 正式性能六 run 独立复核 **无冻结指标 FAIL**：
+  CPU p99 45.058/45.628 ms（上限 72.105）、GPU pass-sum p99 3.437/3.793（4.618）、
+  geometry 2.756/2.957（3.754）、启动 18.87–21.00 s、private ≤7.666 GB、WDDM ≤6.429 GB、
+  时钟 52–69 样本全 1800/9501、host 6/6 静默、相机 35/35。
+- R16 运行时独立复核 **ACCEPT**：双模式 53 机位（max 6406/6402 ms、min 99.512%、bias/zeros 全 0）、
+  worker1 core/teleport 双模式、只读离线 Game（0 外部作者读取、0 shader miss、626 文件未变）、
+  7 项负例（3 拒绝/4 继续，manifest 等独立复核）。
+- P4 在 R16 上实现范围 **ACCEPTED**（identity/save/reload/pixel/可复现性）：六项像素 0.0、
+  reload gen2、只改 debug SPV、保存哈希改变、旧 world 拒绝；adapter 源码 `76a3d95a…` 已入库，
+  重编 object 逐字节一致（exe 仅 PE 时间戳 4 字节差异）。
+- 仍未关闭：P4 全量（Cook→reopen→reload、layer 参数、worker1+Local、telemetry、视觉/Game 收据）；
+  lit near-field 页身份绑定；P1/P2 故障真实消费与 whole-owner 分账；P5 默认入口切换与 19.42 GB 清退。
+- 已披露差异：ABI 文档仍写 1,606,912 B（实际 1,619,200）、`meanRgb` 标注 B,G,R、
+  post-run stage 摘要不可复现、`material_revert` 6,337 px 瞬态、save→reload 高度不回环。
