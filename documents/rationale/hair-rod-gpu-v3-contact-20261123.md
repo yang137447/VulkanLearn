@@ -17,8 +17,8 @@ V1（`cosseratXpbdV1`）仍是运行时求解器；本文不把 V1 的任何数�
 | 深重叠位置投影修复（对应 CPU `RepairInitialContactOverlap`） | 已实现，有实测（第二轮改为「修到贴面」） |
 | SDF 代理场接触（Gauss-Newton） | 跑通并有实测（16 guide / 400 帧，0 失败）；本资产上实际不产生修正，见下 |
 | 第 10 分量（1% 上拉伸乘子） | 已实现，本阶段**关闭**（见下）；有失败证据 |
-| 200/2000 guide 规模 | 200 规模下 3/200 guide 在首个瞬态耗尽牛顿预算 |
-| runtime 从 V1 切到 V3 | **未完成**：200-guide 规模仍有 3 个 guide 失败，切过去会让整个对象冻结 |
+| 200/2000 guide 规模 | 200 规模下 3/200 guide 首个瞬态耗尽预算（已可隔离，不再冻结对象）；2000 规模**设备丢失** |
+| runtime 从 V1 切到 V3 | **未完成**：V3 在 2000-guide 掉帧到 TDR，切过去是硬崩溃 |
 
 第二轮（同日）修掉了 SDF 的根因，SDF 从 16/16 失败变成 16/16 收敛；同时把重叠修复的
 「是否修」与「修到哪」拆成两个阈值。规模问题（3/200 guide）仍未解决。
@@ -239,8 +239,78 @@ runtime 场景 `SC_tressfx_rod_static.json` 声明了 `hairCollision.mesh`，
 当前 comp 不定义 `VL_ROD_KKT10_AXIAL_LIMIT`，row 9 退化为单位行，等价于 CPU 的 9x9
 接触系统（`SelectContactActiveSet`/`AssembleContactSystem`/`SolveContactSystem`）。
 
-## 复现入口
+## 第三轮：隔离失败、否掉两个假设、定位运行时规模的真实阻塞
 
+### 失败粘滞改为按 guide 隔离（已落地）
+
+旧策略有两层粘滞：shader 把失败码写进 `rodState.guides[].diagnostic.x`，下一帧在
+`if (failure != 0u && rod.flags.x == 0u) return;` 直接返回；C++ 侧再用
+`state.gpuStatus != 0` 把 `steps` 归零。结果是**一个 guide 的牛顿预算耗尽让整个对象永久冻结**。
+
+现在：
+- shader 每帧从 0 开始重试（不再把上一帧的失败码读回 `failure`，也删掉那条早退）；
+  失败的 guide 因为不发布而保持上一次接受的状态，其余 guide 继续推进；
+- C++ 的 `steps` 不再受 `gpuStatus` 门控，`gpuStatus` 变成逐帧报告量（每帧从 0 重新求最大值），
+  也不再改写求解器侧的时间债；
+- `accepted` 仍是「所有 guide 都接受」的最小模拟时间，因此有 guide 停住时该列会停在它的时间上，
+  这是有意的信息，调度不再依赖它。
+
+实测（`SC_rod_v3_capsules_200`，200 帧）：对象持续派发（`dispatched` 6.6 s 单调增长），
+197/200 guide 正常推进，3 个每帧重试并保持旧状态，`failedGuides` 列稳定为 3。
+16-guide 胶囊与 SDF 两条路径回归：`gpuStatus=0`、0 失败、残差 7.757e-05 / 5.814e-05、
+validation 0 条消息，没有退化。
+
+### 两个被实测否掉的求解假设（保留为反例）
+
+对着 3/200 卡住的 guide 试了两个改动，都更差，已回退：
+
+| 改动 | 结果 | 结论 |
+| --- | --- | --- |
+| 接触二阶项换成 Gauss-Newton（`H=0`） | 失败 guide 3 → **4**，最大 merit 0.062 → **0.112** | 解析几何刚度是净收益，不能为条件数丢掉 |
+| 线搜索期间冻结乘子（只接受后再延拓 λ） | 失败 guide 3 → **96**，merit 0.062 → **1246** | 乘子必须随 trial 一起延拓，否则解耦后失稳 |
+
+两者都留在代码里以宏开关形式（`VL_ROD_KKT10_GAUSS_NEWTON_CONTACT`）和注释里。
+
+### 失败状态导出：卡的是 merit 全局化，不是线性代数
+
+用既有的 `VL_ROD_CAPTURE_SOURCE_GUIDE` 导出失败 guide（src 3510）的完整状态与 6x6 带状矩阵：
+- 32 个点的**对角块行列式全部为正且量级 1e4–1e7**（lane 0 是单位行=1），
+  说明线性系统本身不奇异，band LU 不是瓶颈；
+- 残差集中在 root 附近 lane 2–8（`|r_lin|` 最大 0.51·F），向 tip 单调衰减到 1.4e-3，
+  且方向沿重力（诊断值 `rlin[2] = (0.236, -0.410, -0.193)`）；
+- 角向残差全程 ~1e-6，是纯平动不平衡。
+
+所以瓶颈是**带接触项后 merit 线搜索在这些 guide 上只能接受极小步**（回溯 372–454 次），
+不是装配或 LU 出错。下一轮的方向应是把位置行与接触行在 merit 里分开加权，
+或给失败 substep 加一个「全量投影后重试」的阶梯，而不是继续调 Hessian。
+
+### 运行时规模的真实阻塞：瞬态成本导致设备丢失
+
+在 `--frame-limit 60 --gpu-stats` 下测（`perf-*.jsonl` 的 `hairSimulation` pass）：
+
+| 场景 | solver | 首个阶梯帧 | 稳态 | 结果 |
+| --- | --- | --- | --- | --- |
+| 运行时 `SC_tressfx_rod_static`（2000 模拟 / 40334 根） | V1 | — | **6.83 ms**，60.1 fps | 正常 |
+| 派生的 2000-guide 胶囊场景 | V3 | **超过 OS 单次提交上限** | — | `vk::DeviceLostError`（`waitForFences: ErrorDeviceLost`） |
+| 200 guides | V3 | **476 ms** | 0.34 ms | 正常 |
+| 16 guides | V3 | 76 ms | 36 ms（这批 guide 稳态仍需多轮） | 正常 |
+
+`476 ms × 10 = 4.8 s`，远超 Windows 的 2 s 提交上限，2000 guide 必然 TDR。
+成本按 guide 数线性放大，所以**这只是规模问题，不是算法错误**；稳态成本
+（0.34 ms @200 ≈ 3.4 ms @2000）与 V1 的 6.83 ms 同量级。
+
+结论：**runtime 不切**。切过去是硬崩溃，比留在 V1 更差。
+`TF_female_rod_validation.json` 保持 `solver=cosseratXpbdV1`，resources worktree 干净。
+
+要让 V3 在运行时规模可用，二选一（都属下一轮）：
+1. **降低瞬态单帧成本**：给 V3 限制每帧 substep 数与迭代预算（有隔离后可以安全地跨帧摊开），
+   代价是瞬态期间模拟落后实时；
+2. **把 10x10 顺序 LU 改成分布式块循环约化**（当前是 32 个点顺序求解、全部 lane 冗余执行，
+   单次 pivot 约 200+ 周期）。共享内存预算（48 KB）放不下 10x10 的 CR 工作集，
+   这是第一轮就量过的硬约束，需要改数据布局（例如把因子放 global 并把 2000 guide 的
+   工作集压在 L2 内）或缩小活跃集宽度。
+
+## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
 ```powershell
