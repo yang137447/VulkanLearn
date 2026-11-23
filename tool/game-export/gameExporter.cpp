@@ -233,8 +233,9 @@ public:
 
     void Copy(const fs::path& source, const fs::path& destination)
     {
-        if (!fs::is_regular_file(source)) throw std::runtime_error("Missing export file: " + source.string());
-        const auto physical = fs::canonical(source);
+        if (!TerrainPackageClosure::IsRegularFile(source))
+            throw std::runtime_error("Missing export file: " + source.string());
+        const auto physical = TerrainPackageClosure::CanonicalOrAbsolute(source);
         const auto key = Lower(destination.generic_string());
         const auto existing = destinations.find(key);
         if (existing != destinations.end())
@@ -243,8 +244,16 @@ public:
             return;
         }
         destinations.emplace(key, physical);
-        fs::create_directories((staging / destination).parent_path());
-        fs::copy_file(physical, staging / destination);
+        const auto staged = staging / destination;
+        fs::create_directories(staged.parent_path());
+#ifdef _WIN32
+        // 源可能是超过 MAX_PATH 的 VT 输入；CopyFileW 配合 \\?\ 前缀才能打开。
+        if (!CopyFileW(TerrainPackageClosure::ExtendedPath(source).c_str(),
+                TerrainPackageClosure::ExtendedPath(staged).c_str(), FALSE))
+            throw std::runtime_error("Cannot copy export file: " + source.string());
+#else
+        fs::copy_file(source, staged);
+#endif
     }
 
     void Tree(const fs::path& source, const fs::path& destination)

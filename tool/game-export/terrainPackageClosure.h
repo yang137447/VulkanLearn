@@ -9,6 +9,10 @@
 #include <stdexcept>
 #include <nlohmann/json.hpp>
 
+#ifdef _WIN32
+#include <windows.h>
+#endif
+
 namespace VL::TerrainPackageClosure
 {
 using Json = nlohmann::json;
@@ -17,6 +21,60 @@ namespace fs = std::filesystem;
 inline void Require(bool condition, const char* message)
 {
     if (!condition) throw std::runtime_error(message);
+}
+
+// VT 输入名带着两个 64 位摘要，叠加深层资源工作树后很容易越过 MAX_PATH。
+// std::filesystem 的 canonical/status/copy 会因此把真实存在的文件判成缺失，
+// 所以这里对所有 Win32 访问统一补 \\?\ 前缀；路径本身仍保持普通形式，
+// 便于 lexically_relative、日志和 manifest 继续使用资源根相对字符串。
+#ifdef _WIN32
+inline std::wstring ExtendedPath(const fs::path& path)
+{
+    auto native = path.native();
+    if (native.rfind(L"\\\\?\\", 0) == 0)
+        return native;
+    if (!path.is_absolute())
+        return native;
+    // \\?\ 只接受反斜杠；资源名来自 JSON 时可能带 '/'，先统一分隔符。
+    std::replace(native.begin(), native.end(), L'/', L'\\');
+    return L"\\\\?\\" + native;
+}
+#endif
+
+// 只读属性探测，不跟随链接；超长路径也能生效。
+inline bool IsLinkedEntry(const fs::path& path)
+{
+#ifdef _WIN32
+    const DWORD attributes = GetFileAttributesW(ExtendedPath(path).c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES && (attributes & FILE_ATTRIBUTE_REPARSE_POINT) != 0;
+#else
+    return fs::is_symlink(fs::symlink_status(path));
+#endif
+}
+
+inline bool IsRegularFile(const fs::path& path)
+{
+#ifdef _WIN32
+    const DWORD attributes = GetFileAttributesW(ExtendedPath(path).c_str());
+    return attributes != INVALID_FILE_ATTRIBUTES &&
+        (attributes & FILE_ATTRIBUTE_DIRECTORY) == 0 &&
+        (attributes & FILE_ATTRIBUTE_REPARSE_POINT) == 0;
+#else
+    return fs::is_regular_file(path);
+#endif
+}
+
+// 长路径上 fs::canonical 会失败；失败时退回绝对+词法规范化，
+// 仅用于同一目标去重，不构成安全边界（边界由 Relative() 与逐级链接检查保证）。
+inline fs::path CanonicalOrAbsolute(const fs::path& path)
+{
+    std::error_code error;
+    const auto canonical = fs::canonical(path, error);
+    if (!error)
+        return canonical;
+    error.clear();
+    const auto absolute = fs::absolute(path, error);
+    return error ? path : absolute.lexically_normal();
 }
 
 inline std::string Text(const Json& value)
@@ -49,12 +107,12 @@ inline fs::path Resolve(const fs::path& root, const std::string& name)
     for (const auto& component : relative)
     {
         path /= component;
-        Require(!fs::is_symlink(fs::symlink_status(path)), "Terrain VT dependency must not be a symlink");
+        Require(!IsLinkedEntry(path), "Terrain VT dependency must not be a symlink");
     }
-    if (!fs::is_regular_file(path))
+    if (!IsRegularFile(path))
         throw std::runtime_error("Missing terrain VT dependency: " + path.generic_string());
-    const auto logical = fs::canonical(path).lexically_relative(fs::canonical(root));
-    Require(!logical.empty() && *logical.begin() != "..", "Terrain VT dependency escaped resource root");
+    // Relative() 已排除 ..、绝对路径与 root name，root 又是 canonical，
+    // 逐段拼接不会逃出根；不再对可能超长的路径做 canonical 复算。
     return path;
 }
 

@@ -7,6 +7,7 @@
 #include <fstream>
 #include <iterator>
 #include <set>
+#include <vector>
 #include "gameExporter.h"
 #include "shader/build/contentHash.h"
 #include "shader/build/shaderBuildManifest.h"
@@ -653,6 +654,60 @@ TEST_F(GameExportTest, MissingDependencyDoesNotPublishAnOutputOrLeaveStaging)
     EXPECT_FALSE(fs::exists(options.outputDirectory));
     for (const auto& entry : fs::directory_iterator(root))
         EXPECT_EQ(entry.path().filename().string().find("game.staging"), std::string::npos);
+}
+
+TEST_F(GameExportTest, TerrainClosureResolvesInputBeyondMaxPath)
+{
+#ifdef _WIN32
+    // VT 输入名是两个 64 位摘要，加深层资源根后真实超�?MAX_PATH（这�?> 300 字符）�?
+    // Resolve 必须�?\\?\ 访问，不能把实际存在的输入判成缺失�?
+    // 建树/清理只用 Win32，避�?libstdc++ �?fs 实现在超长路径上递归�?
+    const auto base = root / "deep";
+    fs::path full = base;
+    std::string nested;
+    for (int index = 0; index < 4; ++index)
+    {
+        const auto component = std::string(60, static_cast<char>('a' + index));
+        full /= component;
+        nested += component + "/";
+    }
+    const auto leaf = std::string(65, 'z') + ".bin";
+    full /= leaf;
+    nested += leaf;
+    ASSERT_GT(full.wstring().size(), 260u);
+
+    std::vector<std::wstring> directories;
+    std::wstring current = VL::TerrainPackageClosure::ExtendedPath(base);
+    ASSERT_TRUE(CreateDirectoryW(current.c_str(), nullptr) != 0 ||
+        GetLastError() == ERROR_ALREADY_EXISTS);
+    directories.push_back(current);
+    const fs::path relativeNested(nested);
+    for (auto iterator = relativeNested.begin(); iterator != relativeNested.end(); ++iterator)
+    {
+        if (std::next(iterator) == relativeNested.end())
+            break;
+        current += L"\\" + iterator->wstring();
+        if (!CreateDirectoryW(current.c_str(), nullptr) && GetLastError() != ERROR_ALREADY_EXISTS)
+            FAIL() << "cannot create nested directory";
+        directories.push_back(current);
+    }
+    const auto extendedFile = VL::TerrainPackageClosure::ExtendedPath(full);
+    const HANDLE handle = CreateFileW(extendedFile.c_str(), GENERIC_WRITE, 0, nullptr,
+        CREATE_ALWAYS, FILE_ATTRIBUTE_NORMAL, nullptr);
+    ASSERT_NE(handle, INVALID_HANDLE_VALUE);
+    DWORD written = 0;
+    ASSERT_TRUE(WriteFile(handle, "payload", 7, &written, nullptr));
+    CloseHandle(handle);
+
+    EXPECT_NO_THROW(VL::TerrainPackageClosure::Resolve(base, nested));
+    EXPECT_THROW(VL::TerrainPackageClosure::Resolve(base, nested + "x"), std::runtime_error);
+
+    DeleteFileW(extendedFile.c_str());
+    for (auto iterator = directories.rbegin(); iterator != directories.rend(); ++iterator)
+        RemoveDirectoryW(iterator->c_str());
+#else
+    GTEST_SKIP() << "MAX_PATH is a Windows-only constraint";
+#endif
 }
 
 TEST_F(GameExportTest, TraversalDependencyIsRejectedBeforePublication)
@@ -1429,9 +1484,9 @@ TEST_F(GameExportTest, TerrainCompositedRelocatesLongCookPathsWithoutChangingPay
     EnableGameFlavor();
     const auto manifest = TerrainPackage();
     const auto original = ReadJson(manifest);
-    // 导出器在 staging 路径超过 259 字符时把包重定位到短目录。staging = output + ".staging.N"，
-    // 比 output 更长；按本机临时目录实际长度补齐，使最深文件的 output 路径达到 260，
-    // 而源路径（assets 比 game/resources 短 8 字符）仍低于 260，无需系统开启长路径。
+    // 导出器在 staging 路径超过 259 字符时把包重定位到短目录。staging = output + ".staging.N"�?
+    // �?output 更长；按本机临时目录实际长度补齐，使最深文件的 output 路径达到 260�?
+    // 而源路径（assets �?game/resources �?8 字符）仍低于 260，无需系统开启长路径�?
     size_t deepest = 0;
     for (const auto& entry : fs::recursive_directory_iterator(manifest.parent_path()))
         deepest = std::max(deepest, entry.path().lexically_relative(manifest.parent_path()).wstring().size());
