@@ -824,3 +824,27 @@ validation layer，也没有性能/预算结论。
   黑帧/输入闸门只在初始加载与显式传送时出现。
 - 仍开放：这是运行时交互修复，不改冻结核对表；`interactive` 统计仍按逐视角捕获
   更新，转身时数值会短暂回落，属预期。
+
+### 追加：`terrainCompositedService.cpp` 按领域拆分（2026-11-23 晚）
+
+原文件 5,077 行，`Impl` 内联了全部 cook/production/candidate/material 方法，和
+master 近期的 monolith split 方向相反，也不利于后续独立审查。已按“保留行为、
+只移动代码”的方式拆分：
+
+| 文件 | 行数 | 内容 |
+| --- | ---: | --- |
+| `terrainCompositedService.cpp` | ~1,150 | 公共 API（World/材质/上传/反馈/统计） |
+| `terrainCompositedServiceImpl.h` | ~340 | `Impl` 嵌套类型、数据、方法声明 |
+| `terrainCompositedServiceImplCandidate.cpp` | ~1,450 | 候选世界、预算准入、joint switch、刷新 |
+| `terrainCompositedServiceImplMaterials.cpp` | ~575 | 材质绑定、权重/高度、图像补丁 |
+| `terrainCompositedServiceImplProduction.cpp` | ~555 | 生产初始化/记录/完成/统计 |
+| `terrainCompositedServiceImplCook.cpp` | ~620 | Capture/CapturePublication/Bake |
+| `terrainCompositedServiceDetail.h/.cpp` | ~170/480 | 原匿名命名空间 helper 的声明与定义 |
+| `terrainCompositedServiceQuality.cpp` | ~220 | 质量快照/位姿/读回 |
+| `terrainCompositedServiceRefresh.cpp` | ~220 | 刷新票据与作者基线 |
+
+- 原匿名命名空间 helper 现在位于 `VL::TerrainServiceDetail`，由 `Impl.h` 里的
+  using-directive 对实现 TU 可见；全局预算/冻结配置仍单实例。
+- 拆分脚本与逐行 diff 留在 `artifacts/terrain-rvt-wrapup/`（忽略），本次只提交结果。
+- 验证：`vl_runtime` 及全部目标构建通过；`main_game` 播放场景冒烟通过；全量
+  ctest 与文档/边界门禁见本轮合并前记录。
