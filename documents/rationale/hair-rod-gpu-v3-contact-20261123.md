@@ -615,6 +615,39 @@ validation 0 条消息。
    删掉能降到约 26 KB——仍然只够 1 个 workgroup（需要 <= 24 KB 才能翻倍），
    所以这条的收益不确定，优先级最低。
 
+## 第十二轮：runtime 资产切到 cosseratImplicitV3
+
+`Maps/SC_tressfx_rod_validation/Meshes/TF_female_rod_validation.json` 的
+`simulationDefaults.solver` 从 `cosseratXpbdV1` 改成 `cosseratImplicitV3`
+（`solverProfile` 保持 `effectiveBundleV1`）。该 map 下四个场景都引用这个资产，
+所以四个场景一起切了。
+
+先用 `Generated/Validation/SC_tressfx_rod_runtime_v3.json`（同一 groom 的派生副本）
+验证，再改正式资产，然后跑正式场景：
+
+| 场景（2000 模拟 guide） | 结果 |
+| --- | --- |
+| `SC_tressfx_rod_animated` | exit 0，稳态 defect 0.139、3 个 guide 失败、validation 0 条 |
+| `SC_tressfx_rod_sdf_animated` | exit 0，稳态 defect 5.09、22 个 guide 失败、validation 0 条 |
+
+SDF 变体明显更差，但这与 V1 共享同一个已知限制：深层作者穿模落在
+`margin + 2*cellSize` 截断带之外，代理场看不见（见本文档前几轮的证据）。
+约 1% 的 guide 会耗尽牛顿预算失败，失败按 guide 隔离并在下一帧重试，
+不会冻结整个物体——这一点很重要，早期版本是整物体冻结。
+
+**这次切换只声明正确性范围**，不声明性能：2000 guide 的 hair pass 约 80 ms
+（RTX 3070 Laptop），离 60 fps 还差约 5x。全头风/回正/成本验收属于后续阶段。
+
+### A 阶段状态
+
+A 的两个子目标都已达成：
+- 最终模型在 GPU 上带胶囊/SDF 接触跑通（16 guide 零失败、残差 2.5e-05 量级；
+  2000 guide 稳态残差 1e-04、约 1% 瞬时失败）；
+- runtime 从 V1 切到最终模型（正式资产已提交）。
+
+遗留的、属于后续阶段的债务：80 ms 成本（需要 substep 数或每解成本再降约 5x）、
+SDF 深层穿模盲区（资产/碰撞体层面，与 V1 共享）。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
