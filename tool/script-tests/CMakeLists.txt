@@ -80,6 +80,7 @@ if(TARGET vl_gameplay)
             "${CMAKE_CURRENT_SOURCE_DIR}/managed/ScriptFixtures.csproj" --configuration "${VULKANLEARN_SCRIPT_CONFIGURATION}"
             "-p:VulkanLearnResourceRoot=${VULKANLEARN_SCRIPT_RESOURCE_ROOT}"
             "-p:VulkanLearnSourceItems=${VULKANLEARN_SCRIPT_SOURCE_ITEMS}"
+            --artifacts-path "${CMAKE_CURRENT_BINARY_DIR}/managed-fixtures"
             --output "${VULKANLEARN_SCRIPT_OUTPUT}" --nologo
         VERBATIM)
     foreach(version 1 2)
@@ -88,6 +89,7 @@ if(TARGET vl_gameplay)
                 "${CMAKE_CURRENT_SOURCE_DIR}/reload/ReloadFixtures.csproj"
                 --configuration "${VULKANLEARN_SCRIPT_CONFIGURATION}"
                 "-p:DefineConstants=RELOAD_V${version}"
+                --artifacts-path "${CMAKE_CURRENT_BINARY_DIR}/managed-reload-fixtures-v${version}"
                 --output "${VULKANLEARN_SCRIPT_OUTPUT}/reload-v${version}" --nologo
             VERBATIM)
         add_dependencies(vl_script_reload_fixtures_${version} vl_script_fixtures)

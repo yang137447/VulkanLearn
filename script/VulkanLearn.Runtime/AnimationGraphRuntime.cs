@@ -23,7 +23,9 @@ public readonly record struct AnimationGraphInput(
     string SyncMarker = "",
     float SyncMarkerAlpha = 0,
     IReadOnlyDictionary<string, float>? Curves = null,
-    IReadOnlyDictionary<string, float>? StartPositions = null)
+    IReadOnlyDictionary<string, float>? StartPositions = null,
+    float VerticalSpeed = 0,
+    float PoseGraphAxisY = 0)
 {
     internal void Validate()
     {
@@ -45,6 +47,10 @@ public readonly record struct AnimationGraphInput(
             throw new ArgumentOutOfRangeException(nameof(SyncPhase));
         if (!float.IsFinite(SyncMarkerAlpha) || SyncMarkerAlpha < 0 || SyncMarkerAlpha > 1)
             throw new ArgumentOutOfRangeException(nameof(SyncMarkerAlpha));
+        if (!float.IsFinite(VerticalSpeed))
+            throw new ArgumentOutOfRangeException(nameof(VerticalSpeed));
+        if (!float.IsFinite(PoseGraphAxisY))
+            throw new ArgumentOutOfRangeException(nameof(PoseGraphAxisY));
     }
 
     internal bool TryCurve(string name, out float value)
@@ -66,7 +72,8 @@ public readonly record struct AnimationGraphInput(
     }
 }
 
-// 每帧最多每个状态机迁移一次；outer 先于 inner 求值，外层迁移时内层按 entry 规则重入。
+// 每个状态机每帧按 MaxTransitionsPerFrame 预算迁移；outer 先于 inner 求值，
+// 外层迁移时内层按 entry 规则重入。
 public readonly record struct AnimationGraphDecision(
     string State,
     string LeafState,
@@ -85,7 +92,27 @@ public readonly record struct AnimationGraphDecision(
     bool Changed,
     float StateTime,
     bool Completed,
-    bool InPlace = true);
+    bool InPlace = true,
+    string BlendClip = "",
+    float BlendWeight = 0,
+    float BlendRate = 1,
+    string BlendSyncGroup = "",
+    IReadOnlyList<string>? ConduitPath = null,
+    string UseCachedPose = "",
+    string AdditiveClip = "",
+    float AdditiveAlpha = 0,
+    bool AdditiveLoop = false,
+    string Slot = "",
+    IReadOnlyList<string>? SlotMask = null,
+    float SlotAlpha = 1,
+    string SaveCachedPose = "",
+    string LayerClip = "",
+    float LayerAlpha = 0,
+    bool LayerLoop = false,
+    IReadOnlyList<string>? LayerMask = null,
+    IReadOnlyList<AnimationGraphBoneWeight>? LayerWeights = null,
+    IReadOnlyList<AnimationGraphBoneWeight>? SlotWeights = null,
+    string PoseGraphNode = "");
 
 public sealed class AnimationGraphRuntime
 {
@@ -95,13 +122,39 @@ public sealed class AnimationGraphRuntime
         public AnimationGraphStateMachine Definition = null!;
         public string State = "";
         public float StateTime;
+        // PoseNode 状态没有静态 Clip，完成判定使用上一帧实际求值出的片段。
+        public string EffectiveClip = "";
+        // 状态机自己的时钟：MinTimeBeforeReentry 用，不受内层状态重置影响。
+        public float Clock;
+        public readonly Dictionary<string, float> EnteredAt = new(StringComparer.Ordinal);
         public string EntryFromState = "";
         public bool JustEntered;
     }
 
+    // Conduit 链的最终内容状态转移；Conduits 按经过顺序记录，用于诊断与测试。
+    private sealed class ResolvedTransition
+    {
+        public AnimationGraphTransition Transition = null!;
+        public List<string> Conduits = null!;
+        // UE SkipFirstUpdateTransition：首帧转移丢掉混合，目标状态直接满权重。
+        public bool SkipBlend;
+    }
+
+    // 与 UE visited 集合等价的防环上限；超限按“没有可用转移”处理。
+    private const int MaximumConduitChain = 16;
+
     private readonly AnimationGraphDefinition definition;
     private readonly Dictionary<string, AnimationGraphStateMachine> machines;
     private readonly List<ActiveMachine> stack = [];
+    // UE BlendSpace 的 TargetWeightInterpolationSpeedPerSec = 5：轴值突变时权重按
+    // 5/s 逼近目标，而不是当帧跳变。键是状态路径，离开状态即丢弃。
+    private readonly Dictionary<string, float> blendWeights = new(StringComparer.Ordinal);
+    private string activeBlendPath = "";
+    private readonly List<string> conduitPath = [];
+    // Transition Request：RequestTransition 在下一个 Update 内消费一次。
+    private readonly HashSet<string> pendingTransitionRequests = new(StringComparer.Ordinal);
+    private readonly HashSet<string> activeTransitionRequests = new(StringComparer.Ordinal);
+    private const int MaximumTransitionRequests = 8;
     private bool started;
     private string lastDirectionBranch = "";
 
@@ -118,6 +171,7 @@ public sealed class AnimationGraphRuntime
             State = root.EntryState,
             JustEntered = true
         });
+        stack[0].EnteredAt[root.EntryState] = 0;
         lastDirectionBranch = definition.DirectionBranches.Count > 0
             ? definition.DirectionBranches[0].Name : "";
         if (root.EntryState.Length > 0)
@@ -130,46 +184,86 @@ public sealed class AnimationGraphRuntime
 
     public AnimationGraphDefinition Definition => definition;
 
+    // Transition Request：只在下一次 Update 内有效；未匹配到转移就丢弃。
+    public void RequestTransition(string name)
+    {
+        if (string.IsNullOrWhiteSpace(name) || name.Trim().Length != name.Length ||
+            name.Length > 64 || name.Contains('\0'))
+            throw new ArgumentException("Transition request name is invalid.", nameof(name));
+        if (pendingTransitionRequests.Count >= MaximumTransitionRequests &&
+            !pendingTransitionRequests.Contains(name))
+            throw new InvalidOperationException("Transition request budget exceeded.");
+        pendingTransitionRequests.Add(name);
+    }
+
     public AnimationGraphDecision Update(in AnimationGraphInput input)
     {
         input.Validate();
+        activeTransitionRequests.Clear();
+        foreach (var request in pendingTransitionRequests) activeTransitionRequests.Add(request);
+        pendingTransitionRequests.Clear();
         AdvanceTime(input.DeltaTime);
+        conduitPath.Clear();
 
         var root = stack[0];
-        AnimationGraphTransition? outerTransition = null;
-        AnimationGraphTransition? innerTransition = null;
+        ResolvedTransition? outerTransition = null;
+        ResolvedTransition? innerTransition = null;
         bool changed = !started;
         bool wasInterruptibleLeaf = FindState(stack[^1].Definition, stack[^1].State).Interruptible;
 
         if (!started)
         {
-            outerTransition = SelectTransition(root, root.Definition.EntryTransitions, input);
+            bool firstUpdate = root.Definition.SkipFirstUpdateTransition;
+            int usedTransitions = 0;
+            outerTransition = SelectTransition(root, root.Definition.EntryTransitions, input, firstUpdate);
             root.JustEntered = false;
             if (outerTransition is not null)
             {
-                EnterState(root, outerTransition.To, "");
+                EnterState(root, outerTransition.Transition.To, "");
+                AppendConduits(outerTransition.Conduits);
                 changed = true;
             }
             else
             {
-                outerTransition = SelectTransition(root, root.Definition.Transitions, input);
+                outerTransition = SelectTransition(root, root.Definition.Transitions, input, firstUpdate);
                 if (outerTransition is not null)
                 {
                     string previous = root.State;
-                    EnterState(root, outerTransition.To, previous);
+                    EnterState(root, outerTransition.Transition.To, previous);
+                    AppendConduits(outerTransition.Conduits);
                     changed = true;
+                    usedTransitions = 1;
                 }
+            }
+            ResolveConduitEntry(root, input);
+            // UE 的 entry transition 不占 MaxTransitionsPerFrame 预算；后续转移受限。
+            for (; usedTransitions < root.Definition.MaxTransitionsPerFrame; ++usedTransitions)
+            {
+                var extra = SelectTransition(root, root.Definition.Transitions, input, firstUpdate);
+                if (extra is null) break;
+                string previous = root.State;
+                EnterState(root, extra.Transition.To, previous);
+                AppendConduits(extra.Conduits);
+                outerTransition = extra;
+                changed = true;
+                ResolveConduitEntry(root, input);
+                if (stack.Count > 1) break;
             }
             started = true;
         }
         else
         {
-            outerTransition = SelectTransition(root, root.Definition.Transitions, input);
-            if (outerTransition is not null)
+            for (int step = 0; step < root.Definition.MaxTransitionsPerFrame; ++step)
             {
+                var transition = SelectTransition(root, root.Definition.Transitions, input, false);
+                if (transition is null) break;
                 string previous = root.State;
-                EnterState(root, outerTransition.To, previous);
+                EnterState(root, transition.Transition.To, previous);
+                AppendConduits(transition.Conduits);
+                outerTransition = transition;
                 changed = true;
+                ResolveConduitEntry(root, input);
+                if (stack.Count > 1) break;
             }
         }
 
@@ -178,36 +272,144 @@ public sealed class AnimationGraphRuntime
         while (level < stack.Count)
         {
             var machine = stack[level];
-            var transitions = machine.JustEntered ? machine.Definition.EntryTransitions : machine.Definition.Transitions;
+            bool firstUpdate = machine.JustEntered;
             machine.JustEntered = false;
-            var transition = SelectTransition(machine, transitions, input);
-            if (transition is null)
+            if (firstUpdate)
+            {
+                ResolveConduitEntry(machine, input);
+                var entry = SelectTransition(machine, machine.Definition.EntryTransitions, input, firstUpdate);
+                if (entry is not null)
+                {
+                    string previous = machine.State;
+                    EnterState(machine, entry.Transition.To, previous);
+                    AppendConduits(entry.Conduits);
+                    innerTransition = entry;
+                    changed = true;
+                }
+            }
+            if (stack.Count > level + 1)
             {
                 level++;
                 continue;
             }
-            string previous = machine.State;
-            EnterState(machine, transition.To, previous);
-            innerTransition = transition;
-            changed = true;
+            for (int step = 0; step < machine.Definition.MaxTransitionsPerFrame; ++step)
+            {
+                var transition = SelectTransition(machine, machine.Definition.Transitions, input, firstUpdate);
+                if (transition is null) break;
+                string previous = machine.State;
+                EnterState(machine, transition.Transition.To, previous);
+                AppendConduits(transition.Conduits);
+                innerTransition = transition;
+                changed = true;
+                if (stack.Count > level + 1) break;
+            }
             level++;
         }
 
         var leafMachine = stack[^1];
         var leafState = FindState(leafMachine.Definition, leafMachine.State);
         string clip = leafState.Clip;
+        string blendClip = "";
+        float blendWeight = 0;
+        float blendRate = 1;
+        string blendSyncGroup = "";
+        string statePath = BuildStatePath();
+        // 发生任何状态迁移或路径变化都从目标权重起步；重新进入同一路径也不能
+        // 继承上一段播放的残留权重。
+        if (changed || !string.Equals(activeBlendPath, statePath, StringComparison.Ordinal))
+        {
+            blendWeights.Clear();
+            activeBlendPath = statePath;
+        }
+        if (leafState.BlendSamples.Count > 0)
+        {
+            var sample = ResolveBlendSample(leafState, input, statePath, input.DeltaTime);
+            clip = sample.Clip;
+            blendClip = sample.BlendClip;
+            blendWeight = sample.Weight;
+            blendRate = sample.Rate;
+            blendSyncGroup = sample.SyncGroup;
+        }
+        else blendWeights.Remove(statePath);
+        // Pose-node graph：状态输出改为节点求值；结果仍是同一份扁平化 decision。
+        bool loop = leafState.Loop;
+        float startPosition = leafState.StartPosition >= 0
+            ? leafState.StartPosition : input.StartPosition(clip);
+        string useCachedPose = leafState.UseCachedPose;
+        string additiveClip = leafState.AdditiveClip;
+        float additiveAlpha = additiveClip.Length > 0 ? leafState.AdditiveAlpha : 0;
+        bool additiveLoop = leafState.AdditiveLoop;
+        string layerClip = leafState.LayerClip;
+        float layerAlpha = layerClip.Length > 0 ? leafState.LayerAlpha : 0;
+        bool layerLoop = leafState.LayerLoop;
+        IReadOnlyList<string>? layerMask = leafState.LayerMask.Count > 0 ? leafState.LayerMask : null;
+        IReadOnlyList<AnimationGraphBoneWeight>? layerWeights =
+            leafState.LayerWeights.Count > 0 ? leafState.LayerWeights : null;
+        string slot = leafState.Slot;
+        IReadOnlyList<string>? slotMask = leafState.SlotMask.Count > 0 ? leafState.SlotMask : null;
+        IReadOnlyList<AnimationGraphBoneWeight>? slotWeights =
+            leafState.SlotWeights.Count > 0 ? leafState.SlotWeights : null;
+        float slotAlpha = leafState.SlotAlpha;
+        string saveCachedPose = definition.SaveCachedPose;
+        if (leafState.PoseNode.Length > 0 && definition.PoseGraph is not null)
+        {
+            IReadOnlyDictionary<string, float>? poseValues = null;
+            var values = new Dictionary<string, float>(StringComparer.Ordinal);
+            foreach (var node in definition.PoseGraph.Nodes)
+            {
+                if (node.Kind == AnimationPoseNodeKind.BlendSpace2DPlayer)
+                {
+                    // C# 前端与原生使用同一双轴值；X 是平面速度，Y 由蓝图覆写。
+                    values[node.Id] = input.PlanarSpeed;
+                    values[$"{node.Id}.y"] = input.PoseGraphAxisY;
+                }
+                else if (node.Kind == AnimationPoseNodeKind.Select && node.Inputs.Count == 2)
+                {
+                    values[node.Id] = node.Inputs[1] == leafState.PoseNode ? 1 : 0;
+                }
+            }
+            if (values.Count > 0) poseValues = values;
+            var pose = definition.PoseGraph.Evaluate(
+                input.PlanarSpeed, leafState.PoseNode, poseValues);
+            clip = pose.Clip;
+            loop = pose.Loop;
+            startPosition = pose.StartPosition >= 0 ? pose.StartPosition : input.StartPosition(clip);
+            blendClip = pose.BlendClip;
+            blendWeight = pose.BlendWeight;
+            additiveClip = pose.AdditiveClip;
+            additiveAlpha = pose.AdditiveAlpha;
+            additiveLoop = pose.AdditiveLoop;
+            layerClip = pose.LayerClip;
+            layerAlpha = pose.LayerAlpha;
+            layerLoop = pose.LayerLoop;
+            layerWeights = pose.LayerWeights.Count > 0 ? pose.LayerWeights : null;
+            slot = pose.Slot;
+            slotWeights = pose.SlotWeights.Count > 0 ? pose.SlotWeights : null;
+            slotAlpha = pose.SlotAlpha;
+            useCachedPose = pose.UseCachedPose;
+            if (pose.SaveCachedPose.Length > 0) saveCachedPose = pose.SaveCachedPose;
+            // MontagePlayer 的片段由原生子播放器选择；C# 只收到实际播放时钟，
+            // 因此用反馈 clip 作为完成判定来源，不能保持空 clip 永不完成。
+            if (pose.MontageId.Length > 0 && clip.Length == 0) clip = input.Clip;
+        }
         float stateTime = ResolveStateTime(leafMachine, leafState, input);
         bool completed = clip.Length > 0 && input.Clip == clip && input.ClipCompleted;
+        leafMachine.EffectiveClip = clip;
         string direction = ResolveDirection(leafState, leafMachine.Definition, input);
 
         // 外层迁移拥有整个内层状态机的交叉淡入；内层迁移只在没有外层迁移时接管 blends。
-        var transitionForOutput = outerTransition ?? innerTransition;
-        string tag = innerTransition is not null && innerTransition.Tag.Length > 0
-            ? innerTransition.Tag
-            : outerTransition?.Tag ?? "";
+        var transitionForOutput = (outerTransition ?? innerTransition)?.Transition;
+        string tag = innerTransition is not null && innerTransition.Transition.Tag.Length > 0
+            ? innerTransition.Transition.Tag
+            : outerTransition?.Transition.Tag ?? "";
 
         float blend = transitionForOutput?.BlendSeconds ?? 0;
         bool inertialization = transitionForOutput?.Inertialization ?? false;
+        if ((outerTransition ?? innerTransition)?.SkipBlend == true)
+        {
+            blend = 0;
+            inertialization = false;
+        }
         string syncGroup = transitionForOutput?.SyncGroup ?? "";
         // 起步片段被外层迁移打断时，UE 不会把旧片段的相位带到目标循环；图定义里
         // outer transition 仍可声明 SyncPhaseFromSource，由这里的 interruptible 立即否决。
@@ -215,17 +417,14 @@ public sealed class AnimationGraphRuntime
         float syncPhase = transitionForOutput is not null && transitionForOutput.SyncPhaseFromSource &&
             !interruptedStart ? input.SyncPhase : -1;
         bool crossfade = transitionForOutput?.Crossfade == true && blend > 0;
-        float startPosition = leafState.StartPosition >= 0
-            ? leafState.StartPosition : input.StartPosition(clip);
-
         return new AnimationGraphDecision(
             root.State,
             leafMachine.State,
-            BuildStatePath(),
+            statePath,
             FindState(root.Definition, root.State).Mode,
             tag,
             clip,
-            leafState.Loop,
+            loop,
             direction,
             blend,
             inertialization,
@@ -236,7 +435,27 @@ public sealed class AnimationGraphRuntime
             changed,
             stateTime,
             completed,
-            true);
+            true,
+            blendClip,
+            blendWeight,
+            blendRate,
+            blendSyncGroup,
+            conduitPath.Count > 0 ? conduitPath.ToArray() : null,
+            useCachedPose,
+            additiveClip,
+            additiveAlpha,
+            additiveLoop,
+            slot,
+            slotMask,
+            slotAlpha,
+            saveCachedPose,
+            layerClip,
+            layerAlpha,
+            layerLoop,
+            layerMask,
+            layerWeights,
+            slotWeights,
+            leafState.PoseNode);
     }
 
     // 只读诊断入口；不会推进状态机。
@@ -245,6 +464,7 @@ public sealed class AnimationGraphRuntime
     private void AdvanceTime(float deltaTime)
     {
         if (stack.Count == 0) return;
+        foreach (var machine in stack) machine.Clock += deltaTime;
         stack[^1].StateTime += deltaTime;
     }
 
@@ -254,31 +474,123 @@ public sealed class AnimationGraphRuntime
     private float ResolveStateTime(ActiveMachine machine, AnimationGraphState state, in AnimationGraphInput input) =>
         IsClipReady(state, input) && input.Clip == state.Clip ? input.ClipTime : machine.StateTime;
 
-    private bool IsCompleted(ActiveMachine machine, AnimationGraphState state, in AnimationGraphInput input) =>
-        state.Clip.Length > 0 && IsClipReady(state, input) && input.Clip == state.Clip && input.ClipCompleted;
-
-    private AnimationGraphTransition? SelectTransition(ActiveMachine machine,
-        IReadOnlyList<AnimationGraphTransition> transitions, in AnimationGraphInput input)
+    private bool IsCompleted(ActiveMachine machine, AnimationGraphState state, in AnimationGraphInput input)
     {
-        AnimationGraphTransition? best = null;
-        foreach (var transition in transitions)
+        // PoseNode 状态（例如 Third Person 的 Jump）没有静态 Clip；用上一帧图求值
+        // 得到的 EffectiveClip 判断完成，否则 StateCompleted 永远不会触发。
+        string expected = state.Clip.Length > 0 ? state.Clip : machine.EffectiveClip;
+        return expected.Length > 0 && IsClipReady(state, input) && input.Clip == expected &&
+            input.ClipCompleted;
+    }
+
+    private ResolvedTransition? SelectTransition(ActiveMachine machine,
+        IReadOnlyList<AnimationGraphTransition> transitions, in AnimationGraphInput input,
+        bool firstUpdate) =>
+        SelectTransition(machine, machine.State, transitions, input,
+            new HashSet<string>(StringComparer.Ordinal), 0, firstUpdate);
+
+    // 按 priority（同优先级按声明顺序）尝试转移；目标若是 conduit，就在同一帧继续
+    // 用该 conduit 的出边递归，直到内容状态。visited 防止 conduit 环无限展开。
+    private ResolvedTransition? SelectTransition(ActiveMachine machine, string sourceState,
+        IReadOnlyList<AnimationGraphTransition> transitions, in AnimationGraphInput input,
+        HashSet<string> visitedConduits, int depth, bool firstUpdate)
+    {
+        if (depth > MaximumConduitChain) return null;
+        var context = BuildContext(machine, sourceState, input);
+        var candidates = new List<(int Index, AnimationGraphTransition Transition)>();
+        for (int index = 0; index < transitions.Count; ++index)
         {
-            if (transition.From != "*" && transition.From != machine.State) continue;
-            if (transition.To == machine.State) continue;
-            var state = FindState(machine.Definition, machine.State);
-            var context = new AnimationGraphEvaluationContext(definition, input,
-                ResolveStateTime(machine, state, input), IsCompleted(machine, state, input),
-                machine.EntryFromState, machine.Definition.DirectionCurve);
-            if (!context.Evaluate(transition.Condition)) continue;
-            if (best is null || transition.Priority < best.Priority) best = transition;
+            var transition = transitions[index];
+            if (!machine.Definition.MatchesSource(transition.From, sourceState)) continue;
+            if (transition.To == sourceState) continue;
+            if (transition.MinTimeBeforeReentry > 0 &&
+                machine.EnteredAt.TryGetValue(transition.To, out var enteredAt) &&
+                machine.Clock - enteredAt < transition.MinTimeBeforeReentry)
+                continue;
+            // UE Automatic Rule：按剩余时间触发，开启后不再求值普通条件。
+            if (transition.AutomaticRule)
+            {
+                if (!AutomaticRuleReady(machine, sourceState, transition, input)) continue;
+            }
+            else if (!context.Evaluate(transition.Condition)) continue;
+            candidates.Add((index, transition));
         }
-        return best;
+        candidates.Sort((left, right) => left.Transition.Priority != right.Transition.Priority
+            ? left.Transition.Priority.CompareTo(right.Transition.Priority)
+            : left.Index.CompareTo(right.Index));
+        foreach (var candidate in candidates)
+        {
+            var target = FindState(machine.Definition, candidate.Transition.To);
+            if (!target.Conduit)
+                return new ResolvedTransition
+                {
+                    Transition = candidate.Transition,
+                    Conduits = [],
+                    SkipBlend = firstUpdate && machine.Definition.SkipFirstUpdateTransition
+                };
+            var nested = ResolveConduit(machine, target, input, visitedConduits, depth + 1, firstUpdate);
+            if (nested is not null) return nested;
+        }
+        return null;
+    }
+
+    private ResolvedTransition? ResolveConduit(ActiveMachine machine, AnimationGraphState conduit,
+        in AnimationGraphInput input, HashSet<string> visitedConduits, int depth, bool firstUpdate)
+    {
+        if (depth > MaximumConduitChain || !visitedConduits.Add(conduit.Name)) return null;
+        // UE 的 conduit 入口规则：false 时这条路径整体不可用，调用方继续尝试其它转移。
+        if (conduit.EntryRule is not null && !BuildContext(machine, conduit.Name, input).Evaluate(conduit.EntryRule))
+            return null;
+        var resolved = SelectTransition(machine, conduit.Name, machine.Definition.Transitions,
+            input, visitedConduits, depth + 1, firstUpdate);
+        resolved?.Conduits.Insert(0, conduit.Name);
+        return resolved;
+    }
+
+    // EntryState 本身是 conduit 时（AllowConduitEntryStates 已在定义期校验），进入状态机
+    // 当帧就跟随它的出边；没有可用路径则停在该 conduit，本帧不输出片段。
+    private void ResolveConduitEntry(ActiveMachine machine, in AnimationGraphInput input)
+    {
+        var state = FindState(machine.Definition, machine.State);
+        if (!state.Conduit || !machine.Definition.AllowConduitEntryStates) return;
+        var resolved = ResolveConduit(machine, state, input,
+            new HashSet<string>(StringComparer.Ordinal), 0, false);
+        if (resolved is null) return;
+        string previous = machine.State;
+        EnterState(machine, resolved.Transition.To, previous);
+        AppendConduits(resolved.Conduits);
+    }
+
+    private AnimationGraphEvaluationContext BuildContext(ActiveMachine machine, string stateName,
+        in AnimationGraphInput input)
+    {
+        var state = FindState(machine.Definition, stateName);
+        return new AnimationGraphEvaluationContext(definition, input,
+            ResolveStateTime(machine, state, input), IsCompleted(machine, state, input),
+            machine.EntryFromState, machine.Definition.DirectionCurve, activeTransitionRequests);
+    }
+
+    private bool AutomaticRuleReady(ActiveMachine machine, string sourceState,
+        AnimationGraphTransition transition, in AnimationGraphInput input)
+    {
+        var state = FindState(machine.Definition, sourceState);
+        if (state.Clip.Length == 0 || input.Clip != state.Clip || input.ClipDuration <= 0) return false;
+        float trigger = transition.AutomaticRuleTriggerTime >= 0
+            ? transition.AutomaticRuleTriggerTime : transition.BlendSeconds;
+        return input.ClipDuration - input.ClipTime <= trigger;
+    }
+
+    private void AppendConduits(IReadOnlyList<string> conduits)
+    {
+        for (int index = 0; index < conduits.Count; ++index) conduitPath.Add(conduits[index]);
     }
 
     private void EnterState(ActiveMachine machine, string stateName, string previousState)
     {
         machine.State = stateName;
         machine.StateTime = 0;
+        machine.EffectiveClip = "";
+        machine.EnteredAt[stateName] = machine.Clock;
         machine.EntryFromState = previousState;
         machine.JustEntered = false;
         RebuildNested(machine);
@@ -292,13 +604,15 @@ public sealed class AnimationGraphRuntime
         var state = FindState(parent.Definition, parent.State);
         if (state.SubStateMachine.Length == 0) return;
         var nested = machines[state.SubStateMachine];
-        stack.Add(new ActiveMachine
+        var nestedMachine = new ActiveMachine
         {
             Definition = nested,
             State = nested.EntryState,
             EntryFromState = parent.EntryFromState,
             JustEntered = true
-        });
+        };
+        nestedMachine.EnteredAt[nested.EntryState] = 0;
+        stack.Add(nestedMachine);
     }
 
     private void TrimStack(int count)
@@ -318,6 +632,66 @@ public sealed class AnimationGraphRuntime
         foreach (var state in machine.States)
             if (state.Name == name) return state;
         throw new InvalidOperationException($"Animation graph state '{machine.Name}/{name}' is unknown.");
+    }
+
+    // 轴值取本帧平面速度。权重先按 UE 的 BSIT_EaseInOut（smoothstep）成形，
+    // 再按 5/s 向目标插值。A 固定为状态基准 sample（两个 sample 取 0，三个取 1），
+    // B 只取基准左右相邻的 sample：这样跨内部 sample 边界时 A 的时钟不换片、
+    // 相位不会重启；B 的权重按片段分别缓存，换片段对时从各自的历史值继续。
+    private (string Clip, string BlendClip, float Weight, float Rate, string SyncGroup) ResolveBlendSample(
+        AnimationGraphState state, in AnimationGraphInput input, string statePath, float deltaTime)
+    {
+        var samples = state.BlendSamples;
+        float axis = input.PlanarSpeed;
+        int baseIndex = samples.Count >= 3 ? 1 : 0;
+        string clip = samples[baseIndex].Clip;
+        string blendClip;
+        float rate = 1;
+        string syncGroup = "";
+        float target;
+        if (baseIndex == 0)
+        {
+            blendClip = samples[1].Clip;
+            rate = samples[1].Rate;
+            syncGroup = samples[1].SyncGroup;
+            target = SmoothstepAlpha(axis, samples[0].Threshold, samples[1].Threshold);
+        }
+        else if (axis <= samples[1].Threshold)
+        {
+            // 低段：A 是中间 sample，B 是首 sample；轴越低 B 权重越高。
+            blendClip = samples[0].Clip;
+            rate = samples[0].Rate;
+            syncGroup = samples[0].SyncGroup;
+            target = 1 - SmoothstepAlpha(axis, samples[0].Threshold, samples[1].Threshold);
+        }
+        else
+        {
+            blendClip = samples[2].Clip;
+            rate = samples[2].Rate;
+            syncGroup = samples[2].SyncGroup;
+            target = SmoothstepAlpha(axis, samples[1].Threshold, samples[2].Threshold);
+        }
+
+        // B 片段是权重缓存键的一部分：换片段对不会继承上一对的端点权重。
+        string key = statePath + "|" + blendClip;
+        if (!blendWeights.TryGetValue(key, out float current) || !float.IsFinite(current))
+        {
+            blendWeights[key] = target;
+            return (clip, blendClip, target, rate, syncGroup);
+        }
+        float step = state.BlendWeightSpeedPerSec <= 0
+            ? float.MaxValue
+            : state.BlendWeightSpeedPerSec * Math.Max(0, deltaTime);
+        float weight = Math.Clamp(target, current - step, current + step);
+        blendWeights[key] = weight;
+        return (clip, blendClip, weight, rate, syncGroup);
+    }
+
+    private static float SmoothstepAlpha(float axis, float from, float to)
+    {
+        float span = to - from;
+        float alpha = span > 0 ? Math.Clamp((axis - from) / span, 0, 1) : 0;
+        return alpha * alpha * (3 - 2 * alpha);
     }
 
     private string ResolveDirection(AnimationGraphState leaf, AnimationGraphStateMachine machine,
@@ -359,9 +733,11 @@ internal readonly struct AnimationGraphEvaluationContext
     private readonly bool clipCompleted;
     private readonly string entryFromState;
     private readonly string machineDirectionCurve;
+    private readonly IReadOnlySet<string>? transitionRequests;
 
     public AnimationGraphEvaluationContext(AnimationGraphDefinition definition, in AnimationGraphInput input,
-        float stateTime, bool clipCompleted, string entryFromState, string machineDirectionCurve)
+        float stateTime, bool clipCompleted, string entryFromState, string machineDirectionCurve,
+        IReadOnlySet<string>? transitionRequests)
     {
         this.definition = definition;
         this.input = input;
@@ -369,6 +745,7 @@ internal readonly struct AnimationGraphEvaluationContext
         this.clipCompleted = clipCompleted;
         this.entryFromState = entryFromState;
         this.machineDirectionCurve = machineDirectionCurve;
+        this.transitionRequests = transitionRequests;
     }
 
     public bool Evaluate(AnimationGraphCondition condition)
@@ -399,6 +776,9 @@ internal readonly struct AnimationGraphEvaluationContext
         case AnimationGraphConditionKind.Speed: return Compare(input.PlanarSpeed, condition);
         case AnimationGraphConditionKind.DesiredSpeed: return Compare(input.DesiredSpeed, condition);
         case AnimationGraphConditionKind.MaxSpeed: return Compare(input.MaxSpeed, condition);
+        case AnimationGraphConditionKind.VerticalSpeed: return Compare(input.VerticalSpeed, condition);
+        case AnimationGraphConditionKind.TransitionRequest:
+            return transitionRequests is not null && transitionRequests.Contains(condition.Name);
         case AnimationGraphConditionKind.InputMagnitude: return Compare(input.InputMagnitude, condition);
         case AnimationGraphConditionKind.BackwardDot:
             return Compare(BackwardDot(input), condition);

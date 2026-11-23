@@ -243,6 +243,41 @@ void ValidateRootMotion(
         }
         sequence.additiveAnimType = value;
     }
+    if (rootMotion.contains("refFrameIndex"))
+    {
+        sequence.additiveReferenceFrame = ReadNonNegativeInt(
+            rootMotion, "refFrameIndex", basePath, "rootMotion.refFrameIndex");
+    }
+    if (rootMotion.contains("refPoseType"))
+    {
+        const std::string value = ReadRequiredString(
+            rootMotion, "refPoseType", basePath, "rootMotion.refPoseType");
+        static const std::set<std::string> known = {
+            "RefPose", "LocalAnimFrame", "ABPT_RefPose", "ABPT_LocalAnimFrame"};
+        if (known.find(value) == known.end())
+        {
+            if (value == "AnimFrame" || value == "ABPT_AnimFrame")
+                Fail(basePath, "rootMotion.refPoseType",
+                    "external RefPoseSeq additive references are not imported");
+            Fail(basePath, "rootMotion.refPoseType",
+                "unknown UE additive reference pose type \"" + value + "\"");
+        }
+        sequence.additiveReferencePoseType =
+            (value == "RefPose" || value == "ABPT_RefPose") ?
+                "RefPose" : "LocalAnimFrame";
+    }
+    else if (sequence.additiveReferenceFrame >= 0)
+    {
+        // 旧 sidecar 没有 refPoseType；存在参考帧时按 UE LocalAnimFrame 解释。
+        sequence.additiveReferencePoseType = "LocalAnimFrame";
+    }
+    if (sequence.additiveAnimType != "None" &&
+        sequence.additiveReferencePoseType == "LocalAnimFrame" &&
+        sequence.additiveReferenceFrame < 0)
+    {
+        Fail(basePath, "rootMotion.refFrameIndex",
+            "is required for LocalAnimFrame additive references");
+    }
 }
 
 void ValidateSampling(

@@ -137,6 +137,7 @@ TEST(AnimationSequenceData, ParsesFrameRateCurvesNotifiesAndRetainedData)
     EXPECT_TRUE(sequence.forceRootLock);
     EXPECT_EQ(sequence.rootMotionRootLock, "RefPose");
     EXPECT_EQ(sequence.additiveAnimType, "None");
+    EXPECT_EQ(sequence.additiveReferenceFrame, -1);
     EXPECT_EQ(sequence.tracks, (std::vector<std::string>{"root", "pelvis"}));
     ASSERT_EQ(sequence.curves.size(), 1u);
     EXPECT_EQ(sequence.curves[0].name, "distance_from_ledge");
@@ -349,6 +350,29 @@ TEST(AnimationSequenceData, PreservesKnownAdditiveValuesAndRejectsUnknownEnums)
     source = MakeSequenceJson();
     source["rootMotion"]["rootMotionRootLock"] = "Bogus";
     EXPECT_NE(ErrorOf([&] { ParseSequence(source, "walk.anim.json"); }).find("root motion"),
+        std::string::npos);
+}
+
+TEST(AnimationSequenceData, ParsesAdditiveReferenceFrame)
+{
+    json source = MakeSequenceJson();
+    source["rootMotion"]["additiveAnimType"] = "LocalSpaceBase";
+    source["rootMotion"]["refFrameIndex"] = 26;
+    const SequenceData sequence = ParseSequence(source, "land.anim.json");
+    EXPECT_EQ(sequence.additiveReferenceFrame, 26);
+    EXPECT_EQ(sequence.additiveReferencePoseType, "LocalAnimFrame");
+
+    source["rootMotion"]["refPoseType"] = "RefPose";
+    const SequenceData refPose = ParseSequence(source, "land.anim.json");
+    EXPECT_EQ(refPose.additiveReferencePoseType, "RefPose");
+
+    source["rootMotion"]["refFrameIndex"] = -1;
+    EXPECT_NE(ErrorOf([&] { ParseSequence(source, "land.anim.json"); }).find("refFrameIndex"),
+        std::string::npos);
+
+    source["rootMotion"]["refFrameIndex"] = 26;
+    source["rootMotion"]["refPoseType"] = "AnimFrame";
+    EXPECT_NE(ErrorOf([&] { ParseSequence(source, "land.anim.json"); }).find("RefPoseSeq"),
         std::string::npos);
 }
 

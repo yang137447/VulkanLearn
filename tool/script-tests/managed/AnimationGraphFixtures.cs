@@ -72,8 +72,48 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
         mask |= Catch(16, EmptyClip());
         mask |= Catch(32, InvalidThreshold());
         mask |= Catch(64, BudgetExceeded());
+        mask |= Catch(128, UnknownAlias());
+        mask |= Catch(256, BlendTooFewSamples());
+        mask |= Catch(512, BlendUnsortedThresholds());
+        mask |= Catch(1024, BlendDuplicateClip());
+        mask |= Catch(2048, BlendUnknownAxis());
+        mask |= Catch(32768, MaxTransitionsOutOfRange());
+        mask |= Catch(268435456, AutomaticRuleTriggerOutOfRange());
+        mask |= Catch(536870912, MinReentryNegative());
+        mask |= Catch(65536, AdditiveOnConduit());
+        mask |= Catch(131072, AdditiveAlphaWithoutClip());
+        mask |= Catch(262144, CachedPoseWithClip());
+        mask |= Catch(1048576, LayerOnConduit());
+        mask |= Catch(2097152, LayerAlphaWithoutClip());
+        mask |= Catch(4194304, LayerMaskDuplicate());
+        mask |= Catch(8388608, SlotMaskWithoutSlot());
+        mask |= Catch(16777216, CachedPoseBranchDuplicate());
+        mask |= Catch(33554432, CachedPoseBranchWithClipAndSamples());
+        mask |= Catch(67108864, CachedPoseBranchUnresolvedAsset());
+        mask |= Catch(134217728, CachedPoseBranchTooManySamples());
+        mask |= Catch(4096, ConduitWithClip());
+        mask |= Catch(8192, EntryRuleOnContentState());
+        mask |= Catch(16384, EntryConduitWithoutFlag());
         // 合法图必须通过；否则 rejection 夹具会把“全都拒绝”误判成正确。
         _ = ValidGraph().Validate();
+        // 分支的 BlendSpace 与状态的 BlendSpace 必须一起解析，且清除资产名。
+        var spaces = new Dictionary<string, AnimationBlendSpaceDefinition>
+        {
+            ["BS_Test"] = new("BS_Test", 5, "EaseInOut", new[]
+            {
+                new AnimationBlendSpaceSample("Clip_A", 0),
+                new AnimationBlendSpaceSample("Clip_B", 100)
+            })
+        };
+        var resolved = BranchGraph(new[]
+        {
+            new AnimationGraphCachedPoseBranch { Name = "Loco", BlendSpace = "BS_Test" }
+        }, "BS_Test").ResolveBlendSpaces(spaces);
+        _ = resolved.Validate();
+        Transform.Rotation = new(
+            resolved.CachedPoseBranches[0].BlendSamples.Count == 2 ? 1 : 0,
+            resolved.CachedPoseBranches[0].BlendSpace.Length == 0 ? 1 : 0,
+            resolved.StateMachines[0].States[0].BlendSamples.Count == 2 ? 1 : 0);
         Transform.Position = new(mask, 0, 0);
     }
 
@@ -229,6 +269,553 @@ public sealed class AnimationGraphValidationBlueprint : Blueprint
     {
         From = from, To = to, Condition = AnimationGraphCondition.Always
     };
+
+    private static AnimationGraphDefinition UnknownAlias() => new()
+    {
+        Name = "UnknownAlias", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[] { new AnimationGraphState { Name = "A", Clip = "Clip_A" } },
+                Aliases = new[]
+                {
+                    new AnimationGraphStateAlias { Name = "Bad", Sources = new[] { "Missing" } }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BlendTooFewSamples() => BlendGraph(
+        new[] { new AnimationGraphBlendSample("Clip_A", 230) });
+
+    private static AnimationGraphDefinition BlendUnsortedThresholds() => BlendGraph(
+        new[]
+        {
+            new AnimationGraphBlendSample("Clip_A", 500),
+            new AnimationGraphBlendSample("Clip_B", 230)
+        });
+
+    private static AnimationGraphDefinition BlendDuplicateClip() => BlendGraph(
+        new[]
+        {
+            new AnimationGraphBlendSample("Clip_A", 230),
+            new AnimationGraphBlendSample("Clip_A", 500)
+        });
+
+    private static AnimationGraphDefinition BlendUnknownAxis() => new()
+    {
+        Name = "BlendUnknownAxis", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A",
+                        BlendAxis = "Direction",
+                        BlendSamples = new[]
+                        {
+                            new AnimationGraphBlendSample("Clip_A", 230),
+                            new AnimationGraphBlendSample("Clip_B", 500)
+                        }
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition MaxTransitionsOutOfRange() => new()
+    {
+        Name = "MaxTransitionsOutOfRange", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                MaxTransitionsPerFrame = 0,
+                States = new[] { new AnimationGraphState { Name = "A", Clip = "Clip_A" } }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition AutomaticRuleTriggerOutOfRange() => TransitionProbeGraph(
+        automaticRule: true, triggerTime: 11, minReentry: 0);
+
+    private static AnimationGraphDefinition MinReentryNegative() => TransitionProbeGraph(
+        automaticRule: false, triggerTime: -1, minReentry: -1);
+
+    private static AnimationGraphDefinition TransitionProbeGraph(
+        bool automaticRule, float triggerTime, float minReentry) => new()
+    {
+        Name = "TransitionProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "B", Condition = AnimationGraphCondition.Always,
+                        AutomaticRule = automaticRule,
+                        AutomaticRuleTriggerTime = triggerTime,
+                        MinTimeBeforeReentry = minReentry
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BranchGraph(
+        IReadOnlyList<AnimationGraphCachedPoseBranch> branches, string stateBlendSpace = "") => new()
+    {
+        Name = "BranchProbe", RootStateMachine = "Root",
+        CachedPoseBranches = branches,
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    stateBlendSpace.Length > 0
+                        ? new AnimationGraphState { Name = "A", BlendSpace = stateBlendSpace }
+                        : new AnimationGraphState { Name = "A", Clip = "Clip_A" }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition CachedPoseBranchDuplicate() => BranchGraph(new[]
+    {
+        new AnimationGraphCachedPoseBranch { Name = "Loco", Clip = "Clip_A" },
+        new AnimationGraphCachedPoseBranch { Name = "Loco", Clip = "Clip_B" }
+    });
+
+    private static AnimationGraphDefinition CachedPoseBranchWithClipAndSamples() => BranchGraph(new[]
+    {
+        new AnimationGraphCachedPoseBranch
+        {
+            Name = "Loco", Clip = "Clip_A",
+            BlendSamples = new[]
+            {
+                new AnimationGraphBlendSample("Clip_A", 0),
+                new AnimationGraphBlendSample("Clip_B", 100)
+            }
+        }
+    });
+
+    private static AnimationGraphDefinition CachedPoseBranchUnresolvedAsset() => BranchGraph(new[]
+    {
+        new AnimationGraphCachedPoseBranch { Name = "Loco", BlendSpace = "BS_Test" }
+    });
+
+    private static AnimationGraphDefinition CachedPoseBranchTooManySamples() => BranchGraph(new[]
+    {
+        new AnimationGraphCachedPoseBranch
+        {
+            Name = "Loco",
+            BlendSamples = new[]
+            {
+                new AnimationGraphBlendSample("Clip_A", 0),
+                new AnimationGraphBlendSample("Clip_B", 100),
+                new AnimationGraphBlendSample("Clip_C", 200),
+                new AnimationGraphBlendSample("Clip_D", 300)
+            }
+        }
+    });
+
+    private static AnimationGraphDefinition AdditiveOnConduit() => new()
+    {
+        Name = "AdditiveOnConduit", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Conduit = true, AdditiveClip = "MM_Land"
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition LayerOnConduit() => new()
+    {
+        Name = "LayerOnConduit", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Conduit = true, LayerClip = "Clip_B"
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition LayerAlphaWithoutClip() => new()
+    {
+        Name = "LayerAlphaWithoutClip", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A", LayerAlpha = 0.5f
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition LayerMaskDuplicate() => new()
+    {
+        Name = "LayerMaskDuplicate", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A", LayerClip = "Clip_B",
+                        LayerMask = new[] { "hip", "hip" }
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition SlotMaskWithoutSlot() => new()
+    {
+        Name = "SlotMaskWithoutSlot", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A",
+                        SlotMask = new[] { "hip" }
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition AdditiveAlphaWithoutClip() => new()
+    {
+        Name = "AdditiveAlphaWithoutClip", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A", AdditiveAlpha = 0.5f
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition CachedPoseWithClip() => new()
+    {
+        Name = "CachedPoseWithClip", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A", UseCachedPose = "Locomotion"
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BlendGraph(AnimationGraphBlendSample[] samples) => new()
+    {
+        Name = "Blend", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[] { new AnimationGraphState { Name = "A", BlendSamples = samples } }
+            }
+        }
+    };
+
+    // Conduit 是“无姿态过路状态”，不能同时声明 clip。
+    private static AnimationGraphDefinition ConduitWithClip() => new()
+    {
+        Name = "ConduitWithClip", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[] { new AnimationGraphState { Name = "A", Clip = "Clip_A", Conduit = true } }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition EntryRuleOnContentState() => new()
+    {
+        Name = "EntryRuleOnContentState", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A",
+                        EntryRule = AnimationGraphCondition.Always
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition EntryConduitWithoutFlag() => new()
+    {
+        Name = "EntryConduitWithoutFlag", RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "K",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "K", Conduit = true },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" }
+                },
+                Transitions = new[] { SimpleTransition("K", "C") }
+            }
+        }
+    };
+}
+
+// State Alias + VerticalSpeed 的纯 C# 探针：A/B 都能通过共享 alias 进入 C。
+public sealed class AnimationGraphAliasProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var graph = BuildGraph();
+        var fromA = new AnimationGraphRuntime(graph);
+        var a0 = fromA.Update(MakeInput(0, 10, ""));
+        var a1 = fromA.Update(MakeInput(0, 10, a0.Clip));
+
+        var fromB = new AnimationGraphRuntime(graph);
+        var b0 = fromB.Update(MakeInput(20, 0, ""));
+        var b1 = fromB.Update(MakeInput(20, 0, b0.Clip));
+        var b2 = fromB.Update(MakeInput(20, 10, b1.Clip));
+
+        Transform.Position = new(
+            a1.State == "C" ? 1 : 0,
+            b2.State == "C" ? 1 : 0,
+            b1.State == "B" ? 1 : 0);
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => new()
+    {
+        Name = "AliasProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root",
+                EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" }
+                },
+                Aliases = new[]
+                {
+                    new AnimationGraphStateAlias { Name = "Airborne", Sources = new[] { "A", "B" } }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "B", Condition = AnimationGraphCondition.Speed(10),
+                        Priority = 10
+                    },
+                    new AnimationGraphTransition
+                    {
+                        From = "Airborne", To = "C",
+                        Condition = AnimationGraphCondition.VerticalSpeed(0,
+                            AnimationGraphComparison.GreaterThan),
+                        Priority = 0
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput MakeInput(float speed, float vertical, string clip) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, speed, speed, speed, 0,
+            1f / 60, clip, 0, 1, false, true, 0,
+            VerticalSpeed: vertical);
+}
+
+// BlendSpace1D 决策探针：官方 BS_MM_WalkRun 的三段 sample
+// （0 = Walk_InPlace、230 = Walk_Fwd、500 = Run_Fwd）、区间括号选择，
+// 以及 UE TargetWeightInterpolationSpeedPerSec=5 的权重逼近速度。
+public sealed class AnimationGraphBlendSpaceProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var graph = BuildGraph();
+        // 首帧只走 entry transition，第二帧才做 Idle→WalkRun 的常规迁移，
+        // 因此每个探针都先以 0 速度入场，再在同一 runtime 上给出目标速度。
+        // 最低端点用刚过阈值的速度，权重仍在 1e-3 以内；0 速度不会离开 Idle。
+        var low = Evaluate(graph, 0.001f);
+        var below = Evaluate(graph, 115);
+        var mid = Evaluate(graph, 365);
+        var walk = Evaluate(graph, 230);
+        var high = Evaluate(graph, 500);
+        var above = Evaluate(graph, 900);
+
+        var bracket = Evaluate(BuildThreeSampleGraph(), 420);
+
+        // 230 边界两侧必须是同一个 A（Walk）且权重连续：230 为 0，230.2 仍≈0。
+        var edge = new AnimationGraphRuntime(graph);
+        edge.Update(Input(0));
+        edge.Update(Input(230));
+        var afterEdge = edge.Update(Input(230.2f));
+
+        // 从 300 直接跳到 500：300 的稳态权重是 smoothstep(70/270)=0.1668，
+        // 0.1 s 后按 5/s 最多走 0.5，因此预期 0.6668。
+        var smoothed = new AnimationGraphRuntime(graph);
+        smoothed.Update(Input(0));
+        var steady = smoothed.Update(Input(300));
+        var halfway = smoothed.Update(Input(500, 0.1f));
+
+        Transform.Position = new(
+            low.Clip == "MM_Walk_Fwd" && low.BlendClip == "MM_Walk_InPlace" &&
+                MathF.Abs(low.BlendWeight - 1.0f) < 1e-3f ? 1 : 0,
+            below.Clip == "MM_Walk_Fwd" && below.BlendClip == "MM_Walk_InPlace" &&
+                MathF.Abs(below.BlendWeight - 0.5f) < 1e-3f ? 1 : 0,
+            mid.Clip == "MM_Walk_Fwd" && mid.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(mid.BlendWeight - 0.5f) < 1e-3f ? 1 : 0);
+        Transform.Rotation = new(
+            walk.Clip == "MM_Walk_Fwd" && walk.BlendClip == "MM_Walk_InPlace" &&
+                MathF.Abs(walk.BlendWeight) < 1e-3f &&
+                afterEdge.Clip == "MM_Walk_Fwd" && afterEdge.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(afterEdge.BlendWeight) < 1e-3f ? 1 : 0,
+            high.Clip == "MM_Walk_Fwd" && high.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(high.BlendWeight - 1.0f) < 1e-3f ? 1 : 0,
+            above.Clip == "MM_Walk_Fwd" && above.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(above.BlendWeight - 1.0f) < 1e-3f ? 1 : 0);
+        Transform.Scale = new(
+            bracket.Clip == "MM_Mid" && bracket.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(bracket.BlendWeight - 0.104f) < 1e-3f ? 1 : 0,
+            steady.Clip == "MM_Walk_Fwd" && steady.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(steady.BlendWeight - 0.1668f) < 1e-3f ? 1 : 0,
+            halfway.Clip == "MM_Walk_Fwd" && halfway.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(halfway.BlendWeight - 0.6668f) < 1e-3f ? 1 : 0);
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => Build(
+        new[]
+        {
+            new AnimationGraphBlendSample("MM_Walk_InPlace", 0),
+            new AnimationGraphBlendSample("MM_Walk_Fwd", 230),
+            new AnimationGraphBlendSample("MM_Run_Fwd", 500)
+        });
+
+    private static AnimationGraphDefinition BuildThreeSampleGraph() => Build(
+        new[]
+        {
+            new AnimationGraphBlendSample("MM_Walk_Fwd", 230),
+            new AnimationGraphBlendSample("MM_Mid", 400),
+            new AnimationGraphBlendSample("MM_Run_Fwd", 500)
+        });
+
+    private static AnimationGraphDefinition Build(AnimationGraphBlendSample[] samples) => new()
+    {
+        Name = "BlendSpaceProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root",
+                EntryState = "Idle",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "Idle", Clip = "MM_Idle" },
+                    new AnimationGraphState { Name = "Walk / Run", BlendSamples = samples }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "Idle",
+                        To = "Walk / Run",
+                        Condition = AnimationGraphCondition.Speed(0, AnimationGraphComparison.GreaterThan)
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDecision Evaluate(AnimationGraphDefinition graph, float speed)
+    {
+        var runtime = new AnimationGraphRuntime(graph);
+        runtime.Update(Input(0));
+        return runtime.Update(Input(speed));
+    }
+
+    private static AnimationGraphInput Input(float speed, float deltaTime = 1f / 60) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, speed, speed, speed, 0,
+            deltaTime, "", 0, 1, false, true, 0);
 }
 
 // Echo 资源图的直接探针：确认资源侧图能独立构建并选出 Valley 片段。
@@ -438,4 +1025,904 @@ public sealed class AnimationGraphRateProbeBlueprint : Blueprint
         "Jump_Idle_Land" => 2,
         _ => 6.6666665f
     };
+}
+
+// State Machine 设置探针：MaxTransitionsPerFrame 预算与 SkipFirstUpdateTransition 的
+// “首帧转移不混合”语义（UE AnimNode_StateMachine 类默认值 3 / true）。
+public sealed class AnimationGraphPoseGraphProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var runtime = new AnimationGraphRuntime(BuildGraph());
+        runtime.Update(Input(0));
+        var cached = runtime.Update(Input(10));
+
+        Transform.Position = new(
+            Flag(cached.UseCachedPose == "Locomotion"),
+            Flag(cached.AdditiveClip == "MM_Land" && MathF.Abs(cached.AdditiveAlpha - 0.5f) < 1e-4f),
+            Flag(cached.Slot == "DefaultSlot"));
+        Transform.Rotation = new(
+            Flag(cached.Clip.Length == 0),
+            Flag(cached.SaveCachedPose == "Locomotion"),
+            Flag(cached.LeafState == "Cached"));
+        Transform.Scale = new(
+            Flag(cached.Changed),
+            Flag(cached.Completed == false),
+            Flag(!cached.AdditiveLoop));
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => new()
+    {
+        Name = "PoseGraphProbe",
+        RootStateMachine = "Root",
+        SaveCachedPose = "Locomotion",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "MM_Idle" },
+                    new AnimationGraphState
+                    {
+                        Name = "Cached",
+                        UseCachedPose = "Locomotion",
+                        AdditiveClip = "MM_Land",
+                        AdditiveAlpha = 0.5f,
+                        Slot = "DefaultSlot"
+                    }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "Cached",
+                        Condition = AnimationGraphCondition.Speed(5,
+                            AnimationGraphComparison.GreaterThan)
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput Input(float speed) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, speed, speed, speed, 0, 1f / 60,
+            "", 0, 1, false, true, 0);
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
+// PoseNode 状态没有静态 Clip 时，StateCompleted 仍必须使用上一帧实际求值片段。
+public sealed class AnimationGraphPoseStateCompletedProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var runtime = new AnimationGraphRuntime(BuildGraph());
+        var first = runtime.Update(Input(false));
+        var second = runtime.Update(Input(true));
+        Transform.Position = new(
+            Flag(first.LeafState == "Shot" && first.Clip == "Shot"),
+            Flag(second.LeafState == "Idle" && second.Changed),
+            Flag(second.Clip == "Idle"));
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => new()
+    {
+        Name = "PoseStateCompleted",
+        RootStateMachine = "Root",
+        PoseGraph = new AnimationPoseGraph
+        {
+            Name = "Pose",
+            OutputNode = "out",
+            Nodes = new[]
+            {
+                new AnimationPoseNode { Id = "shot", Kind = AnimationPoseNodeKind.SequencePlayer,
+                    Clip = "Shot", Loop = false },
+                new AnimationPoseNode { Id = "idle", Kind = AnimationPoseNodeKind.SequencePlayer,
+                    Clip = "Idle", Loop = true },
+                new AnimationPoseNode { Id = "out", Kind = AnimationPoseNodeKind.Output,
+                    Inputs = new[] { "idle" } }
+            }
+        },
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "Shot",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "Shot", PoseNode = "shot", Loop = false },
+                    new AnimationGraphState { Name = "Idle", PoseNode = "idle", Loop = true }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "Shot", To = "Idle",
+                        Condition = AnimationGraphCondition.StateCompleted
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput Input(bool completed) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, 0, 0, 0, 0, 1f / 60,
+            "Shot", 0.8f, 0.8f, completed, true, 0);
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
+// MontagePlayer 没有静态 Clip；StateCompleted 必须使用原生反馈 clip 判定。
+public sealed class AnimationGraphMontageStateCompletedProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var runtime = new AnimationGraphRuntime(BuildGraph());
+        var first = runtime.Update(Input(false));
+        var second = runtime.Update(Input(true));
+        Transform.Position = new(
+            Flag(first.LeafState == "Montage" && first.Clip == "MontageDerived"),
+            Flag(second.LeafState == "Idle" && second.Changed),
+            Flag(second.Clip == "Idle"));
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => new()
+    {
+        Name = "MontagePoseStateCompleted",
+        RootStateMachine = "Root",
+        PoseGraph = new AnimationPoseGraph
+        {
+            Name = "Pose",
+            OutputNode = "out",
+            Nodes = new[]
+            {
+                new AnimationPoseNode
+                {
+                    Id = "montage", Kind = AnimationPoseNodeKind.MontagePlayer,
+                    MontageId = "AM_Test", Loop = false
+                },
+                new AnimationPoseNode
+                {
+                    Id = "idle", Kind = AnimationPoseNodeKind.SequencePlayer,
+                    Clip = "Idle", Loop = true
+                },
+                new AnimationPoseNode
+                {
+                    Id = "out", Kind = AnimationPoseNodeKind.Output,
+                    Inputs = new[] { "montage" }
+                }
+            }
+        },
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "Montage",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "Montage", PoseNode = "montage", Loop = false
+                    },
+                    new AnimationGraphState
+                    {
+                        Name = "Idle", PoseNode = "idle", Loop = true
+                    }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "Montage", To = "Idle",
+                        Condition = AnimationGraphCondition.StateCompleted
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput Input(bool completed) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, 0, 0, 0, 0, 1f / 60,
+            "MontageDerived", 0.8f, 0.8f, completed, true, 0);
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
+// BP_*.json 解析与图级 layer/slot 权重绑定探针。
+public sealed class AnimationGraphBlendProfileProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var profile = new AnimationBlendProfile("BP_Upper", new[]
+        {
+            new AnimationBoneWeight("hip", 1.0f),
+            new AnimationBoneWeight("foot", 0.5f)
+        });
+        var maps = new Dictionary<string, AnimationBlendProfile>(StringComparer.Ordinal)
+        {
+            ["BP_Upper"] = profile
+        };
+        var resolved = BuildGraph().ResolveBlendProfiles(maps).Validate();
+        var state = resolved.StateMachines[0].States[0];
+
+        var unknownProfile = Catch(() => BuildGraph().ResolveBlendProfiles(
+            new Dictionary<string, AnimationBlendProfile>()));
+        var unresolved = Catch(() => BuildGraph().Validate());
+        var conflict = Catch(() =>
+        {
+            var built = new AnimationGraphDefinition
+            {
+                Name = "Conflict", RootStateMachine = "Root",
+                StateMachines = new[]
+                {
+                    new AnimationGraphStateMachine
+                    {
+                        Name = "Root", EntryState = "A",
+                        States = new[]
+                        {
+                            new AnimationGraphState
+                            {
+                                Name = "A", Clip = "Clip_A", Slot = "DefaultSlot",
+                                SlotBlendProfile = "BP_Upper",
+                                SlotMask = new[] { "hip" }
+                            }
+                        }
+                    }
+                }
+            };
+            built.ResolveBlendProfiles(maps).Validate();
+        });
+
+        Transform.Position = new(
+            Flag(state.SlotWeights.Count == 2),
+            Flag(state.SlotWeights.Any(w => w.Bone == "foot" && MathF.Abs(w.Weight - 0.5f) < 1e-4f)),
+            Flag(state.SlotBlendProfile.Length == 0));
+        Transform.Rotation = new(
+            Flag(unknownProfile),
+            Flag(unresolved),
+            Flag(conflict));
+
+        var poseGraph = BuildPoseGraph().ResolveBlendProfiles(maps).Validate();
+        var slotNode = poseGraph.PoseGraph!.Nodes.Single(node => node.Id == "slot");
+        Transform.Scale = new(
+            Flag(slotNode.Weights.Count == 2),
+            Flag(slotNode.Weights.Any(w => w.Bone == "foot" &&
+                MathF.Abs(w.Weight - 0.5f) < 1e-4f)),
+            Flag(slotNode.BlendProfile.Length == 0));
+    }
+
+    private static bool Catch(Action action)
+    {
+        try { action(); }
+        catch (Exception) { return true; }
+        return false;
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => new()
+    {
+        Name = "BlendProfileProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A", Slot = "DefaultSlot",
+                        SlotBlendProfile = "BP_Upper"
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BuildPoseGraph() => new()
+    {
+        Name = "PoseBlendProfileProbe",
+        RootStateMachine = "Root",
+        PoseGraph = new AnimationPoseGraph
+        {
+            Name = "Pose",
+            OutputNode = "out",
+            Nodes = new[]
+            {
+                new AnimationPoseNode
+                {
+                    Id = "base", Kind = AnimationPoseNodeKind.SequencePlayer, Clip = "Clip_A"
+                },
+                new AnimationPoseNode
+                {
+                    Id = "montage", Kind = AnimationPoseNodeKind.MontagePlayer,
+                    MontageId = "AM_Test"
+                },
+                new AnimationPoseNode
+                {
+                    Id = "slot", Kind = AnimationPoseNodeKind.Slot,
+                    Inputs = new[] { "base", "montage" }, SlotName = "DefaultSlot",
+                    BlendProfile = "BP_Upper"
+                },
+                new AnimationPoseNode
+                {
+                    Id = "out", Kind = AnimationPoseNodeKind.Output, Inputs = new[] { "slot" }
+                }
+            }
+        },
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", PoseNode = "slot" }
+                }
+            }
+        }
+    };
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
+public sealed class AnimationGraphSettingsProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var one = new AnimationGraphRuntime(BuildChain(1, skipFirstUpdate: false));
+        var first = one.Update(Input());
+        var second = one.Update(Input());
+
+        var three = new AnimationGraphRuntime(BuildChain(3, skipFirstUpdate: false));
+        var threeFirst = three.Update(Input());
+
+        var two = new AnimationGraphRuntime(BuildChain(2, skipFirstUpdate: false));
+        var twoFirst = two.Update(Input());
+        var twoSecond = two.Update(Input());
+
+        var skip = new AnimationGraphRuntime(BuildChain(1, skipFirstUpdate: true));
+        var skipFirst = skip.Update(Input());
+
+        var nested = new AnimationGraphRuntime(BuildNested(skipFirstUpdate: true));
+        var nestedFirst = nested.Update(Input());
+
+        Transform.Position = new(
+            Flag(first.State == "B"),
+            Flag(second.State == "C"),
+            Flag(threeFirst.State == "C" && MathF.Abs(threeFirst.BlendSeconds - 0.4f) < 1e-4f));
+        Transform.Rotation = new(
+            Flag(MathF.Abs(skipFirst.BlendSeconds) < 1e-4f),
+            Flag(MathF.Abs(first.BlendSeconds - 0.4f) < 1e-4f),
+            Flag(twoFirst.State == "C" && twoSecond.State == "C"));
+        Transform.Scale = new(
+            Flag(skipFirst.State == "B" && MathF.Abs(skipFirst.BlendSeconds) < 1e-4f),
+            Flag(first.State == "B" && MathF.Abs(first.BlendSeconds - 0.4f) < 1e-4f),
+            Flag(nestedFirst.LeafState == "Y" && MathF.Abs(nestedFirst.BlendSeconds) < 1e-4f));
+    }
+
+    private static AnimationGraphDefinition BuildChain(int maxTransitions, bool skipFirstUpdate) => new()
+    {
+        Name = "SettingsProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                MaxTransitionsPerFrame = maxTransitions,
+                SkipFirstUpdateTransition = skipFirstUpdate,
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "B", Condition = AnimationGraphCondition.Always,
+                        BlendSeconds = 0.4f
+                    },
+                    new AnimationGraphTransition
+                    {
+                        From = "B", To = "C", Condition = AnimationGraphCondition.Always,
+                        BlendSeconds = 0.4f
+                    }
+                }
+            }
+        }
+    };
+
+    // 刚进入的内层状态机同样受 SkipFirstUpdateTransition 约束。
+    private static AnimationGraphDefinition BuildNested(bool skipFirstUpdate) => new()
+    {
+        Name = "SettingsNestedProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "L",
+                States = new[] { new AnimationGraphState { Name = "L", SubStateMachine = "Inner" } }
+            },
+            new AnimationGraphStateMachine
+            {
+                Name = "Inner", EntryState = "X",
+                SkipFirstUpdateTransition = skipFirstUpdate,
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "X", Clip = "Clip_X" },
+                    new AnimationGraphState { Name = "Y", Clip = "Clip_Y" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "X", To = "Y", Condition = AnimationGraphCondition.Always,
+                        BlendSeconds = 0.4f
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput Input() =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, 100, 100, 100, 0, 1f / 60,
+            "", 0, 1, false, true, 0);
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
+// LayeredBoneBlend 决策探针：字段透传与 mask 顺序。
+public sealed class AnimationGraphLayerProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var runtime = new AnimationGraphRuntime(Build());
+        var decision = runtime.Update(Input());
+        Transform.Position = new(
+            decision.LayerClip == "Clip_B" ? 1 : 0,
+            MathF.Abs(decision.LayerAlpha - 0.25f) < 1e-4f ? 1 : 0,
+            decision.LayerLoop ? 1 : 0);
+        Transform.Rotation = new(
+            decision.LayerMask is { Count: 2 } ? 1 : 0,
+            decision.LayerMask is { Count: 2 } &&
+                decision.LayerMask[0] == "hip" ? 1 : 0,
+            decision.LayerMask is { Count: 2 } &&
+                decision.LayerMask[1] == "spine_01" ? 1 : 0);
+        Transform.Scale = new(
+            decision.Slot == "DefaultSlot" ? 1 : 0,
+            decision.SlotMask is { Count: 2 } &&
+                decision.SlotMask[0] == "hip" ? 1 : 0,
+            MathF.Abs(decision.SlotAlpha - 0.5f) < 1e-4f ? 1 : 0);
+    }
+
+    private static AnimationGraphDefinition Build() => new()
+    {
+        Name = "LayerProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState
+                    {
+                        Name = "A", Clip = "Clip_A",
+                        LayerClip = "Clip_B", LayerAlpha = 0.25f, LayerLoop = true,
+                        LayerMask = new[] { "hip", "spine_01" },
+                        Slot = "DefaultSlot",
+                        SlotMask = new[] { "hip", "spine_01" },
+                        SlotAlpha = 0.5f
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput Input() =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, 0, 0, 0, 0, 1f / 60,
+            "", 0, 1, false, true, 0);
+}
+
+// BS_*.json 资产探针：图只写 BlendSpace 名字，宿主用 catalog 解析成 samples。
+public sealed class AnimationGraphBlendSpaceAssetProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var map = new Dictionary<string, AnimationBlendSpaceDefinition>
+        {
+            ["BS_WalkRun"] = new("BS_WalkRun", 5, "EaseInOut", new[]
+            {
+                new AnimationBlendSpaceSample("MM_Walk_InPlace", 0),
+                new AnimationBlendSpaceSample("MM_Walk_Fwd", 230),
+                new AnimationBlendSpaceSample("MM_Run_Fwd", 500)
+            })
+        };
+        var resolved = BuildGraph().ResolveBlendSpaces(map).Validate();
+        var low = Evaluate(resolved, 115);
+        var mid = Evaluate(resolved, 365);
+        var high = Evaluate(resolved, 500);
+
+        bool unresolvedRejected = false;
+        try { BuildGraph().Validate(); }
+        catch (InvalidOperationException) { unresolvedRejected = true; }
+        bool unknownRejected = false;
+        try
+        {
+            BuildGraph().ResolveBlendSpaces(
+                new Dictionary<string, AnimationBlendSpaceDefinition>());
+        }
+        catch (InvalidOperationException) { unknownRejected = true; }
+
+        Transform.Position = new(
+            Flag(low.Clip == "MM_Walk_Fwd" && low.BlendClip == "MM_Walk_InPlace" &&
+                MathF.Abs(low.BlendWeight - 0.5f) < 1e-3f),
+            Flag(mid.Clip == "MM_Walk_Fwd" && mid.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(mid.BlendWeight - 0.5f) < 1e-3f),
+            Flag(high.Clip == "MM_Walk_Fwd" && high.BlendClip == "MM_Run_Fwd" &&
+                MathF.Abs(high.BlendWeight - 1.0f) < 1e-3f));
+        Transform.Rotation = new(Flag(unresolvedRejected), Flag(unknownRejected), 1);
+        Transform.Scale = new(1, 1, 1);
+    }
+
+    private static AnimationGraphDefinition BuildGraph() => new()
+    {
+        Name = "BlendSpaceAssetProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "Idle",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "Idle", Clip = "MM_Idle" },
+                    new AnimationGraphState { Name = "Walk / Run", BlendSpace = "BS_WalkRun" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "Idle", To = "Walk / Run",
+                        Condition = AnimationGraphCondition.Speed(0, AnimationGraphComparison.GreaterThan)
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDecision Evaluate(AnimationGraphDefinition graph, float speed)
+    {
+        var runtime = new AnimationGraphRuntime(graph);
+        runtime.Update(Input(0));
+        return runtime.Update(Input(speed));
+    }
+
+    private static AnimationGraphInput Input(float speed) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, speed, speed, speed, 0, 1f / 60,
+            "", 0, 1, false, true, 0);
+
+    private static float Flag(bool ok) => ok ? 1 : 2;
+}
+
+// 转移系统探针：Automatic Rule（忽略普通条件/按剩余时间）、MinTimeBeforeReentry、
+// Transition Request 的一次消费语义。
+public sealed class AnimationGraphTransitionProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var early = new AnimationGraphRuntime(BuildAutomaticGraph());
+        var earlyState = early.Update(Input(1.7f));
+        var lateState = early.Update(Input(1.8f));
+
+        var looped = new AnimationGraphRuntime(BuildAutomaticGraph());
+        var loopState = looped.Update(Input(1.9f));
+
+        var reentry = new AnimationGraphRuntime(BuildReentryGraph());
+        reentry.Update(Input(0.1f));
+        var blocked = reentry.Update(Input(0.1f));
+        for (int step = 0; step < 5; ++step) reentry.Update(Input(0.1f));
+        var allowed = reentry.Update(Input(0.1f));
+
+        var requests = new AnimationGraphRuntime(BuildRequestGraph());
+        requests.Update(Input(0.1f));
+        var noRequest = requests.Update(Input(0.1f));
+        requests.RequestTransition("Go");
+        var requested = requests.Update(Input(0.1f));
+        var consumed = requests.Update(Input(0.1f));
+
+        Transform.Position = new(
+            earlyState.State == "A" ? 1 : 0,
+            lateState.State == "B" ? 1 : 0,
+            loopState.State == "B" ? 1 : 0);
+        Transform.Rotation = new(
+            lateState.State == "B" ? 1 : 0,
+            blocked.State == "B" ? 1 : 0,
+            allowed.State == "A" ? 1 : 0);
+        Transform.Scale = new(
+            noRequest.State == "B" ? 1 : 0,
+            requested.State == "C" ? 1 : 0,
+            consumed.State == "C" ? 1 : 0);
+    }
+
+    // Condition 故意为 false：Automatic Rule 开启时必须忽略它。
+    private static AnimationGraphDefinition BuildAutomaticGraph() => new()
+    {
+        Name = "AutomaticProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "B",
+                        Condition = AnimationGraphCondition.Not(AnimationGraphCondition.Always),
+                        AutomaticRule = true,
+                        AutomaticRuleTriggerTime = 0.25f
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BuildReentryGraph() => new()
+    {
+        Name = "ReentryProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "B", Condition = AnimationGraphCondition.Always,
+                        // 长时间冷却：避免 B→A 之后同一测试里又立刻回到 B。
+                        MinTimeBeforeReentry = 60
+                    },
+                    new AnimationGraphTransition
+                    {
+                        From = "B", To = "A", Condition = AnimationGraphCondition.Always,
+                        MinTimeBeforeReentry = 0.5f
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BuildRequestGraph() => new()
+    {
+        Name = "RequestProbe",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" }
+                },
+                Transitions = new[]
+                {
+                    new AnimationGraphTransition
+                    {
+                        From = "A", To = "B", Condition = AnimationGraphCondition.Always
+                    },
+                    new AnimationGraphTransition
+                    {
+                        From = "B", To = "C",
+                        Condition = AnimationGraphCondition.TransitionRequest("Go")
+                    }
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphInput Input(float clipTime) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, 0, 0, 0, 0, 0.1f,
+            "Clip_A", clipTime, 2.0f, false, true, 0);
+}
+
+// Conduit 语义探针：同帧落地、入口规则回落、链、环、最终 blend 与入口 conduit。
+public sealed class AnimationGraphConduitProbeBlueprint : Blueprint
+{
+    protected override void BeginPlay()
+    {
+        var chain = new AnimationGraphRuntime(BuildChainGraph(blockedRule: false));
+        chain.Update(Input(0));
+        var landed = chain.Update(Input(10));
+
+        var blocked = new AnimationGraphRuntime(BuildChainGraph(blockedRule: true));
+        blocked.Update(Input(0));
+        var fellBack = blocked.Update(Input(10));
+
+        var chained = new AnimationGraphRuntime(BuildChain2Graph());
+        chained.Update(Input(0));
+        var chainLanded = chained.Update(Input(10));
+
+        var cycle = new AnimationGraphRuntime(BuildCycleGraph());
+        cycle.Update(Input(0));
+        var stuck = cycle.Update(Input(10));
+
+        var entry = new AnimationGraphRuntime(BuildEntryConduitGraph(hasPath: true));
+        var entryFirst = entry.Update(Input(10));
+
+        var unresolved = new AnimationGraphRuntime(BuildEntryConduitGraph(hasPath: false));
+        var unresolvedFirst = unresolved.Update(Input(10));
+
+        Transform.Position = new(
+            landed.State == "C" && PathIs(landed, "K") ? 1 : 0,
+            fellBack.State == "B" ? 1 : 0,
+            chainLanded.State == "C" && PathIs(chainLanded, "K1", "K2") ? 1 : 0);
+        Transform.Rotation = new(
+            stuck.State == "A" ? 1 : 0,
+            MathF.Abs(landed.BlendSeconds - 0.35f) < 1e-4f ? 1 : 0,
+            entryFirst.State == "C" ? 1 : 0);
+        Transform.Scale = new(
+            Flag(unresolvedFirst.State == "K" && unresolvedFirst.Clip.Length == 0),
+            Flag(landed.ConduitPath is { Count: 1 }),
+            Flag(entryFirst.Changed));
+    }
+
+    // A -> K(conduit) -> C；K 的入口规则失败时回落到 A -> B。
+    private static AnimationGraphDefinition BuildChainGraph(bool blockedRule) => new()
+    {
+        Name = blockedRule ? "ConduitBlocked" : "ConduitChain",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState
+                    {
+                        Name = "K",
+                        Conduit = true,
+                        EntryRule = blockedRule
+                            ? AnimationGraphCondition.Speed(1000, AnimationGraphComparison.GreaterThan)
+                            : AnimationGraphCondition.Always
+                    },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" },
+                    new AnimationGraphState { Name = "B", Clip = "Clip_B" }
+                },
+                Transitions = new[]
+                {
+                    Transition("A", "K", AnimationGraphCondition.Speed(5, AnimationGraphComparison.GreaterThan),
+                        0, 0.9f),
+                    Transition("K", "C", AnimationGraphCondition.Always, 0, 0.35f),
+                    Transition("A", "B", AnimationGraphCondition.Speed(5, AnimationGraphComparison.GreaterThan),
+                        10, 0.1f)
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphDefinition BuildChain2Graph() => new()
+    {
+        Name = "ConduitChain2",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "K1", Conduit = true },
+                    new AnimationGraphState { Name = "K2", Conduit = true },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" }
+                },
+                Transitions = new[]
+                {
+                    Transition("A", "K1", AnimationGraphCondition.Speed(5, AnimationGraphComparison.GreaterThan),
+                        0, 0),
+                    Transition("K1", "K2", AnimationGraphCondition.Always, 0, 0),
+                    Transition("K2", "C", AnimationGraphCondition.Always, 0, 0)
+                }
+            }
+        }
+    };
+
+    // K1 与 K2 成环且没有内容出口：visited 必须终止求值，源状态保持 A。
+    private static AnimationGraphDefinition BuildCycleGraph() => new()
+    {
+        Name = "ConduitCycle",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "A",
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "A", Clip = "Clip_A" },
+                    new AnimationGraphState { Name = "K1", Conduit = true },
+                    new AnimationGraphState { Name = "K2", Conduit = true }
+                },
+                Transitions = new[]
+                {
+                    Transition("A", "K1", AnimationGraphCondition.Always, 0, 0),
+                    Transition("K1", "K2", AnimationGraphCondition.Always, 0, 0),
+                    Transition("K2", "K1", AnimationGraphCondition.Always, 0, 0)
+                }
+            }
+        }
+    };
+
+    // EntryState 就是 conduit：允许跟随且无可用出边时停在该 conduit，不输出片段。
+    private static AnimationGraphDefinition BuildEntryConduitGraph(bool hasPath) => new()
+    {
+        Name = hasPath ? "ConduitEntryPath" : "ConduitEntryStuck",
+        RootStateMachine = "Root",
+        StateMachines = new[]
+        {
+            new AnimationGraphStateMachine
+            {
+                Name = "Root", EntryState = "K", AllowConduitEntryStates = true,
+                States = new[]
+                {
+                    new AnimationGraphState { Name = "K", Conduit = true },
+                    new AnimationGraphState { Name = "C", Clip = "Clip_C" }
+                },
+                Transitions = new[]
+                {
+                    Transition("K", "C", hasPath
+                        ? AnimationGraphCondition.Always
+                        : AnimationGraphCondition.Speed(1000, AnimationGraphComparison.GreaterThan), 0, 0)
+                }
+            }
+        }
+    };
+
+    private static AnimationGraphTransition Transition(string from, string to,
+        AnimationGraphCondition condition, int priority, float blend) => new()
+    {
+        From = from, To = to, Condition = condition, Priority = priority, BlendSeconds = blend
+    };
+
+    private static AnimationGraphInput Input(float speed) =>
+        new(true, false, Vector3.Zero, Vector3.Zero, 0, speed, speed, speed, 0, 1f / 60,
+            "", 0, 1, false, true, 0);
+
+    private static bool PathIs(in AnimationGraphDecision decision, params string[] names)
+    {
+        var path = decision.ConduitPath;
+        if (path is null || path.Count != names.Length) return false;
+        for (int index = 0; index < names.Length; ++index)
+            if (!string.Equals(path[index], names[index], StringComparison.Ordinal)) return false;
+        return true;
+    }
+
+    // 失败值不能是 0：宿主会拒绝零缩放，0 会让整条状态输出失败。
+    private static float Flag(bool ok) => ok ? 1 : 2;
 }

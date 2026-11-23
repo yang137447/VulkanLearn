@@ -1057,4 +1057,179 @@ TEST(AnimationScriptData, SegmentedMontageMapsSidecarNotifiesToSegmentTimeline)
     EXPECT_NEAR(player.FiredNotifies()[0].time, 1.5f, 1e-5f);
     EXPECT_EQ(player.FiredNotifies()[0].segmentId, "Loop");
 }
+
+json BlendSpaceJson()
+{
+    return json::parse(R"({
+      "name": "BS_Test",
+      "type": "blendSpace1D",
+      "description": "unit test blend space",
+      "axis": { "name": "Speed", "min": 0, "max": 500 },
+      "interpolation": "EaseInOut",
+      "weightSpeedPerSec": 5,
+      "samples": [
+        { "clip": "Walk", "threshold": 0 },
+        { "clip": "Run", "threshold": 500 }
+      ]
+    })");
+}
+
+TEST(AnimationScriptData, ParsesBlendSpaceAndRejectsInvalidAuthoring)
+{
+    const BlendSpaceAsset space = ParseBlendSpace(BlendSpaceJson(), "BS_Test.json");
+    EXPECT_EQ(space.name, "BS_Test");
+    ASSERT_EQ(space.samples.size(), 2u);
+    EXPECT_EQ(space.samples[0].clip, "Walk");
+    EXPECT_FLOAT_EQ(space.samples[1].threshold, 500.0f);
+    EXPECT_FLOAT_EQ(space.weightSpeedPerSec, 5.0f);
+
+    auto unsorted = BlendSpaceJson();
+    unsorted["samples"][0]["threshold"] = 600;
+    EXPECT_NE(ErrorOf([&] { ParseBlendSpace(unsorted, "x"); }).find("strictly increasing"),
+        std::string::npos);
+
+    auto unknownAxis = BlendSpaceJson();
+    unknownAxis["axis"]["name"] = "Direction";
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendSpace(unknownAxis, "x"); }).empty());
+
+    auto duplicateClip = BlendSpaceJson();
+    duplicateClip["samples"][1]["clip"] = "Walk";
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendSpace(duplicateClip, "x"); }).empty());
+
+    auto tooFew = BlendSpaceJson();
+    tooFew["samples"].erase(1);
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendSpace(tooFew, "x"); }).empty());
+}
+
+TEST(AnimationScriptData, BlendSpaceClipsAndCatalogPublishing)
+{
+    SkeletalAsset asset;
+    asset.clips.push_back(Clip{});
+    asset.clips.back().id = "Walk";
+    const BlendSpaceAsset space = ParseBlendSpace(BlendSpaceJson(), "BS_Test.json");
+    // Run 尚未注册。
+    EXPECT_NE(ErrorOf([&] { ValidateBlendSpaceClips(space, asset, "x"); }).find("Run"),
+        std::string::npos);
+    asset.clips.push_back(Clip{});
+    asset.clips.back().id = "Run";
+    EXPECT_NO_THROW(ValidateBlendSpaceClips(space, asset, "x"));
+
+    asset.blendSpaces.push_back(space);
+    const json catalog = BuildAnimationScriptAssets(asset);
+    ASSERT_TRUE(catalog.contains("blendSpaces"));
+    ASSERT_TRUE(catalog["blendSpaces"].contains("BS_Test"));
+    EXPECT_EQ(catalog["blendSpaces"]["BS_Test"]["samples"].size(), 2u);
+}
+
+json BlendSpace2DJson()
+{
+    return json::parse(R"({
+      "name": "BS_Test2D",
+      "type": "blendSpace2D",
+      "description": "unit test 2D blend space",
+      "axisX": { "name": "Speed", "min": 0, "max": 500 },
+      "axisY": { "name": "Direction", "min": -90, "max": 90 },
+      "interpolation": "EaseInOut",
+      "weightSpeedPerSec": 5,
+      "samples": [
+        { "clip": "WalkFwd",  "x": 0,   "y": -90, "rate": 1, "syncGroup": "Foot" },
+        { "clip": "WalkLeft", "x": 500, "y": -90, "rate": 1, "syncGroup": "Foot" },
+        { "clip": "RunFwd",   "x": 0,   "y": 90,  "rate": 2, "syncGroup": "Foot" },
+        { "clip": "RunLeft",  "x": 500, "y": 90,  "rate": 2, "syncGroup": "Foot" }
+      ]
+    })");
+}
+
+TEST(AnimationScriptData, ParsesBlendSpace2DRectangularGridAndPublishesAxes)
+{
+    const BlendSpaceAsset space = ParseBlendSpace(BlendSpace2DJson(), "BS_Test2D.json");
+    EXPECT_EQ(space.type, BlendSpaceType::TwoD);
+    EXPECT_EQ(space.axisXName, "Speed");
+    EXPECT_EQ(space.axisYName, "Direction");
+    ASSERT_EQ(space.samples.size(), 4u);
+    EXPECT_FLOAT_EQ(space.samples[1].x, 500.0f);
+    EXPECT_FLOAT_EQ(space.samples[2].y, 90.0f);
+    EXPECT_FLOAT_EQ(space.samples[3].rate, 2.0f);
+
+    SkeletalAsset asset;
+    for (const char* clip : {"WalkFwd", "WalkLeft", "RunFwd", "RunLeft"})
+    {
+        asset.clips.push_back(Clip{});
+        asset.clips.back().id = clip;
+    }
+    asset.blendSpaces.push_back(space);
+    const json catalog = BuildAnimationScriptAssets(asset);
+    const json& published = catalog["blendSpaces"]["BS_Test2D"];
+    EXPECT_EQ(published["type"], "blendSpace2D");
+    EXPECT_EQ(published["axisX"], "Speed");
+    EXPECT_EQ(published["axisY"], "Direction");
+    EXPECT_FLOAT_EQ(published["samples"][0]["x"].get<float>(), 0.0f);
+
+    auto missingCorner = BlendSpace2DJson();
+    missingCorner["samples"].erase(3);
+    EXPECT_NE(ErrorOf([&] { ParseBlendSpace(missingCorner, "x"); }).find("exactly 4"),
+        std::string::npos);
+
+    auto duplicateCell = BlendSpace2DJson();
+    duplicateCell["samples"][1]["x"] = 0;
+    EXPECT_NE(ErrorOf([&] { ParseBlendSpace(duplicateCell, "x"); }).find("grid coordinate"),
+        std::string::npos);
+
+    auto missingAxis = BlendSpace2DJson();
+    missingAxis.erase("axisY");
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendSpace(missingAxis, "x"); }).empty());
+}
+
+json BlendProfileJson()
+{
+    return json::parse(R"({
+      "name": "BP_Test",
+      "type": "blendProfile",
+      "description": "unit test",
+      "bones": { "hip": 1.0, "foot": 0.5 }
+    })");
+}
+
+TEST(AnimationScriptData, ParsesBlendProfileAndRejectsInvalidAuthoring)
+{
+    const BlendProfileAsset profile = ParseBlendProfile(BlendProfileJson(), "BP_Test.json");
+    EXPECT_EQ(profile.name, "BP_Test");
+    ASSERT_EQ(profile.bones.size(), 2u);
+    const auto foot = std::find_if(profile.bones.begin(), profile.bones.end(),
+        [](const BlendProfileBone& bone) { return bone.name == "foot"; });
+    ASSERT_NE(foot, profile.bones.end());
+    EXPECT_FLOAT_EQ(foot->weight, 0.5f);
+
+    auto badWeight = BlendProfileJson();
+    badWeight["bones"]["hip"] = 1.5;
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendProfile(badWeight, "x"); }).empty());
+
+    auto badType = BlendProfileJson();
+    badType["type"] = "blendProfile2";
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendProfile(badType, "x"); }).empty());
+
+    auto emptyBones = BlendProfileJson();
+    emptyBones["bones"] = json::object();
+    EXPECT_FALSE(ErrorOf([&] { ParseBlendProfile(emptyBones, "x"); }).empty());
+}
+
+TEST(AnimationScriptData, BlendProfileBonesAndCatalogPublishing)
+{
+    SkeletalAsset asset;
+    asset.mesh.joints.push_back(Joint{});
+    asset.mesh.joints.back().name = "hip";
+    const BlendProfileAsset profile = ParseBlendProfile(BlendProfileJson(), "BP_Test.json");
+    // foot 尚未注册。
+    EXPECT_NE(ErrorOf([&] { ValidateBlendProfileBones(profile, asset, "x"); }).find("foot"),
+        std::string::npos);
+    asset.mesh.joints.push_back(Joint{});
+    asset.mesh.joints.back().name = "foot";
+    EXPECT_NO_THROW(ValidateBlendProfileBones(profile, asset, "x"));
+
+    asset.blendProfiles.push_back(profile);
+    const json catalog = BuildAnimationScriptAssets(asset);
+    ASSERT_TRUE(catalog.contains("blendProfiles"));
+    ASSERT_TRUE(catalog["blendProfiles"].contains("BP_Test"));
+    EXPECT_FLOAT_EQ(catalog["blendProfiles"]["BP_Test"]["bones"]["hip"].get<float>(), 1.0f);
+}
 }

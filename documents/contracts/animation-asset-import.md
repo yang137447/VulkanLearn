@@ -92,9 +92,23 @@ SamplingJob 的 RcpEst 插值系数会放大长位移误差，根作为轨迹输
   "montages": [
     { "id": "AM_...",
       "path": "Maps/SC_gasp/Animations/AM_....json" }
+  ],
+  "blendSpaces": [
+    { "path": "Maps/SC_third_person/BlendSpaces/BS_MM_WalkRun.json" }
+  ],
+  "blendProfiles": [
+    { "path": "Maps/SC_third_person/BlendProfiles/BP_UpperBody.json" }
   ]
 }
 ```
+
+`blendSpaces` 是可选清单：每项只声明资源相对 `path`，名称与 sample 由
+`BS_*.json` 自己拥有。导入期校验：路径非空、不得重复、文件摘要进入模型缓存键；
+资产内部的 1D 轴/Speed 限制、2..3 个 sample、阈值严格递增、clip 必须存在于
+同一 SKM 的 clips 见 [动画播放契约](animation-runtime-skinning.md) 的 BlendSpace1D。
+`blendProfiles` 同样是可选路径清单：每项只声明资源相对 `path`，名称与逐骨权重
+由 `BP_*.json` 拥有；导入期校验路径非空/不重复、权重有限且 ∈ [0,1]、骨名属于
+同一 SKM、最多 256 项，摘要进入模型缓存键。
 
 Sequence sidecar 的同步元数据分两层，均由 `ParseSequence` 校验：
 
@@ -214,7 +228,9 @@ RT，再从其 `sourceModel` 取得源模型，复用正式导入/重定向/蒙�
    的来源，SK 是权威校验清单，不反向驱动导入。
    若声明 `sourceModel`，此时先导入非 retarget 的源 SM，再读 profile（≤4 MiB）并校验
    两份 SK id、映射、root 和拓扑；profile 摘要及源 SM 的完整输入清单纳入目标身份。
-4. **逐 clip 加载**：先读 FBX 片段，再读可选 sidecar（≤8 MiB）→ `ParseSequence`。sidecar 的
+4. **逐 clip 加载**：先读 FBX 片段，再读可选 sidecar（≤8 MiB）→ `ParseSequence`。片段 FBX
+   的骨骼层级可以是网格骨架的子集：未出现的关节回退绑定姿态，出现但名称未知或父链不一致
+   的关节仍拒绝；这允许 UE 简化动画（例如只写 89 根实际变化骨骼）驱动完整网格。sidecar 的
    `sequence` 字段必须等于 `clips[].id`；曲线名必须在 SK `curves` 注册、`tracks` 必须是 SK
    关节；sidecar `duration` 与 FBX `raw.duration` 差 ≤`1e-5`。`syncMarkers` 与 `players`
    按上述结构校验；摘要与路径进入缓存键与 `sourceInputs`。侧车字段与采样语义以
@@ -291,6 +307,9 @@ sourceModel/profile 路径，再写本地 clip/Montage 路径；loader 先写 SK
 曲线端点外作者 key 原样保留。没有承诺曲线插值、事件执行、虚拟骨重建或 UE 蓝图等价。
 运行时只通过显式 `SampleFloatCurve`/`SkeletalPlayback::SampleCurve` 读取曲线；
 没有 sidecar 的片段返回缺失而不是空曲线，曲线不参与导入期姿态或自动 AnimBP 图执行。
+Additive sidecar 的 `rootMotion` 额外保留 `additiveAnimType`、`refPoseType` 与
+`refFrameIndex`；`RefPose` 使用绑定姿态，`LocalAnimFrame` 使用本片段参考帧，
+外部 `RefPoseSeq` 的 `AnimFrame` 在导入期拒绝，不把它近似成绑定姿态。
 
 `compare_gasp_import.py` 使用固定 UE→VL 基底独立对照 UE RAW 数据。
 阈值为 0.1 cm、0.1 degree、0.00001 s，并检查元数据逐值保留和缺轨名单。
@@ -302,7 +321,7 @@ sourceModel/profile 路径，再写本地 clip/Montage 路径；loader 先写 SK
 根 GoogleTest 目标 `animation_preflight_tests` 中，`SkeletalImport`（30 项）覆盖
 手算轴向、父骨保留、九影响权重、MikkTSpace 展开、绑定姿态、缺轨、根位移、
 旋转/缩放和损坏资产拒绝；`AnimationSkeleton`（17 项）覆盖 SK 拓扑/槽位/曲线注册表、
-FBX 对照、`skinning.root` 拒绝与强制 `skinning.skeleton`；`AnimationSequenceData`（16 项）
+FBX 对照、`skinning.root` 拒绝与强制 `skinning.skeleton`；`AnimationSequenceData`（17 项）
 覆盖 sidecar 帧信息/曲线/notify/sync marker/player 绑定与采样；`AnimationMontage`（27 项）覆盖 Montage 解析、
 跨文件绑定、多 segment/缓存键与 `rotationMethod`；`AnimationScriptData`（37 项）覆盖 catalog/窗口
 装配/target 旋转/Static pose/section link/段边界 clip 切换/入口 `startTime`/sync 元数据发布；`MotionWarping`（28 项）覆盖

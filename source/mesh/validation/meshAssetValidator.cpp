@@ -1188,10 +1188,65 @@ MeshAssetBuildPlan MeshAssetValidator::BuildLoadPlan(
                 loadPlan.animationMontages.push_back(std::move(montagePlan));
             }
         }
+        // BlendSpace 是可选清单；name/sample 内容由 BS_*.json 自己拥有，这里只校验
+        // 路径形状与重复，内容摘要由 loader 追加进缓存键。
+        if (skinning.contains("blendSpaces"))
+        {
+            if (!skinning.at("blendSpaces").is_array())
+                throw std::runtime_error(
+                    "Mesh skinning.blendSpaces must be an array: " +
+                    std::string(meshAssetPath));
+            for (const auto& blendSpace : skinning.at("blendSpaces"))
+            {
+                if (!blendSpace.is_object() || !blendSpace.contains("path") ||
+                    !blendSpace.at("path").is_string() ||
+                    blendSpace.at("path").get<std::string>().empty())
+                    throw std::runtime_error(
+                        "Skeletal blend space requires a nonempty path: " +
+                        std::string(meshAssetPath));
+                MeshBlendSpacePlan plan;
+                plan.path = ReadOptionalAnimationJsonPath(
+                    blendSpace, "path", meshAssetPath, loadPlan.modelDataPath);
+                for (const auto& existing : loadPlan.animationBlendSpaces)
+                    if (existing.path == plan.path)
+                        throw std::runtime_error(
+                            "Duplicate skeletal blend space path: " + plan.path);
+                loadPlan.modelCacheKey += "|blendSpace=" + plan.path;
+                loadPlan.animationBlendSpaces.push_back(std::move(plan));
+            }
+        }
+        // BlendProfile 同样是可选清单；骨名/权重由 BP_*.json 自己拥有。
+        if (skinning.contains("blendProfiles"))
+        {
+            if (!skinning.at("blendProfiles").is_array())
+                throw std::runtime_error(
+                    "Mesh skinning.blendProfiles must be an array: " +
+                    std::string(meshAssetPath));
+            for (const auto& blendProfile : skinning.at("blendProfiles"))
+            {
+                if (!blendProfile.is_object() || !blendProfile.contains("path") ||
+                    !blendProfile.at("path").is_string() ||
+                    blendProfile.at("path").get<std::string>().empty())
+                    throw std::runtime_error(
+                        "Skeletal blend profile requires a nonempty path: " +
+                        std::string(meshAssetPath));
+                MeshBlendProfilePlan plan;
+                plan.path = ReadOptionalAnimationJsonPath(
+                    blendProfile, "path", meshAssetPath, loadPlan.modelDataPath);
+                for (const auto& existing : loadPlan.animationBlendProfiles)
+                    if (existing.path == plan.path)
+                        throw std::runtime_error(
+                            "Duplicate skeletal blend profile path: " + plan.path);
+                loadPlan.modelCacheKey += "|blendProfile=" + plan.path;
+                loadPlan.animationBlendProfiles.push_back(std::move(plan));
+            }
+        }
         if (!loadPlan.animationSourceModelPath.empty() &&
-            (!loadPlan.animationClips.empty() || !loadPlan.animationMontages.empty()))
+            (!loadPlan.animationClips.empty() || !loadPlan.animationMontages.empty() ||
+             !loadPlan.animationBlendSpaces.empty() || !loadPlan.animationBlendProfiles.empty()))
             throw std::runtime_error(
-                "Retargeted target mesh must not declare target-owned clips or montages; "
+                "Retargeted target mesh must not declare target-owned clips, montages, blend spaces "
+                "or blend profiles; "
                 "author them on skinning.sourceModel: " + std::string(meshAssetPath));
     }
     if (loadPlan.importOptions.generateSmoothNormals)

@@ -194,8 +194,37 @@ nlohmann::json World::ScriptAnimationFeedback() const
                     {"syncMethod", player.CurrentSyncAuthoredMethodName()},
                     {"syncEffectiveMethod", player.CurrentSyncMethodName()},
                     {"syncScope", player.CurrentSyncScopeName()},
-                    {"syncDiagnostic", player.SyncDiagnosticName()}};
+                    {"syncDiagnostic", player.SyncDiagnosticName()},
+                    {"blendSpace", {{"active", player.BlendSpaceActive()},
+                        {"clip", player.BlendSpaceClipId()},
+                        {"weight", player.BlendSpaceWeight()}}},
+                    {"additive", {{"active", player.AdditiveActive()},
+                        {"clip", player.AdditiveClipId()},
+                        {"alpha", player.AdditiveAlpha()}}},
+                    {"layered", {{"active", player.LayeredActive()},
+                        {"clip", player.LayeredClipId()},
+                        {"alpha", player.LayeredAlpha()},
+                        {"maskCount", player.LayeredMaskCount()}}},
+                    {"cachedPose", {{"active", player.CachedPoseActive()},
+                        {"name", player.CachedPoseName()}}},
+                    {"slotMontage", {{"active", player.SlotMontageActive()},
+                        {"clip", player.SlotMontageClipId()},
+                        {"alpha", player.SlotMontageAlpha()},
+                        {"maskCount", player.SlotMontageMaskCount()},
+                        {"completed", player.SlotMontageCompleted()}}}};
                 const auto& rootMotion = player.RootMotionDelta();
+                {
+                    // 基础片段 + additive 的逐帧曲线；限制 64 个键并跳过 0 值。
+                    nlohmann::json curves = nlohmann::json::object();
+                    int count = 0;
+                    for (const auto& entry : player.FrameCurves())
+                    {
+                        if (entry.second == 0 || count >= 64) continue;
+                        curves[entry.first] = entry.second;
+                        ++count;
+                    }
+                    feedback["curves"] = std::move(curves);
+                }
                 feedback["rootMotion"] = nlohmann::json::array(
                     {rootMotion.x(), rootMotion.y(), rootMotion.z()});
                 feedback["rootMotionYaw"] = player.RootMotionYawDelta();
@@ -384,9 +413,15 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
         const std::string mode = request.value("mode", std::string());
         // 后处理配置（slope / pose driver）是紧随播放命令的附加候选，必须基于前一条
         // 继续应用，否则会丢掉播放状态；其余命令仍保持“同一 batch 每个组件一条”。
+        // blendSpace 与后处理配置一样，是基于同一 batch 前一条播放命令的附加候选。
         const bool postProcessConfiguration = mode == "configureSlopeWarping" ||
             mode == "configurePoseDriver" || mode == "configurePostProcess" ||
-            mode == "configureBonePhysics" || mode == "configureFootPlacement";
+            mode == "configureBonePhysics" || mode == "configureFootPlacement" ||
+            mode == "blendSpace" || mode == "additive" || mode == "layeredPose" ||
+            mode == "cachedPose" || mode == "cachedPoseBranches" ||
+            mode == "cachedPoseBranchAxis" || mode == "poseGraph" ||
+            mode == "poseGraphValue" || mode == "poseGraphEntry" ||
+            mode == "poseGraphInPlace" || mode == "poseGraphMontageTargets";
         if (!player || (!postProcessConfiguration && candidates.count(player)))
             throw std::invalid_argument("Script.InvalidAnimationTarget");
         const auto existing = candidates.find(player);
@@ -618,12 +653,74 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             const float rate = request.value("rate", 1.0f);
             const bool inPlace = request.value("inPlace", true);
             const float startTime = ParseMontageStartTime(request);
-            candidate.SetFootPlacementEnabled(false);
-            candidate.SetInertializationEnabled(false);
-            candidate.SetRootOffsetEnabled(false);
-            Animation::PlayMontage(candidate, *montage, targets, loop, rate, inPlace, startTime);
-            // Montage 播放段不属于 Motion Matching；旧搜索绑定不能继续驱动同一组件。
-            runtimeCandidates.erase(identity);
+            // 带 slotMask 的 montage 是叠加层：基础时钟/根位移/notify 继续由当前
+            // 播放段拥有，montage 只按 mask 覆盖对应关节。
+            if (request.contains("slotWeights") && request.at("slotWeights").is_array())
+            {
+                const auto& values = request.at("slotWeights");
+                if (values.size() > 256)
+                    throw std::invalid_argument("Script.InvalidSlotMontage");
+                std::vector<Animation::BlendProfileBone> weights;
+                weights.reserve(values.size());
+                for (const auto& value : values)
+                {
+                    if (!value.is_object() || !value.contains("bone") ||
+                        !value.at("bone").is_string() || !value.contains("weight") ||
+                        !value.at("weight").is_number())
+                        throw std::invalid_argument("Script.InvalidSlotMontage");
+                    const std::string bone = value.at("bone").get<std::string>();
+                    const float weight = value.at("weight").get<float>();
+                    if (bone.empty() || bone.size() > 128 || !std::isfinite(weight))
+                        throw std::invalid_argument("Script.InvalidSlotMontage");
+                    weights.push_back({bone, weight});
+                }
+                const float slotAlpha = request.value("slotAlpha", 1.0f);
+                if (!std::isfinite(slotAlpha))
+                    throw std::invalid_argument("Script.InvalidSlotMontage");
+                std::string clipId = montage->derivedClipId;
+                if (clipId.empty() && !montage->segments.empty())
+                    clipId = montage->segments.front().derivedClipId;
+                if (clipId.empty())
+                    throw std::invalid_argument("Script.InvalidSlotMontage");
+                candidate.PlaySlotMontageWeights(clipId, slotAlpha, loop, rate, weights);
+                runtimeCandidates.erase(identity);
+            }
+            else if (request.contains("slotMask"))
+            {
+                const auto& values = request.at("slotMask");
+                if (!values.is_array() || values.size() > 64)
+                    throw std::invalid_argument("Script.InvalidSlotMontage");
+                std::vector<std::string> mask;
+                mask.reserve(values.size());
+                for (const auto& value : values)
+                {
+                    if (!value.is_string())
+                        throw std::invalid_argument("Script.InvalidSlotMontage");
+                    const std::string bone = value.get<std::string>();
+                    if (bone.empty() || bone.size() > 128)
+                        throw std::invalid_argument("Script.InvalidSlotMontage");
+                    mask.push_back(bone);
+                }
+                const float slotAlpha = request.value("slotAlpha", 1.0f);
+                if (!std::isfinite(slotAlpha))
+                    throw std::invalid_argument("Script.InvalidSlotMontage");
+                std::string clipId = montage->derivedClipId;
+                if (clipId.empty() && !montage->segments.empty())
+                    clipId = montage->segments.front().derivedClipId;
+                if (clipId.empty())
+                    throw std::invalid_argument("Script.InvalidSlotMontage");
+                candidate.PlaySlotMontage(clipId, slotAlpha, loop, rate, mask);
+                runtimeCandidates.erase(identity);
+            }
+            else
+            {
+                candidate.SetFootPlacementEnabled(false);
+                candidate.SetInertializationEnabled(false);
+                candidate.SetRootOffsetEnabled(false);
+                Animation::PlayMontage(candidate, *montage, targets, loop, rate, inPlace, startTime);
+                // Montage 播放段不属于 Motion Matching；旧搜索绑定不能继续驱动同一组件。
+                runtimeCandidates.erase(identity);
+            }
         }
         else if (request.value("mode", std::string()) == "transitionTo")
         {
@@ -659,6 +756,358 @@ void World::ApplyScriptAnimationRequests(const nlohmann::json& actor, const nloh
             candidate.SetRate(rate);
             candidate.SetMotionWarpWindows({});
             runtimeCandidates.erase(identity);
+        }
+        else if (request.value("mode", std::string()) == "blendSpace")
+        {
+            // BlendSpace1D 是播放命令的附加候选：A 必须已经由同一 batch 的
+            // play/transitionTo 选为目标片段；这里只更新第二片段与权重。
+            if (!request.contains("enabled") || !request.at("enabled").is_boolean())
+                throw std::invalid_argument("Script.InvalidBlendSpaceRequest");
+            if (!request.at("enabled").get<bool>())
+                candidate.ClearBlendSpace();
+            else
+            {
+                if (!request.contains("clipA") || !request.at("clipA").is_string() ||
+                    !request.contains("clipB") || !request.at("clipB").is_string() ||
+                    !request.contains("weight") || !request.at("weight").is_number())
+                    throw std::invalid_argument("Script.InvalidBlendSpaceRequest");
+                const std::string clipA = request.at("clipA").get<std::string>();
+                const std::string clipB = request.at("clipB").get<std::string>();
+                const float weight = request.at("weight").get<float>();
+                const float rate = request.contains("rate") && request.at("rate").is_number()
+                    ? request.at("rate").get<float>() : 1.0f;
+                const std::string syncGroup = request.contains("syncGroup") &&
+                    request.at("syncGroup").is_string()
+                    ? request.at("syncGroup").get<std::string>() : std::string();
+                if (clipA.empty() || clipA.size() > 256 || clipB.empty() || clipB.size() > 256 ||
+                    !std::isfinite(weight) || !std::isfinite(rate) || rate <= 0 || rate > 4 ||
+                    syncGroup.size() > 64)
+                    throw std::invalid_argument("Script.InvalidBlendSpaceRequest");
+                candidate.SetBlendSpace1D(clipA, clipB, weight, rate, syncGroup);
+            }
+        }
+        else if (request.value("mode", std::string()) == "additive")
+        {
+            // ApplyAdditive（LocalSpaceBase）是状态姿态的一部分：只更新叠加片段与权重，
+            // 基础时钟仍由同一 batch 的 play/transitionTo/缓存姿态决定。
+            if (!request.contains("enabled") || !request.at("enabled").is_boolean())
+                throw std::invalid_argument("Script.InvalidAdditiveRequest");
+            if (!request.at("enabled").get<bool>())
+                candidate.ClearAdditive();
+            else
+            {
+                if (!request.contains("clip") || !request.at("clip").is_string() ||
+                    !request.contains("alpha") || !request.at("alpha").is_number() ||
+                    !request.contains("loop") || !request.at("loop").is_boolean())
+                    throw std::invalid_argument("Script.InvalidAdditiveRequest");
+                const std::string clip = request.at("clip").get<std::string>();
+                const float alpha = request.at("alpha").get<float>();
+                if (clip.empty() || clip.size() > 256 || !std::isfinite(alpha))
+                    throw std::invalid_argument("Script.InvalidAdditiveRequest");
+                candidate.SetAdditive(clip, alpha, request.at("loop").get<bool>());
+            }
+        }
+        else if (request.value("mode", std::string()) == "cachedPose")
+        {
+            // SaveCachedPose/UseCachedPose：capture 在提交时保存上一帧最终姿态；
+            // use 让播放器以该快照为 Base（不推进片段时钟）。
+            if (!request.contains("enabled") || !request.at("enabled").is_boolean() ||
+                !request.contains("capture") || !request.at("capture").is_boolean() ||
+                !request.contains("name") || !request.at("name").is_string())
+                throw std::invalid_argument("Script.InvalidCachedPoseRequest");
+            const std::string name = request.at("name").get<std::string>();
+            if (name.empty() || name.size() > 128)
+                throw std::invalid_argument("Script.InvalidCachedPoseRequest");
+            float blendSeconds = 0;
+            if (request.contains("blend"))
+            {
+                if (!request.at("blend").is_number())
+                    throw std::invalid_argument("Script.InvalidCachedPoseRequest");
+                blendSeconds = request.at("blend").get<float>();
+                if (!std::isfinite(blendSeconds) || blendSeconds < 0 || blendSeconds > 10)
+                    throw std::invalid_argument("Script.InvalidCachedPoseRequest");
+            }
+            if (!request.at("enabled").get<bool>())
+                candidate.ClearCachedPose();
+            else if (request.at("capture").get<bool>())
+                candidate.CaptureCachedPose(name);
+            else
+                candidate.UseCachedPose(name, blendSeconds);
+        }
+        else if (request.value("mode", std::string()) == "cachedPoseBranches")
+        {
+            // 图级命名分支：clip 或 1D blend，每 Tick 先于主状态求值。
+            if (!request.contains("branches") || !request.at("branches").is_array())
+                throw std::invalid_argument("Script.InvalidCachedPoseBranchesRequest");
+            std::vector<Animation::SkeletalPlayback::CachedPoseBranch> branches;
+            for (const auto& node : request.at("branches"))
+            {
+                if (!node.is_object() || !node.contains("name") || !node["name"].is_string() ||
+                    !node.contains("samples") || !node["samples"].is_array() ||
+                    !node.contains("rate") || !node["rate"].is_number() ||
+                    !node.contains("loop") || !node["loop"].is_boolean())
+                    throw std::invalid_argument("Script.InvalidCachedPoseBranchesRequest");
+                Animation::SkeletalPlayback::CachedPoseBranch branch;
+                branch.name = node["name"].get<std::string>();
+                branch.rate = node["rate"].get<float>();
+                branch.loop = node["loop"].get<bool>();
+                if (node.contains("idleClip") && node["idleClip"].is_string())
+                    branch.idleClip = node["idleClip"].get<std::string>();
+                if (node.contains("idleThreshold"))
+                {
+                    if (!node["idleThreshold"].is_number())
+                        throw std::invalid_argument("Script.InvalidCachedPoseBranchesRequest");
+                    branch.idleThreshold = node["idleThreshold"].get<float>();
+                }
+                for (const auto& sample : node["samples"])
+                {
+                    if (!sample.is_object() || !sample.contains("clip") ||
+                        !sample["clip"].is_string() || !sample.contains("threshold") ||
+                        !sample["threshold"].is_number())
+                        throw std::invalid_argument("Script.InvalidCachedPoseBranchesRequest");
+                    branch.samples.push_back({sample["clip"].get<std::string>(),
+                        sample["threshold"].get<float>()});
+                }
+                branches.push_back(std::move(branch));
+            }
+            candidate.SetCachedPoseBranches(std::move(branches));
+        }
+        else if (request.value("mode", std::string()) == "cachedPoseBranchAxis")
+        {
+            if (!request.contains("name") || !request["name"].is_string() ||
+                !request.contains("value") || !request["value"].is_number())
+                throw std::invalid_argument("Script.InvalidCachedPoseBranchAxisRequest");
+            candidate.SetCachedPoseBranchAxis(
+                request["name"].get<std::string>(), request["value"].get<float>());
+        }
+        else if (request.value("mode", std::string()) == "poseGraph")
+        {
+            if (!request.contains("nodes") || !request.at("nodes").is_array())
+                throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+            std::vector<Animation::SkeletalPlayback::PoseGraphNode> nodes;
+            for (const auto& node : request.at("nodes"))
+            {
+                if (!node.is_object() || !node.contains("id") || !node["id"].is_string() ||
+                    !node.contains("kind") || !node["kind"].is_string())
+                    throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                Animation::SkeletalPlayback::PoseGraphNode parsed;
+                parsed.id = node["id"].get<std::string>();
+                const std::string kind = node["kind"].get<std::string>();
+                using Kind = Animation::SkeletalPlayback::PoseGraphNode::Kind;
+                if (kind == "SequencePlayer") parsed.kind = Kind::SequencePlayer;
+                else if (kind == "BlendSpacePlayer") parsed.kind = Kind::BlendSpacePlayer;
+                else if (kind == "BlendSpace2DPlayer") parsed.kind = Kind::BlendSpace2DPlayer;
+                else if (kind == "MontagePlayer") parsed.kind = Kind::MontagePlayer;
+                else if (kind == "Blend") parsed.kind = Kind::Blend;
+                else if (kind == "Select") parsed.kind = Kind::Select;
+                else if (kind == "ApplyAdditive") parsed.kind = Kind::ApplyAdditive;
+                else if (kind == "LayeredBoneBlend") parsed.kind = Kind::LayeredBoneBlend;
+                else if (kind == "SaveCachedPose") parsed.kind = Kind::SaveCachedPose;
+                else if (kind == "UseCachedPose") parsed.kind = Kind::UseCachedPose;
+                else if (kind == "Slot") parsed.kind = Kind::Slot;
+                else if (kind == "Output") parsed.kind = Kind::Output;
+                else throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                if (node.contains("inputs") && node["inputs"].is_array())
+                    for (const auto& input : node["inputs"])
+                    {
+                        if (!input.is_string())
+                            throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                        parsed.inputs.push_back(input.get<std::string>());
+                    }
+                if (node.contains("clip") && node["clip"].is_string())
+                    parsed.clip = node["clip"].get<std::string>();
+                if (node.contains("montage") && node["montage"].is_string())
+                    parsed.montage = node["montage"].get<std::string>();
+                if (node.contains("rate")) parsed.rate = node["rate"].get<float>();
+                if (node.contains("weightSpeedPerSec"))
+                {
+                    if (!node["weightSpeedPerSec"].is_number())
+                        throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                    parsed.weightSpeedPerSec = node["weightSpeedPerSec"].get<float>();
+                }
+                if (node.contains("loop")) parsed.loop = node["loop"].get<bool>();
+                if (node.contains("startPosition"))
+                    parsed.startPosition = node["startPosition"].get<float>();
+                if (node.contains("alpha")) parsed.alpha = node["alpha"].get<float>();
+                if (node.contains("cacheName") && node["cacheName"].is_string())
+                    parsed.cacheName = node["cacheName"].get<std::string>();
+                if (node.contains("slotName") && node["slotName"].is_string())
+                    parsed.slotName = node["slotName"].get<std::string>();
+                if (node.contains("rootSource") && node["rootSource"].is_string())
+                    parsed.rootSource = node["rootSource"].get<std::string>();
+                if (node.contains("samples") && node["samples"].is_array())
+                    for (const auto& sample : node["samples"])
+                    {
+                        if (!sample.is_object() || !sample.contains("clip") ||
+                            !sample["clip"].is_string())
+                            throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                        Animation::SkeletalPlayback::PoseGraphSample parsedSample;
+                        parsedSample.clip = sample["clip"].get<std::string>();
+                        if (sample.contains("threshold"))
+                        {
+                            if (!sample["threshold"].is_number())
+                                throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                            parsedSample.threshold = sample["threshold"].get<float>();
+                        }
+                        if (sample.contains("x"))
+                        {
+                            if (!sample["x"].is_number())
+                                throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                            parsedSample.x = sample["x"].get<float>();
+                        }
+                        if (sample.contains("y"))
+                        {
+                            if (!sample["y"].is_number())
+                                throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                            parsedSample.y = sample["y"].get<float>();
+                        }
+                        if (sample.contains("rate"))
+                        {
+                            if (!sample["rate"].is_number())
+                                throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                            parsedSample.rate = sample["rate"].get<float>();
+                        }
+                        if (sample.contains("syncGroup"))
+                        {
+                            if (!sample["syncGroup"].is_string())
+                                throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                            parsedSample.syncGroup = sample["syncGroup"].get<std::string>();
+                        }
+                        parsed.samples.push_back(std::move(parsedSample));
+                    }
+                if (node.contains("weights") && node["weights"].is_array())
+                    for (const auto& weight : node["weights"])
+                    {
+                        if (!weight.is_object() || !weight.contains("bone") ||
+                            !weight["bone"].is_string() || !weight.contains("weight") ||
+                            !weight["weight"].is_number())
+                            throw std::invalid_argument("Script.InvalidPoseGraphRequest");
+                        parsed.weights.push_back({weight["bone"].get<std::string>(),
+                            weight["weight"].get<float>()});
+                    }
+                nodes.push_back(std::move(parsed));
+            }
+            if (nodes.empty()) candidate.ClearPoseGraph();
+            else candidate.SetPoseGraph(std::move(nodes));
+        }
+        else if (request.value("mode", std::string()) == "poseGraphValue")
+        {
+            if (!request.contains("id") || !request["id"].is_string() ||
+                !request.contains("value") || !request["value"].is_number())
+                throw std::invalid_argument("Script.InvalidPoseGraphValueRequest");
+            const std::string id = request["id"].get<std::string>();
+            if (request.contains("axis"))
+            {
+                if (!request["axis"].is_string())
+                    throw std::invalid_argument("Script.InvalidPoseGraphValueRequest");
+                candidate.SetPoseGraphAxisValue(id, request["axis"].get<std::string>(),
+                    request["value"].get<float>());
+            }
+            else if (request.contains("valueY"))
+            {
+                if (!request["valueY"].is_number())
+                    throw std::invalid_argument("Script.InvalidPoseGraphValueRequest");
+                candidate.SetPoseGraphValue(id, request["value"].get<float>(),
+                    request["valueY"].get<float>());
+            }
+            else
+                candidate.SetPoseGraphValue(id, request["value"].get<float>());
+        }
+        else if (request.value("mode", std::string()) == "poseGraphMontageTargets")
+        {
+            if (!request.contains("id") || !request["id"].is_string())
+                throw std::invalid_argument("Script.InvalidPoseGraphMontageTargetsRequest");
+            candidate.SetPoseGraphMontageTargets(request["id"].get<std::string>(),
+                ParseMontageTargets(request));
+        }
+        else if (request.value("mode", std::string()) == "poseGraphInPlace")
+        {
+            if (!request.contains("enabled") || !request["enabled"].is_boolean())
+                throw std::invalid_argument("Script.InvalidPoseGraphInPlaceRequest");
+            candidate.SetPoseGraphInPlace(request["enabled"].get<bool>());
+        }
+        else if (request.value("mode", std::string()) == "poseGraphEntry")
+        {
+            if (!request.contains("id") || !request["id"].is_string())
+                throw std::invalid_argument("Script.InvalidPoseGraphEntryRequest");
+            float startPosition = 0;
+            float blendSeconds = 0;
+            if (request.contains("startPosition"))
+            {
+                if (!request["startPosition"].is_number())
+                    throw std::invalid_argument("Script.InvalidPoseGraphEntryRequest");
+                startPosition = request["startPosition"].get<float>();
+            }
+            if (request.contains("blendSeconds"))
+            {
+                if (!request["blendSeconds"].is_number())
+                    throw std::invalid_argument("Script.InvalidPoseGraphEntryRequest");
+                blendSeconds = request["blendSeconds"].get<float>();
+            }
+            candidate.SetPoseGraphEntry(request["id"].get<std::string>(), startPosition,
+                blendSeconds);
+        }
+        else if (request.value("mode", std::string()) == "layeredPose")
+        {
+            // LayeredBoneBlend：overlay 片段按 mask 命中关节混合到当前姿态；
+            // mask 为空表示全身，未知骨骼名由原生拒绝。
+            if (!request.contains("enabled") || !request.at("enabled").is_boolean())
+                throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+            if (!request.at("enabled").get<bool>())
+                candidate.ClearLayeredPose();
+            else
+            {
+                if (!request.contains("clip") || !request.at("clip").is_string() ||
+                    !request.contains("alpha") || !request.at("alpha").is_number() ||
+                    !request.contains("loop") || !request.at("loop").is_boolean())
+                    throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+                const std::string clip = request.at("clip").get<std::string>();
+                const float alpha = request.at("alpha").get<float>();
+                if (clip.empty() || clip.size() > 256 || !std::isfinite(alpha))
+                    throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+                const bool hasWeights = request.contains("weights") &&
+                    request.at("weights").is_array() && !request.at("weights").empty();
+                if (hasWeights)
+                {
+                    if (request.at("weights").size() > 256)
+                        throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+                    std::vector<Animation::BlendProfileBone> weights;
+                    weights.reserve(request.at("weights").size());
+                    for (const auto& entry : request.at("weights"))
+                    {
+                        if (!entry.is_object() || !entry.contains("bone") ||
+                            !entry.at("bone").is_string() || !entry.contains("weight") ||
+                            !entry.at("weight").is_number())
+                            throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+                        const std::string bone = entry.at("bone").get<std::string>();
+                        const float weight = entry.at("weight").get<float>();
+                        if (bone.empty() || bone.size() > 128 || !std::isfinite(weight))
+                            throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+                        weights.push_back({bone, weight});
+                    }
+                    candidate.SetLayeredPoseWeights(clip, alpha,
+                        request.at("loop").get<bool>(), weights);
+                }
+                else
+                {
+                    if (!request.contains("mask") || !request.at("mask").is_array() ||
+                        request.at("mask").size() > 64)
+                        throw std::invalid_argument("Script.InvalidLayeredPoseRequest");
+                    std::vector<std::string> mask;
+                    mask.reserve(request.at("mask").size());
+                    for (const auto& entry : request.at("mask"))
+                    {
+                        if (!entry.is_string()) throw std::invalid_argument(
+                            "Script.InvalidLayeredPoseRequest");
+                        const std::string bone = entry.get<std::string>();
+                        if (bone.empty() || bone.size() > 128) throw std::invalid_argument(
+                            "Script.InvalidLayeredPoseRequest");
+                        mask.push_back(bone);
+                    }
+                    candidate.SetLayeredPose(clip, alpha,
+                        request.at("loop").get<bool>(), mask);
+                }
+            }
         }
         else
         {

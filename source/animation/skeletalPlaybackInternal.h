@@ -124,4 +124,178 @@ inline LocalPose Crossfade(const LocalPose& source, LocalPose target, float alph
     if (!blend.Run()) throw std::runtime_error("Animation local pose blending failed");
     return mixed;
 }
+
+// UE FTransform::BlendFromIdentityAndAccumulate 对部分权重使用
+// FQuat::FastLerp（最短路径）后归一化，而不是球面插值。
+inline Eigen::Quaternionf WeightedIdentityRotation(const Eigen::Quaternionf& delta, float weight)
+{
+    constexpr float ZeroAnimWeightThreshold = 1e-4f;
+    const float alpha = std::clamp(weight, 0.0f, 1.0f);
+    if (alpha <= ZeroAnimWeightThreshold) return Eigen::Quaternionf::Identity();
+    Eigen::Quaternionf source = delta.normalized();
+    if (alpha >= 1.0f - ZeroAnimWeightThreshold) return source;
+    if (source.w() < 0) source.coeffs() *= -1.0f;
+    Eigen::Quaternionf blended(
+        (1.0f - alpha) * Eigen::Quaternionf::Identity().coeffs() + alpha * source.coeffs());
+    if (blended.squaredNorm() <= 1e-12f) return Eigen::Quaternionf::Identity();
+    return blended.normalized();
+}
+
+// UE AAT_LocalSpaceBase 的 ConvertTransformToAdditive 是逐通道局部差值：
+// translation = additive - reference，rotation = additive * inverse(reference)，
+// scale 保存 ratio-1。累加时 UE AccumulateWithAdditiveScale 做
+// translation += delta、rotation = delta * base、scale *= 1 + delta。
+inline LocalPose ApplyLocalSpaceAdditive(const LocalPose& base, const LocalPose& additive,
+    const LocalPose& reference, float alpha, size_t jointCount)
+{
+    if (alpha <= 0 || jointCount == 0) return base;
+    auto target = ReadKinematics(base, jointCount);
+    const auto add = ReadKinematics(additive, jointCount);
+    const auto ref = ReadKinematics(reference, jointCount);
+    const Eigen::Vector3f identityScale = Eigen::Vector3f::Ones();
+    for (size_t joint = 0; joint < jointCount; ++joint)
+    {
+        const Eigen::Quaternionf referenceInverse = ref[joint].rotation.conjugate().normalized();
+        const Eigen::Vector3f referenceScaleInverse =
+            ref[joint].scale.cwiseAbs().cwiseMax(Eigen::Vector3f::Constant(1e-6f)).cwiseInverse();
+        const Eigen::Quaternionf deltaRotation =
+            (add[joint].rotation * referenceInverse).normalized();
+        // UE ConvertTransformToAdditive 对平移使用父空间局部差值，不是
+        // additive * inverse(reference) 的旋转耦合平移；后者会把腿骨/手指的
+        // 参考平移再次旋转，落地叠加时出现折叠变形。
+        const Eigen::Vector3f deltaTranslation =
+            add[joint].translation - ref[joint].translation;
+        const Eigen::Vector3f deltaScale = add[joint].scale.cwiseProduct(referenceScaleInverse);
+        const Eigen::Quaternionf weightedRotation =
+            WeightedIdentityRotation(deltaRotation, alpha);
+        const Eigen::Vector3f weightedTranslation = deltaTranslation * alpha;
+        const Eigen::Vector3f weightedScale =
+            identityScale + (deltaScale - identityScale) * alpha;
+        // UE FTransform::AccumulateWithAdditiveScale：平移直接相加，旋转为 delta * base
+        // （预乘），不是 base * delta；顺序错会让旋转过的骨骼把 additive 甩飞。
+        target[joint].translation += weightedTranslation;
+        target[joint].rotation = (weightedRotation * target[joint].rotation).normalized();
+        target[joint].scale = target[joint].scale.cwiseProduct(weightedScale);
+    }
+    return WriteKinematics(base, target);
+}
+
+// 骨骼 mask 分层：只对 mask 命中的关节把 base 向 overlay 混合；未命中关节保持原值。
+inline LocalPose ApplyLayeredPose(const LocalPose& base, const LocalPose& overlay,
+    const std::vector<uint8_t>& mask, float alpha, size_t jointCount)
+{
+    if (alpha <= 0 || jointCount == 0) return base;
+    auto target = ReadKinematics(base, jointCount);
+    const auto layer = ReadKinematics(overlay, jointCount);
+    const float weight = std::clamp(alpha, 0.0f, 1.0f);
+    for (size_t joint = 0; joint < jointCount; ++joint)
+    {
+        if (joint >= mask.size() || mask[joint] == 0) continue;
+        target[joint].translation =
+            target[joint].translation * (1.0f - weight) + layer[joint].translation * weight;
+        target[joint].rotation =
+            target[joint].rotation.slerp(weight, layer[joint].rotation).normalized();
+        target[joint].scale =
+            target[joint].scale * (1.0f - weight) + layer[joint].scale * weight;
+    }
+    return WriteKinematics(base, target);
+}
+
+// 同 syncGroup 名的 marker 区间映射：A 的 marker 段相位映射到 B 的对应段。
+inline std::vector<float> BlendSpaceMarkerTimes(const Clip& clip, const std::string& name)
+{
+    std::vector<float> times;
+    for (const auto& marker : clip.sequence.syncMarkers)
+        if (marker.name == name) times.push_back(marker.time);
+    std::sort(times.begin(), times.end());
+    return times;
+}
+
+inline float MapBlendSpaceMarkerPhase(const Clip& a, float aTime,
+    const Clip& b, const std::string& name, float fallback)
+{
+    const auto aTimes = BlendSpaceMarkerTimes(a, name);
+    const auto bTimes = BlendSpaceMarkerTimes(b, name);
+    if (aTimes.size() < 2 || bTimes.size() < 2) return fallback;
+    const float aDuration = a.runtime ? a.runtime->duration() : 0;
+    const float bDuration = b.runtime ? b.runtime->duration() : 0;
+    if (aDuration <= 0 || bDuration <= 0) return fallback;
+    size_t index = 0;
+    while (index + 1 < aTimes.size() && aTime >= aTimes[index + 1]) ++index;
+    const float a0 = aTimes[index];
+    const float a1 = index + 1 < aTimes.size() ? aTimes[index + 1] : aTimes[0] + aDuration;
+    if (a1 <= a0) return fallback;
+    const float phase = std::clamp((aTime - a0) / (a1 - a0), 0.0f, 1.0f);
+    const float b0 = bTimes[index % bTimes.size()];
+    float b1 = bTimes[(index + 1) % bTimes.size()];
+    if (b1 <= b0) b1 += bDuration;
+    float mapped = b0 + phase * (b1 - b0);
+    if (mapped >= bDuration) mapped -= bDuration;
+    return mapped;
+}
+
+// UE AAT_RotationOffsetMeshSpace：先把基础姿态的局部旋转累乘成 mesh-space 旋转，
+// 在 mesh 空间按 identity→delta 的权重累加，再按修改后的父链转回局部。
+// delta = additiveMesh * inverse(referenceMesh)；平移/缩放不受影响。
+inline LocalPose ApplyMeshSpaceRotationAdditive(const LocalPose& base, const LocalPose& additive,
+    const LocalPose& reference, float alpha, const std::vector<Joint>& joints)
+{
+    if (alpha <= 0 || joints.empty()) return base;
+    const size_t jointCount = joints.size();
+    auto kinematics = ReadKinematics(base, jointCount);
+    const auto add = ReadKinematics(additive, jointCount);
+    const auto ref = ReadKinematics(reference, jointCount);
+    std::vector<Eigen::Quaternionf> baseMesh(jointCount);
+    std::vector<Eigen::Quaternionf> addMesh(jointCount);
+    std::vector<Eigen::Quaternionf> refMesh(jointCount);
+    std::vector<Eigen::Quaternionf> resultMesh(jointCount);
+    for (size_t joint = 0; joint < jointCount; ++joint)
+    {
+        const int parent = joints[joint].parent;
+        baseMesh[joint] = (parent >= 0 ? baseMesh[static_cast<size_t>(parent)] * kinematics[joint].rotation
+            : kinematics[joint].rotation).normalized();
+        addMesh[joint] = (parent >= 0 ? addMesh[static_cast<size_t>(parent)] * add[joint].rotation
+            : add[joint].rotation).normalized();
+        refMesh[joint] = (parent >= 0 ? refMesh[static_cast<size_t>(parent)] * ref[joint].rotation
+            : ref[joint].rotation).normalized();
+    }
+    const float weight = std::clamp(alpha, 0.0f, 1.0f);
+    for (size_t joint = 0; joint < jointCount; ++joint)
+    {
+        const Eigen::Quaternionf delta =
+            (addMesh[joint] * refMesh[joint].conjugate()).normalized();
+        const Eigen::Quaternionf weighted = WeightedIdentityRotation(delta, weight);
+        resultMesh[joint] = (weighted * baseMesh[joint]).normalized();
+    }
+    for (size_t joint = 0; joint < jointCount; ++joint)
+    {
+        const int parent = joints[joint].parent;
+        kinematics[joint].rotation = (parent >= 0
+            ? resultMesh[static_cast<size_t>(parent)].conjugate() * resultMesh[joint]
+            : resultMesh[joint]).normalized();
+    }
+    return WriteKinematics(base, kinematics);
+}
+
+// BlendProfile：weights 是按关节展开的白名单（未列出 = 0），最终权重 = alpha * weight。
+inline LocalPose ApplyLayeredWeights(const LocalPose& base, const LocalPose& overlay,
+    const std::vector<float>& weights, float alpha, size_t jointCount)
+{
+    if (alpha <= 0 || jointCount == 0) return base;
+    auto target = ReadKinematics(base, jointCount);
+    const auto layer = ReadKinematics(overlay, jointCount);
+    for (size_t joint = 0; joint < jointCount; ++joint)
+    {
+        const float weight = std::clamp(
+            alpha * (joint < weights.size() ? weights[joint] : 0.0f), 0.0f, 1.0f);
+        if (weight <= 0) continue;
+        target[joint].translation =
+            target[joint].translation * (1.0f - weight) + layer[joint].translation * weight;
+        target[joint].rotation =
+            target[joint].rotation.slerp(weight, layer[joint].rotation).normalized();
+        target[joint].scale =
+            target[joint].scale * (1.0f - weight) + layer[joint].scale * weight;
+    }
+    return WriteKinematics(base, target);
+}
 }
