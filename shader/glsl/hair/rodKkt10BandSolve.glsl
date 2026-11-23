@@ -846,7 +846,6 @@ struct RodKkt6Condensed
     RodV2Vector baseRight;   // 原始 b（恢复乘子用）
     RodV2Matrix inverseA;
     mat3 inverseS;
-    RodV2Matrix q;
     RodV2Vector gradient[3];
     vec3 gapRow;
     uint count;
@@ -866,7 +865,6 @@ RodKkt6Condensed RodKkt10Condense(uint point)
     result.baseRight = RodV2Vector(vec3(0), vec3(0));
     result.inverseA = RodV2Identity();
     result.inverseS = mat3(1);
-    result.q = RodV2Identity();
     result.gapRow = vec3(0);
     result.count = 0u;
     result.valid = false;
@@ -991,7 +989,6 @@ RodKkt6Condensed RodKkt10Condense(uint point)
                 }
             RodV2Set(q, i, j, value);
         }
-    result.q = q;
     result.lower = RodV2Multiply(q, baseLower);
     result.upper = RodV2Multiply(q, baseUpper);
     // 额外项 G S^-1 h，其中 h = -(gap/L)，即 -gapRow。
