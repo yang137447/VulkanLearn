@@ -321,7 +321,8 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     params.flags = {state.reset ? 1u : 0u, object->HasTressfxFollowBinding() ? 1u : 0u,
         !skinning.strandBones.empty() && !pose.palette.empty() ? 1u : 0u, RodGpuSweeps << 1u};
     params.timing = Eigen::Vector4f(static_cast<float>(state.receivedSeconds),
-        static_cast<float>(state.debtSeconds - steps * RodGpuStepSeconds), 0, 0);
+        static_cast<float>(state.debtSeconds - steps * RodGpuStepSeconds),
+        state.sdfHistoryValid ? 1.0f : 0.0f, 0.0f);
     for (uint32_t sample = 0; sample <= steps; ++sample)
     {
         const RodGpuPose sampled = state.Sample(
@@ -481,6 +482,8 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
             rodPipelines[3]->GetPipelineLayout(), 0, state.sdfHistorySets[frameSlot], nullptr);
         rodPipelines[3]->Dispatch(commandBuffer,
             (object->GetTressfxSdfCellCount() + 63) / 64, 1, 1);
+        // 本帧结尾才写入历史；下一帧的 solver 才能安全采样。
+        state.sdfHistoryValid = true;
     }
     vk::MemoryBarrier transfer;
     transfer.setSrcAccessMask(vk::AccessFlagBits::eShaderWrite)

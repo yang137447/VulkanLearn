@@ -239,6 +239,9 @@ void VulkanManager::CreateVkDevice()
     deviceFeatures
         .setDepthClamp(VK_TRUE)
         .setSamplerAnisotropy(VK_TRUE)
+        // 原型阶段开启缓冲边界检查：越界读写被钳制而不是触发 GPU 页错误，
+        // 用于把偶发 DeviceLost 变成可观察的数值异常。
+        .setRobustBufferAccess(supportedFeatures.robustBufferAccess)
         .setFragmentStoresAndAtomics(
             fragmentStoresAndAtomicsEnabled ? VK_TRUE : VK_FALSE)
         .setIndependentBlend(

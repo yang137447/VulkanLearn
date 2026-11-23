@@ -132,6 +132,10 @@ struct RodGpuObject
     RodGpuBuffer failureCandidate;
     uint32_t captureFailureSlot = UINT32_MAX;
     bool failureEvidenceWritten = false;
+    // SDF 历史缓冲在设备本地，创建时没有零初始化；只有 rodStoreSdf 真正写入过
+    // 才能被下一帧的 surface-velocity 采样读取。这个标志把“可读”变成显式状态，
+    // 防止首帧或 SDF 失效帧读到未初始化内容算出的越界索引。
+    bool sdfHistoryValid = false;
     std::array<RodGpuBuffer, GuideSimulationParamBufferCount> params;
     std::array<RodGpuBuffer, GuideSimulationParamBufferCount> samples;
     std::array<RodGpuBuffer, GuideSimulationParamBufferCount> implicitParams;
@@ -193,6 +197,7 @@ struct RodGpuObject
         gpuStatus = 0;
         ++simulationGeneration;
         reset = true;
+        sdfHistoryValid = false;
     }
 
     RodGpuPose Sample(double time) const

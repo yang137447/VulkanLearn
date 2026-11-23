@@ -13,6 +13,10 @@ layout(set = 0, binding = 26, std430) buffer RodSdfHistory
 
 float RodPreviousSdf(vec3 worldPosition)
 {
+    // 历史缓冲只有 rodStoreSdf 写过才可读；timing.z 由 Host 显式置位。
+    if (rod.timing.z <= 0.0f || sdfHistory.dims.x == 0u || sdfHistory.dims.y == 0u ||
+        sdfHistory.dims.z == 0u)
+        return SdfOutOfRangeDistance;
     vec3 local = (sdfHistory.worldToHair * vec4(worldPosition * 100.0, 1)).xyz;
     vec3 coordinate = (local - sdfHistory.originCell.xyz) / sdfHistory.originCell.w;
     if (any(lessThan(coordinate, vec3(0))) ||
@@ -42,7 +46,7 @@ float RodPreviousSdf(vec3 worldPosition)
 
 vec3 RodSdfSurfaceVelocity(vec3 position, vec3 normal, float currentDistance)
 {
-    if (rod.flags.x != 0u)
+    if (rod.flags.x != 0u || rod.timing.z <= 0.0f)
         return vec3(0);
     float elapsed = rod.timing.x - sdfHistory.timing.x;
     if (!(elapsed > 1.0e-7) || sdfHistory.timing.w == 0.0)

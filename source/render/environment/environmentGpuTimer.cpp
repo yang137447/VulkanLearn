@@ -160,10 +160,15 @@ void EnvironmentGpuTimer::CollectFrameResults(uint32_t swapchainImageIndex)
         const EnvironmentGpuProduct product =
             static_cast<EnvironmentGpuProduct>(productIndex);
         std::array<uint64_t, 2> timestamps{};
-        rendererBackend->ReadTimestampQueryPair(
+        // 统计路径不能因为一次 timestamp 还没就绪就杀掉进程：
+        // 与 gpuPassTimer 一致，非阻塞读取，未就绪就丢弃本轮到样本。
+        if (!rendererBackend->TryReadTimestampQueryPair(
             queryPool,
             GetQueryIndex(swapchainImageIndex, product, false),
-            timestamps);
+            timestamps))
+        {
+            continue;
+        }
 
         uint64_t timestampMask = std::numeric_limits<uint64_t>::max();
         if (timestampValidBits < 64)
