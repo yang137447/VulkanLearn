@@ -796,6 +796,49 @@ alpha_start = min over lanes of 上述比例（clamp 到 [1e-6, 1]）
 「线搜索耗尽」那一类几乎没动——后者另有原因，而且现在成了主要来源（761/893）。
 下一轮该改的是这一类，而它需要的正是上一轮没搭成的那条可自证通道。
 
+## 第十七轮：诊断通道已自证可用，但 shared 内存到顶了
+
+### 通道自证：通过
+
+上一轮说 `energies` 通道「读不出新变量」——那个结论现在可以修正为
+**通道本身是好的，是我写进去的值确实是 0**。做法：把 `diagnostic` 这个字段
+（它的 `v2Maximum`/`v2Merit`/`v2Iterations` 一直在被我正确读出）改成写已知常量
+
+```glsl
+rodState.guides[slot].diagnostic = vec4(float(failure), 42.0, 43.0, float(v2Iterations));
+```
+
+实测侧车 `row[1]` 全为 **42**、`row[2]` 全为 **43**，自检 PASS。
+
+顺带纠正结构认知：`diagnostic` 这一路一直是可靠的，所以**前几轮读到的
+「reason = 0」是真的**——`v2DomainValid` 在最终 measure 上确实没有失败。
+那个否定结论可以保留，`v2DomainValid` 不再是嫌疑。
+
+### 但真正要测的量加不进去了
+
+把 `diagnostic.y` 换成「最后一次试算的 merit / 迭代起点 merit」之后，
+2000 guide 的正式场景**连续两次 device-lost**（`-1073740791`），150 帧和 50 帧都一样。
+这次改动只加了两个 `shared float`（8 字节），不碰物理。
+
+结论：**V3 的 KKT 管线已经贴住 48 KB 的 `maxComputeSharedMemorySize` 上限**，
+再加任何 shared 变量都会把管线打坏。这解释了为什么三番两次的探针都不成功——
+不是写错，是没有空间。
+
+### 下一轮：先腾 shared，再测
+
+死掉的 10 宽求解器还占着约 17 KB shared（`rodKktFactorUpper[32]` 12.8 KB、
+`rodKktBand[2]` 2.5 KB、`rodKktFactorRight/Direction`、`work*` 三个工作区）。
+`RodKkt10SolveBand` / `RodKkt10FactorNode` / `RodKkt10FactorSupernode` /
+`RodKktEquilibratedPivot` / `RodKkt10AssemblePoint` / `RodRkt10ProbeFactor6`
+及其探针驱动都已经没有调用点（默认路径走压缩 6x6 + CR）。
+
+删除它们有三个收益：腾出诊断与后续功能需要的 shared 空间；shared 从约 43 KB
+降到约 26 KB，虽然还不够翻倍 occupancy（需要 ≤ 24 KB）但更接近；编译期也能少一堆死代码。
+风险是纯粹的死代码删除，编译器会逐条报错，因此可验证。
+
+当前代码已回退到上一次验证过的状态：`SC_tressfx_rod_animated` 跑 100 帧 exit 0、
+validation 0 条消息、稳态 6 个 guide 失败。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
