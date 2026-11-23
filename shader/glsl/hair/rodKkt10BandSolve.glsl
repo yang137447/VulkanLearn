@@ -1053,15 +1053,14 @@ uint RodKkt10SolveBand(uint count)
 }
 
 // ===========================================================================
-// 压缩到 6x6 的替代求解（VL_ROD_KKT10_CONDENSE_PROBE）
+// 压缩到 6x6 的求解（默认路径）
 //
-// 状态：压缩代数已被探针在真实状态上钉住（Q 用 A^-1 g 时 |Q G| = 0、
-// 乘子恢复 1e-6 以内），但**压缩系统本身的求解**还没通过：换成它驱动时
-// 带活跃接触的 guide 不收敛（无接触的点/guide 正常）。第六轮的"方向一致"
-// 结论是空验证——它只在收敛状态上比较，那时 dx 本身 ~ 0，符号错也看不出来。
-// 下一步要先量 |M d - b_right|（压缩系统的求解残差），这个量与是否收敛无关。
+// 状态：Q 改成**逐项显式**构造后（用 RodKktOuter 拼出来的矩阵不是 g t^T），
+// 单接触点的解析恒等式 |Q G| = 0 成立，压缩方程残差 |M d - b|/|b| 到 1e-10 量级。
+// 这两个量就是这条构造的已知答案自检；第六/八轮各自的「0 / 3e-6」读数都是假读数。
+// 探针驱动（RodKkt10ProbeCondensed / ProbeSolveCondensed / ProbeCompare）只在
+// 定义 VL_ROD_KKT10_CONDENSE_PROBE 时被 main 调用，平时是死代码。
 // ===========================================================================
-#ifdef VL_ROD_KKT10_CONDENSE_PROBE
 // 6x6 小工具。RodV2Matrix 的 mat3 是列主序，元素 (row,column) 在 mat3[column][row]，
 // 与 RodV2Entry/RodV2Set 及 RodV2Multiply 的乘法律一致。
 // 6x6 的 A^-T v（Q 的右因子需要它；A 不对称，不能省）。
@@ -1201,21 +1200,34 @@ RodKkt6Condensed RodKkt10Condense(uint point)
     }
     mat3 inverseS = inverse(s);
     result.inverseS = inverseS;
-    // Q = I - G S^-1 G^T A^-1 = I - sum_{i,j} S^-1[i][j] g_i (A^-T g_j)^T
-    // 注意右因子必须用 A^-T：A 是不对称的（RodV2Tangent 的 6x6 块），用 A^-1 会让
-    // Q G lambda != 0，压缩方程残差就会出现与 lambda 同阶的偏置（探针 checkB 实测
-    // 约 0.9 * max|lambda|/F）。S 与乘子恢复用的是 A^-1，不要混。
-    RodV2Matrix update = RodV2Zero();
-    for (uint row = 0u; row < 3u; ++row)
-        for (uint column = 0u; column < 3u; ++column)
+    // Q = I - G S^-1 G^T A^-1
+    //   element(i,j) = delta_ij - sum_{row,column} S^-1[row][column] * g_row[i] * t_column[j]
+    // 其中 t_column = A^-T g_column（G^T A^-1 的第 column 行）。g_row 的角向分量为 0，
+    // 所以只有 i<3 的行有贡献。
+    //
+    // 这里**逐项显式写**而不是用 RodKktOuter + RodV2Add：单接触点上
+    // Q g = g - (1/s) g (g^T A^-1 g) = 0 是解析恒等式，探针实测却给出 |Q G| ~ 0.74，
+    // 说明用 RodKktOuter 拼出来的矩阵不是 g t^T。显式写 index 后
+    // 「单接触点 |Q G| 必须为 0」就成了这条构造的已知答案自检。
+    RodV2Matrix q = RodV2Identity();
+    for (uint i = 0u; i < 6u; ++i)
+        for (uint j = 0u; j < 6u; ++j)
         {
-            float weight = inverseS[column][row];
-            if (weight == 0.0)
-                continue;
-            update = RodV2Add(update,
-                RodKktOuter(result.gradient[row], applied[column]));
+            float value = i == j ? 1.0 : 0.0;
+            for (uint row = 0u; row < 3u; ++row)
+                for (uint column = 0u; column < 3u; ++column)
+                {
+                    float weight = inverseS[column][row];
+                    if (weight == 0.0)
+                        continue;
+                    float gValue = i < 3u ? result.gradient[row].linear[i] :
+                        result.gradient[row].angular[i - 3u];
+                    float tValue = j < 3u ? appliedTransposed[column].linear[j] :
+                        appliedTransposed[column].angular[j - 3u];
+                    value -= weight * gValue * tValue;
+                }
+            RodV2Set(q, i, j, value);
         }
-    RodV2Matrix q = RodV2Add(RodV2Identity(), RodV2Negative(update));
     result.q = q;
     result.lower = RodV2Multiply(q, baseLower);
     result.upper = RodV2Multiply(q, baseUpper);
@@ -1656,6 +1668,5 @@ void RodKkt10ProbeCompare(uint lane, RodKkt10Vector working)
     atomicMax(rodKktProbeD, floatBitsToUint(solveResidual / max(rightScale, 1.0)));
     atomicMax(rodKktProbeE, floatBitsToUint(checkQ));
 }
-#endif // VL_ROD_KKT10_CONDENSE_PROBE
 
 #endif

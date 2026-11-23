@@ -963,18 +963,17 @@ void main()
                 break;
             }
 #ifdef VL_ROD_V3_KKT10_SOLVE
-            // 10 宽全主元块 Thomas（已证路径）。压缩到 6x6 的替代实现
-            // （RodKkt10SolveCondensed）还在验证中：带活跃接触的 guide 仍不收敛，
-            // 打开 VL_ROD_KKT10_CONDENSE_PROBE 才编译。
+            // 压缩到 6x6（消掉 m<=3 个局部接触乘子）+ 顺序块 Thomas，再按恒等式恢复
+            // 乘子。压缩方程残差 |M d - b|/|b| 与 |Q G| 实测都在 1e-10 量级。
+            // 10 宽全主元路径（RodKkt10SolveBand）保留作对照。
             RodKkt10Vector kktDirection;
-            uint bandStatus = RodKkt10SolveBand(32u);
+            uint bandStatus = RodKkt10SolveCondensed(lane, kktDirection);
             if (bandStatus != 0u)
             {
                 RodFail(4u);
                 barrier();
                 break;
             }
-            kktDirection = rodKktDirection[lane];
 #ifdef VL_ROD_KKT10_CONDENSE_PROBE
             RodKkt10ProbeCompare(lane, rodKktDirection[lane]);
 #endif
