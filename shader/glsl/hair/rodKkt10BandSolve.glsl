@@ -2,9 +2,15 @@
 #define VL_ROD_KKT10_BAND_SOLVE
 
 #include "rodV3Kkt10.glsl"
-// 压缩后的 6x6 带宽系统走既有的分布式块循环约化（RodCrSolveBand32）。
+// 压缩后的 6x6 带宽系统走块循环约化。两种实现二选一：
+//   VL_ROD_CR_SHUFFLE：寄存器 + subgroup shuffle，除状态字外不占 shared；
+//   否则：shared 数组版本（rodCrBand.glsl，约 20 KB shared）。
+#ifdef VL_ROD_CR_SHUFFLE
+#include "rodCrBandShuffle.glsl"
+#else
 // 这里直接 include，因为 kernel 只在 VL_ROD_V3_CR_SOLVE 下才包含它。
 #include "rodCrBand.glsl"
+#endif
 
 // ===========================================================================
 // CosseratImplicitV3 的 10 分量活跃集 KKT 带状求解。
@@ -1044,16 +1050,17 @@ RodKkt6Condensed RodKkt10Condense(uint point)
 // 每 warp 指令数约从 83k 降到 12k（顺序 Thomas 仍然全 lane 冗余）。
 // 从 CR 解恢复乘子：dlambda = S^-1 G^T A^-1 (A dx + L dx- + U dx+ - b)。
 // 邻居的方向取自 rodCrSolution（RodCrSolveBand32 结尾已有 barrier）。
+// 邻居解显式传入：shuffle 版本没有 rodCrSolution 可读。
 vec3 RodKkt10RecoverMultipliers(uint lane, RodKkt6Condensed condensed,
-    RodV2Vector direction)
+    RodV2Vector direction, RodV2Vector previousSolution, RodV2Vector nextSolution)
 {
     if (!condensed.valid || condensed.count == 0u)
         return vec3(0);
     RodV2Vector value = RodV2Multiply(condensed.diagonal, direction);
     if (lane > 0u)
-        value = RodV2Add(value, RodV2Multiply(condensed.baseLower, rodCrSolution[lane - 1u]));
+        value = RodV2Add(value, RodV2Multiply(condensed.baseLower, previousSolution));
     if (lane < 31u)
-        value = RodV2Add(value, RodV2Multiply(condensed.baseUpper, rodCrSolution[lane + 1u]));
+        value = RodV2Add(value, RodV2Multiply(condensed.baseUpper, nextSolution));
     value = RodV2Add(value, RodV2Vector(-condensed.baseRight.linear,
         -condensed.baseRight.angular));
     RodV2Vector applied = RodV2Multiply(condensed.inverseA, value);
@@ -1074,10 +1081,24 @@ uint RodKkt10SolveCondensed(uint lane, out RodKkt10Vector direction)
     // 「32 点顺序 Thomas 由所有 lane 冗余执行」——后者每 warp 约 32*(6^3/3+7*36)
     // 条指令，CR 把它变成常数轮（每轮一次 6x6 求逆 + 两次块乘）。
     RodV2Vector solution = RodV2Vector(vec3(0), vec3(0));
+#ifdef VL_ROD_CR_SHUFFLE
+    if (!RodCrSolveBandShuffle(lane, condensed.lower, condensed.diagonal,
+            condensed.upper, condensed.right, solution))
+        return 3u;
+    // 乘子恢复需要两侧邻居的方向；shuffle 版本没有共享解数组，这里现取。
+    RodV2Vector previousSolution =
+        RodCrShuffleVector(solution, lane > 0u ? lane - 1u : lane);
+    RodV2Vector nextSolution =
+        RodCrShuffleVector(solution, lane < 31u ? lane + 1u : lane);
+    vec3 multiplier = RodKkt10RecoverMultipliers(lane, condensed, solution,
+        previousSolution, nextSolution);
+#else
     if (!RodCrSolveBand32(lane, condensed.lower, condensed.diagonal, condensed.upper,
             condensed.right, solution))
         return 3u;
-    vec3 multiplier = RodKkt10RecoverMultipliers(lane, condensed, solution);
+    vec3 multiplier = RodKkt10RecoverMultipliers(lane, condensed, solution,
+        rodCrSolution[lane - 1u], rodCrSolution[lane + 1u]);
+#endif
     direction.values[0] = solution.linear.x;
     direction.values[1] = solution.linear.y;
     direction.values[2] = solution.linear.z;
