@@ -691,16 +691,71 @@ R14→R17 已多次进入这一循环。经用户决定，本轮不再以该核�
 - 截至该 HEAD 的验证沿用上一节：44 个目标全量构建、ctest `-j 32` 4060/4060 连续两轮、
   `main_game`（worker 2×3、worker 1）与 `main_editor` 在 `SC_fracture_playground` 上
   `--exit-after-frames` 均退出 0；未安装 validation layer，故仍无 validation 结论。
-- 默认 RVTv2 场景仍未运行，且不是补一次冒烟就能关闭：本机三个资源入口（topic 的
-  `VukanLearnResources`、共享 `D:\Github\VukanLearnResources`、`pegasus-work`）都没有
-  `Generated/Validation/TerrainCompositedVT`，也没有 `Generated/HoudiniPegasusIsland`。
-  后者的生成入口见 `tool/houdini-terrain-import/README.md`：需要 Houdini/hython 对
-  Pegasus 工程 landscape 采样出 `decoded/island2k`，再经
-  `prepare_pegasus_4km.py` + 切片 + 合场景生成；该导出不在本机。本地只有 PolyHaven
-  4K 贴图（`pegasus-work/polyhaven`），够重建图层贴图，不够生成岛屿高度/TR 场景。
-  关闭该项的前置条件是把 Houdini 导出（或现成 `Generated/HoudiniPegasusIsland`）放进
-  资源工作树，之后依次执行 `build_composited_fixture.py --generate`、
-  `main_editor --terrain-vt-cook`、`vl_export_game --verify-package` 与默认场景
-  `main_game` 冒烟；结果另行记录，不预填通过。
+- 默认 RVTv2 场景当时未运行；本节写完后同日被推翻，见下一节。当时的误判是只检查了
+  三个资源入口既有的 `Generated/`，漏掉了本机 Downloads 里的
+  `ProjectFiles_LandscapeWorkflow3.zip`（Pegasus 工程原始 landscape 数据）与已安装的
+  Houdini 22.0.508。实际上全链路可在本机重建。
 - 因此本次收尾的可交付状态是：**代码、构建、地形模块测试、非 RVT 冒烟与文档门禁关闭；
   默认 RVTv2 场景与 R17 包仍为显式延期**，与上节延期表一致，不改写为通过。
+
+### 追加：本机重建 Pegasus 资产、Cook 默认 RVTv2 场景并冒烟（2026-11-23 下午）
+
+前置：Houdini 22.0.508（`C:\Software\Houdini 22.0.508\bin\hython.exe`）、Python 3.13
+（numpy 2.5.5 / Pillow 13.0.0）、本机 Downloads 的
+`ProjectFiles_LandscapeWorkflow3.zip`（605,943,562 B）。资源写进 topic 资源工作树
+`VukanLearnResources` 的 `Generated/`（被忽略，不进分支）。
+
+重建步骤与实测结果：
+
+1. 解压 zip 到 `pegasus-work/landscape`，取
+   `SourceContent/Pegasus/Landscape/Landscape Heightfield Layers/*.bgeo.sc`。
+2. `hython export_pegasus_island.py --samples 2017 --layers-file ... --erode-file ...`
+   → `decoded/island2k`：island 4032×4032 m，height 0.013..424.424，mask 常量 0，
+   bedrock/debris/sediment/water 各层均有范围；六层约 25 s/层。
+3. `make_water_textures.py` → `Generated/PegasusWater/Textures/Source`（首次缺该资源，
+   `prepare_pegasus_4km.py` 会直接报错）。
+4. `prepare_pegasus_4km.py --export-root decoded/island2k --resource-root <res>
+   --output-relative Generated/HoudiniPegasusIsland`：size 4032 m、2017 采样、
+   coverage rock .0393 / water .1024 / debris .1334 / sediment .0261 / base .6917。
+5. `bake_global_maps.py`（`--rotation 270`）→ `Global/T_global_{colour,masks}.json`，
+   aoMean 0.8689、wetMean 0.3809。原实现没跑这一步，MI 的 `globalColour/globalMasks`
+   会指向不存在的资源。
+6. `split_pegasus_tiles.py --tile-grid 4 --tile-resolution 512 --heightmap-margin 1
+   --lod-levels 3 --lod-distances-m 1250 2500 --tile-size-m 1008 --page-tiles-per-side 8
+   --asset-prefix houdini_island_tile`：16 块、sampleGrid 2051、tileSamples 515。
+7. `make_water_plane.py --output .../Water/water_plane.obj`（16 km 见方）+ SM 描述。
+8. `assemble_pegasus_tiles.py --water-plane-mesh Generated/HoudiniPegasusIsland/Water/SM_water_plane.json`
+   → `SC_terrain_pegasus_4x4.json`（16 地形 + SeaSurface + Echo Player + Sun + Camera +
+   Environment = 21 objects）、`world.author.json`、`Published/manifest.json`。
+9. `build_composited_fixture.py --full-island --new-v2 --weight-source CoverageAtlas`
+   → `Variants/RVTv2_Full4x4_R8192_Default_CoverageAtlas`：87 文件（16 TR、16 基础 MI +
+   16 detail MI、Author 高度/Paint 副本、capture_plan）。该命名空间不存在，属首次生成。
+10. `main_editor --terrain-vt-cook --initial-scene <V2 scene> --exit-after-frames 2`
+    → `VT/worldV2/RVTv2_Full4x4_R8192_Default_CoverageAtlas/manifest.json`，
+    208 文件 / 486.6 MiB（author-inputs + inputs + runtime + 一个 `.vlcvt`）。
+11. 默认入口冒烟（`config/config.json` 未改，仍指向该 V2 场景）：
+    - `main_game --exit-after-frames 120 --worker-thread-count 2 --no-dev-ui`：exit 0，
+      epoch 52 进入 interactive，`validAtRawTargetPlusOne=3271/3271`、`rootOnly=0`、
+      unresolved/incorrectIdentity 均 0。
+    - `main_game ... --worker-thread-count 1`：exit 0，epoch 95 同样 3271/3271。
+    - `main_editor --exit-after-frames 60`：exit 0，epoch 41 时 4417/4417，
+      `RVT_EDITOR_BASELINE_LOAD` 每块 success、failedReads 0。
+    日志在 `artifacts/terrain-rvt-wrapup/`（被忽略）。
+
+重建时暴露并已修复的三处管线缺陷（都属资产生成工具，不改运行时）：
+
+- `assemble_pegasus_tiles.py` 现在为每块写一份 `*_detail.json` 并回写
+  `detailMaterialInstancePath`；此前生成的 TR 没有 detail MI，
+  `build_composited_fixture.py` 会在读 detail 时 `KeyError`。
+- `assemble_pegasus_tiles.py` 新增 `_share_global_layer_arrays`：岛屿 7 层贴图是全局的，
+  切片却给每块写了字节相同的数组描述；RVT 的 sourceSet 要求所有地形共享同一套
+  albedo/normal/pbr（否则 World 加载报
+  `must share the same albedo/normal/pbr arrays`），现在统一指向第一块，`layerWeights`
+  仍按块保留。
+- `make_water_plane.py` 新增 `--mesh-descriptor/--resource-root/--material-instance`，
+  同时产出 `SM_water_plane.json`；此前只有 `.obj`，场景 `modelPath` 无法解析。
+
+仍未关闭（不因本节改判）：R17 冻结包与 `vl_export_game --verify-package`、在途/故障/
+分账/telemetry 的正式验收、P4 全量与各阶段独立签署、V1 19.42 GB 清退。本节只是
+“本机可重建 + 默认场景能起量并收敛”的冒烟证据，不是冻结核对表验收；机器未装
+validation layer，也没有性能/预算结论。
