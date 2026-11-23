@@ -20,8 +20,9 @@ Service 整合仍在变化；本轮仅核查已接入的 joint switch 路径，
 
 ## 冻结身份与独立 CPU 方法
 
-读取 [API 交接](../../artifacts/terrain-rvt-production/p4-world-bindings-api-handoff.md)
+读取原执行机的 `artifacts/terrain-rvt-production/p4-world-bindings-api-handoff.md`
 和 `artifacts/terrain-rvt-production/p4-world-bindings-native/tests.log`。
+两者都在被 Git 忽略的 `artifacts/` 下，未随仓库迁移，因此不写成仓库内链接。
 交接测试是自带 main/Check 的原始 CPU harness，**不是 GoogleTest 注册套件**，
 本轮按四组报告，不将其错误计为四项 GTest。
 

@@ -936,9 +936,10 @@ R8 frozen quality decoder按实际owner dictionary、surface dictionary、每像
 validAtTargetPlusBias=14095/16384，缺口2289（86.028% valid）。
 
 2289个不合格sample全部来自`terrain|Landscape_08`，不是跨surface身份错误。
-独立输出的逐sample结果保存于：
-[r8-quality-failure-raw-investigation.json](../../artifacts/terrain-rvt-production/p5/C010r8-tour-w2-b04/r8-quality-failure-raw-investigation.json)
-（SHA256 `ef1e885914d10344815bd41ead3076ba2fd47dd5e5d4ee48f1de519c937f4c2f`）。
+独立输出的逐sample结果保存于原执行机的
+`artifacts/terrain-rvt-production/p5/C010r8-tour-w2-b04/r8-quality-failure-raw-investigation.json`
+（`artifacts/` 被 Git 忽略、未随仓库迁移，故此处不写仓库内链接；
+SHA256 `ef1e885914d10344815bd41ead3076ba2fd47dd5e5d4ee48f1de519c937f4c2f`）。
 实际过粗解析的分布为：
 
 | requested mip → actual mip | 失败tap/branch计数 |
@@ -1013,8 +1014,8 @@ R8报告的complete=true只代表capture ABI本身完整，不等于99% quality�
 
 可执行CPU复算与结果：
 
-- [independent-source-math.py](../../artifacts/terrain-rvt-production/p5/R10-twofail-fresh-cpu-audit/independent-source-math.py)
-- [independent-source-math.json](../../artifacts/terrain-rvt-production/p5/R10-twofail-fresh-cpu-audit/independent-source-math.json)
+- `artifacts/terrain-rvt-production/p5/R10-twofail-fresh-cpu-audit/independent-source-math.py`（原执行机，未入库）
+- `artifacts/terrain-rvt-production/p5/R10-twofail-fresh-cpu-audit/independent-source-math.json`（原执行机，未入库）
   SHA256 `54ddbb687c9e273fc281a3c60897399aae8305cb99e720d22bcc6bc60b25730e`。
 
 **结论：这两张raw的winner→期望feedback页编码→CPU选择公式间未证出一个
