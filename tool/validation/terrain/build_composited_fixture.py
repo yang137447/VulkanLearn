@@ -169,12 +169,10 @@ def read_json(path):
 
 
 def require_topic_root(code_root):
+    # 只认代码工作树的同级资源工作树，并用分支名防止写进共享 master 或其他 topic；
+    # 不写死某台机器的绝对路径，换机后同样的目录布局即可通过。
     resource_root = code_root.parent / "VukanLearnResources"
-    expected = Path(
-        "D:/YYBWorkSpace/GitHub/VulkanLearn-worktrees/terrain-openworld/"
-        "VukanLearnResources"
-    )
-    if resource_root.resolve() != expected.resolve() or not resource_root.is_dir():
+    if not resource_root.is_dir() or resource_root.is_symlink():
         raise ValueError("Fixture output must use the existing terrain-openworld resource worktree")
     branch = subprocess.check_output(
         ["git", "-C", str(resource_root), "branch", "--show-current"], text=True
