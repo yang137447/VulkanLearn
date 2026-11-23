@@ -33,27 +33,10 @@
 //     由牛顿 merit 单调下降 + 每步 r10 范数检查替代。
 // ===========================================================================
 
-struct RodKkt10Band
-{
-    RodKkt10Matrix lower;
-    RodKkt10Matrix diagonal;
-    RodKkt10Matrix upper;
-    RodKkt10Vector residual;
-};
 
 // 装配双槽：point 的块 + supernode 需要的次点块。
-shared RodKkt10Band rodKktBand[2];
 // 块三对角因子：上块（10x10）与右端（10）。按 point 索引。
-shared RodKkt10Matrix rodKktFactorUpper[32];
-shared RodKkt10Vector rodKktFactorRight[32];
-shared RodKkt10Vector rodKktDirection[32];
-shared uint rodKktNextPoint[32];
 // 主元工作区。20x20 联立块 + 20x11 右端 + 回代解 + 行列缩放 / 置换。
-shared float rodKktWorkMatrix[400];
-shared float rodKktWorkRight[220];
-shared float rodKktSolution[220];
-shared float rodKktColumnScale[20];
-shared uint rodKktPermutation[20];
 // 当前 substep 的胶囊场采样维（rod.capsules 的第一维 = substep 或 substep+1）。
 // 信任域：位置步不超过段长的这个比例，旋转步不超过这个弧度。
 const float RodKktStepFraction = 0.25;
@@ -538,24 +521,6 @@ void RodKkt10BuildContacts(uint point, vec3 position, out RodKkt10Contact contac
 }
 
 // 由 lane == point 调用：一次装配出该点的 10x10 下 / 对角 / 上块与 10 残差。
-RodKkt10Band RodKkt10AssemblePoint(uint point)
-{
-    RodKkt10Band band;
-    RodV2Matrix baseLower = point > 0u ? RodV2Tangent(point, point - 1u) : RodV2Zero();
-    RodV2Matrix baseDiagonal = RodV2Tangent(point, point);
-    RodV2Matrix baseUpper = point < 31u ? RodV2Tangent(point, point + 1u) : RodV2Zero();
-    RodV2Vector baseResidual = RodV2Residual(point);
-    RodKkt10Contact contacts[3];
-    RodKkt10BuildContacts(point, RodKkt10PointPosition(point), contacts);
-    RodKkt10Edge incoming;
-    RodKkt10Edge outgoing;
-    RodKkt10BuildEdges(point, incoming, outgoing);
-    RodKkt10AssembleRow(baseLower, baseDiagonal, baseUpper, baseResidual,
-        v2Positions[point].w != 0.0, contacts, incoming, outgoing,
-        v2ForceScale, v2LengthScale,
-        band.lower, band.diagonal, band.upper, band.residual);
-    return band;
-}
 
 // 只算 10 残差（不装配切线）。线搜索要反复测量，切线装配太贵。
 // 每一项都必须与 RodKkt10AssembleRow 的残差行保持一致。
@@ -805,260 +770,13 @@ void RodKkt10Measure(uint lane, bool incrementValid)
 // 逐项对应 CPU rodAxialKkt.cpp 的 EquilibratedPivot 与 SolveAxialContactSystem。
 // 工作区在 shared：本 workgroup 只有一个 warp，所有 lane 冗余执行同一段代码，
 // 写入的是同一组值，因此不需要（也不该）为每个 lane 复制一份 private 数组。
-bool RodKktEquilibratedPivot(uint dimension, out float pivotRatio)
-{
-    pivotRatio = 1.0;
-    for (uint row = 0u; row < dimension; ++row)
-    {
-        float maximum = 0.0;
-        for (uint column = 0u; column < dimension; ++column)
-            maximum = max(maximum, abs(rodKktWorkMatrix[row * 20u + column]));
-        float scale = maximum > 0.0 ? 1.0 / maximum : 1.0;
-        for (uint column = 0u; column < dimension; ++column)
-            rodKktWorkMatrix[row * 20u + column] *= scale;
-        for (uint entry = 0u; entry < 11u; ++entry)
-            rodKktWorkRight[row * 11u + entry] *= scale;
-    }
-    for (uint column = 0u; column < dimension; ++column)
-    {
-        float maximum = 0.0;
-        for (uint row = 0u; row < dimension; ++row)
-            maximum = max(maximum, abs(rodKktWorkMatrix[row * 20u + column]));
-        rodKktColumnScale[column] = maximum > 0.0 ? 1.0 / maximum : 1.0;
-        rodKktPermutation[column] = column;
-        for (uint row = 0u; row < dimension; ++row)
-            rodKktWorkMatrix[row * 20u + column] *= rodKktColumnScale[column];
-    }
-    float maximumPivot = 0.0;
-    float minimumPivot = 3.402823466e38;
-    for (uint column = 0u; column < dimension; ++column)
-    {
-        float largest = 0.0;
-        uint pivotRow = column;
-        uint pivotColumn = column;
-        for (uint row = column; row < dimension; ++row)
-            for (uint entry = column; entry < dimension; ++entry)
-                if (abs(rodKktWorkMatrix[row * 20u + entry]) > largest)
-                {
-                    largest = abs(rodKktWorkMatrix[row * 20u + entry]);
-                    pivotRow = row;
-                    pivotColumn = entry;
-                }
-        if (largest == 0.0 || isnan(largest) || isinf(largest))
-            return false;
-        maximumPivot = max(maximumPivot, largest);
-        minimumPivot = min(minimumPivot, largest);
-        for (uint entry = 0u; entry < dimension; ++entry)
-        {
-            float value = rodKktWorkMatrix[column * 20u + entry];
-            rodKktWorkMatrix[column * 20u + entry] = rodKktWorkMatrix[pivotRow * 20u + entry];
-            rodKktWorkMatrix[pivotRow * 20u + entry] = value;
-        }
-        for (uint entry = 0u; entry < 11u; ++entry)
-        {
-            float value = rodKktWorkRight[column * 11u + entry];
-            rodKktWorkRight[column * 11u + entry] = rodKktWorkRight[pivotRow * 11u + entry];
-            rodKktWorkRight[pivotRow * 11u + entry] = value;
-        }
-        for (uint row = 0u; row < dimension; ++row)
-        {
-            float value = rodKktWorkMatrix[row * 20u + column];
-            rodKktWorkMatrix[row * 20u + column] = rodKktWorkMatrix[row * 20u + pivotColumn];
-            rodKktWorkMatrix[row * 20u + pivotColumn] = value;
-        }
-        uint original = rodKktPermutation[column];
-        rodKktPermutation[column] = rodKktPermutation[pivotColumn];
-        rodKktPermutation[pivotColumn] = original;
-        for (uint row = column + 1u; row < dimension; ++row)
-        {
-            float factor = rodKktWorkMatrix[row * 20u + column] /
-                rodKktWorkMatrix[column * 20u + column];
-            for (uint entry = column; entry < dimension; ++entry)
-                rodKktWorkMatrix[row * 20u + entry] -=
-                    factor * rodKktWorkMatrix[column * 20u + entry];
-            for (uint entry = 0u; entry < 11u; ++entry)
-                rodKktWorkRight[row * 11u + entry] -=
-                    factor * rodKktWorkRight[column * 11u + entry];
-        }
-    }
-    // CPU 阈值：64 * n * epsilon(double)。GPU 用 fp32 epsilon，比例相同。
-    if (minimumPivot <= 64.0 * float(dimension) * 1.1920928955078125e-7 * maximumPivot)
-        return false;
-    pivotRatio = minimumPivot / maximumPivot;
-    for (int row = int(dimension) - 1; row >= 0; --row)
-        for (uint entry = 0u; entry < 11u; ++entry)
-        {
-            float value = rodKktWorkRight[uint(row) * 11u + entry];
-            for (uint column = uint(row + 1); column < dimension; ++column)
-                value -= rodKktWorkMatrix[uint(row) * 20u + column] *
-                    rodKktSolution[column * 11u + entry];
-            rodKktSolution[uint(row) * 11u + entry] =
-                value / rodKktWorkMatrix[uint(row) * 20u + uint(row)];
-        }
-    for (uint row = 0u; row < dimension; ++row)
-        for (uint entry = 0u; entry < 11u; ++entry)
-            rodKktWorkRight[rodKktPermutation[row] * 11u + entry] =
-                rodKktColumnScale[rodKktPermutation[row]] *
-                    rodKktSolution[row * 11u + entry];
-    return true;
-}
 
 // 单点 10x10：把对角 / 上块 / 残差装进工作区后做一次主元分解。
-bool RodKkt10FactorNode(RodKkt10Matrix diagonal, RodKkt10Matrix upper,
-    RodKkt10Vector residual, out float pivotRatio)
-{
-    for (uint row = 0u; row < 10u; ++row)
-    {
-        for (uint column = 0u; column < 10u; ++column)
-        {
-            rodKktWorkMatrix[row * 20u + column] = diagonal.values[row * 10u + column];
-            rodKktWorkRight[row * 11u + column] = upper.values[row * 10u + column];
-        }
-        rodKktWorkRight[row * 11u + 10u] = residual.values[row];
-    }
-    return RodKktEquilibratedPivot(10u, pivotRatio);
-}
 
 // 局部秩亏时把下一点并入 supernode（CPU 的 20x20 联立分支）。
-bool RodKkt10FactorSupernode(RodKkt10Matrix diagonal, RodKkt10Matrix upper,
-    RodKkt10Vector residual, out float pivotRatio)
-{
-    for (uint row = 0u; row < 20u; ++row)
-    {
-        for (uint column = 0u; column < 20u; ++column)
-            rodKktWorkMatrix[row * 20u + column] = row < 10u ?
-                (column < 10u ? diagonal.values[row * 10u + column] :
-                    upper.values[row * 10u + column - 10u]) :
-                (column < 10u ? rodKktBand[1u].lower.values[(row - 10u) * 10u + column] :
-                    rodKktBand[1u].diagonal.values[(row - 10u) * 10u + column - 10u]);
-        for (uint column = 0u; column < 10u; ++column)
-            rodKktWorkRight[row * 11u + column] = row < 10u ? 0.0 :
-                rodKktBand[1u].upper.values[(row - 10u) * 10u + column];
-        rodKktWorkRight[row * 11u + 10u] = row < 10u ? residual.values[row] :
-            -rodKktBand[1u].residual.values[row - 10u];
-    }
-    return RodKktEquilibratedPivot(20u, pivotRatio);
-}
 
 // 全 lane 冗余执行的前向 / 后向代入。
 // 返回状态码：0 成功、1 空、2 末端单点秩亏、3 两点 supernode 秩亏、4 原始线性残差超限。
-uint RodKkt10SolveBand(uint count)
-{
-    if (count == 0u || count > 32u)
-        return 1u;
-    uint lane = gl_LocalInvocationID.x;
-    uint status = 0u;
-    float smallestPivotRatio = 1.0;
-    uint point = 0u;
-    while (point < count)
-    {
-        if (lane == point)
-            rodKktBand[0u] = RodKkt10AssemblePoint(point);
-        barrier();
-        RodKkt10Matrix diagonal = rodKktBand[0u].diagonal;
-        RodKkt10Matrix upper = rodKktBand[0u].upper;
-        RodKkt10Vector residual;
-        for (uint row = 0u; row < 10u; ++row)
-            residual.values[row] = -rodKktBand[0u].residual.values[row];
-        if (point > 0u)
-        {
-            RodKkt10Matrix lower = rodKktBand[0u].lower;
-            for (uint row = 0u; row < 10u; ++row)
-                for (uint inner = 0u; inner < 10u; ++inner)
-                {
-                    residual.values[row] -= lower.values[row * 10u + inner] *
-                        rodKktFactorRight[point - 1u].values[inner];
-                    for (uint column = 0u; column < 10u; ++column)
-                        diagonal.values[row * 10u + column] -=
-                            lower.values[row * 10u + inner] *
-                                rodKktFactorUpper[point - 1u].values[inner * 10u + column];
-                }
-        }
-        uint nodes = 1u;
-        float pivotRatio = 1.0;
-        bool factored = RodKkt10FactorNode(diagonal, upper, residual, pivotRatio);
-        if (!factored)
-        {
-            if (point + 1u >= count)
-            {
-                status = 2u;
-                break;
-            }
-            if (lane == point + 1u)
-                rodKktBand[1u] = RodKkt10AssemblePoint(point + 1u);
-            barrier();
-            nodes = 2u;
-            factored = RodKkt10FactorSupernode(diagonal, upper, residual, pivotRatio);
-            if (!factored)
-            {
-                status = 3u;
-                break;
-            }
-        }
-        smallestPivotRatio = min(smallestPivotRatio, pivotRatio);
-        for (uint node = 0u; node < nodes; ++node)
-        {
-            rodKktNextPoint[point + node] = point + nodes;
-            for (uint row = 0u; row < 10u; ++row)
-            {
-                rodKktFactorRight[point + node].values[row] =
-                    rodKktWorkRight[(node * 10u + row) * 11u + 10u];
-                for (uint column = 0u; column < 10u; ++column)
-                    rodKktFactorUpper[point + node].values[row * 10u + column] =
-                        rodKktWorkRight[(node * 10u + row) * 11u + column];
-            }
-        }
-        barrier();
-        point += nodes;
-    }
-    if (status != 0u)
-        return status;
-    for (int index = int(count) - 1; index >= 0; --index)
-    {
-        for (uint row = 0u; row < 10u; ++row)
-        {
-            float value = rodKktFactorRight[index].values[row];
-            uint next = rodKktNextPoint[index];
-            if (next < count)
-                for (uint column = 0u; column < 10u; ++column)
-                    value -= rodKktFactorUpper[index].values[row * 10u + column] *
-                        rodKktDirection[next].values[column];
-            rodKktDirection[index].values[row] = value;
-        }
-        // 下一步会读别人写的方向；单 warp 也显式同步，避免依赖实现细节。
-        barrier();
-    }
-#ifdef VL_ROD_KKT10_RESIDUAL_CHECK
-    // CPU 复核 A d = b。需要重新装配所有点的块，默认关闭以省掉一轮切线装配。
-    float originalResidual = 0.0;
-    if (lane == 0u)
-        for (uint index = 0u; index < count; ++index)
-        {
-            RodKkt10Band band = RodKkt10AssemblePoint(index);
-            for (uint row = 0u; row < 10u; ++row)
-            {
-                float value = band.residual.values[row];
-                for (uint column = 0u; column < 10u; ++column)
-                {
-                    value += band.diagonal.values[row * 10u + column] *
-                        rodKktDirection[index].values[column];
-                    if (index > 0u)
-                        value += band.lower.values[row * 10u + column] *
-                            rodKktDirection[index - 1u].values[column];
-                    if (index + 1u < count)
-                        value += band.upper.values[row * 10u + column] *
-                            rodKktDirection[index + 1u].values[column];
-                }
-                if (isnan(value) || isinf(value))
-                    return 4u;
-                originalResidual = max(originalResidual, abs(value));
-            }
-        }
-    if (originalResidual > 1.0e-5)
-        return 5u;
-#endif
-    return 0u;
-}
 
 // ===========================================================================
 // 压缩到 6x6 的求解（默认路径）
@@ -1293,250 +1011,25 @@ RodKkt6Condensed RodKkt10Condense(uint point)
 // 两者都接近 0 → 代数对，问题在压缩系统的求解（上一轮的 6x6 Thomas / CR 使用）。
 // 探针只计算、不改变工作路径的解，因此可以直接在真实轨迹上跑。
 // ===========================================================================
-shared uint rodKktProbeA;
-shared uint rodKktProbeB;
-shared uint rodKktProbeC;
 
-void RodKkt10ProbeCondensed(uint lane, RodKkt10Vector working)
-{
-    if (lane == 0u)
-    {
-        rodKktProbeA = 0u;
-        rodKktProbeB = 0u;
-        rodKktProbeC = 0u;
-    }
-    barrier();
-    RodKkt6Condensed condensed = RodKkt10Condense(lane);
-    if (!condensed.valid || condensed.count == 0u)
-        return;
-    RodV2Vector direction = RodV2Vector(
-        vec3(working.values[0u], working.values[1u], working.values[2u]),
-        vec3(working.values[3u], working.values[4u], working.values[5u]));
-    vec3 multiplier = vec3(working.values[6u], working.values[7u], working.values[8u]);
-    RodV2Vector neighbour = RodV2Vector(vec3(0), vec3(0));
-    if (lane > 0u)
-        neighbour = RodV2Add(neighbour, RodV2Multiply(condensed.baseLower,
-            RodV2Vector(vec3(rodKktDirection[lane - 1u].values[0u],
-                rodKktDirection[lane - 1u].values[1u],
-                rodKktDirection[lane - 1u].values[2u]),
-                vec3(rodKktDirection[lane - 1u].values[3u],
-                    rodKktDirection[lane - 1u].values[4u],
-                    rodKktDirection[lane - 1u].values[5u]))));
-    if (lane < 31u)
-        neighbour = RodV2Add(neighbour, RodV2Multiply(condensed.baseUpper,
-            RodV2Vector(vec3(rodKktDirection[lane + 1u].values[0u],
-                rodKktDirection[lane + 1u].values[1u],
-                rodKktDirection[lane + 1u].values[2u]),
-                vec3(rodKktDirection[lane + 1u].values[3u],
-                    rodKktDirection[lane + 1u].values[4u],
-                    rodKktDirection[lane + 1u].values[5u]))));
-    // checkA：从位置方程反推乘子
-    RodV2Vector row = RodV2Add(RodV2Multiply(condensed.diagonal, direction), neighbour);
-    row = RodV2Add(row, RodV2Vector(-condensed.baseRight.linear,
-        -condensed.baseRight.angular));
-    RodV2Vector applied = RodV2Multiply(condensed.inverseA, row);
-    vec3 projected;
-    for (uint entry = 0u; entry < 3u; ++entry)
-        projected[entry] = RodKktDot(condensed.gradient[entry], applied);
-    vec3 recovered = condensed.inverseS * projected;
-    vec3 multiplierError = recovered - multiplier;
-    float checkA = max(max(abs(multiplierError.x), abs(multiplierError.y)),
-        abs(multiplierError.z));
-    // checkB：压缩恒等式等价于 G^T dx = h，直接量这个接触行残差。
-    // 不量 |A dx + Q(...) - Q b - G S^-1 h|：它等于 |G S^-1 (G^T dx - h)|，
-    // 被 |S^-1| ~ |A| ~ 1e3 放大，1e-5 的求解容差会显示成 1e-2 量级的假偏置
-    // （第一版探针就是这样误报的）。
-    vec3 contactRow;
-    for (uint entry = 0u; entry < 3u; ++entry)
-        contactRow[entry] = RodKktDot(condensed.gradient[entry], direction) -
-            (-condensed.gapRow[entry]);
-    float checkB = max(max(abs(contactRow.x), abs(contactRow.y)), abs(contactRow.z));
-    RodV2Vector lhs = RodV2Add(RodV2Multiply(condensed.diagonal, direction),
-        RodV2Multiply(condensed.q, neighbour));
-    RodV2Vector extra = RodV2Vector(vec3(0), vec3(0));
-    for (uint entry = 0u; entry < 3u; ++entry)
-    {
-        float weight = 0.0;
-        for (uint column = 0u; column < 3u; ++column)
-            weight -= condensed.inverseS[column][entry] * condensed.gapRow[column];
-        extra = RodV2Add(extra, RodV2Vector(
-            condensed.gradient[entry].linear * weight,
-            condensed.gradient[entry].angular * weight));
-    }
-    RodV2Vector rhs = RodV2Add(RodV2Multiply(condensed.q, condensed.baseRight), extra);
-    RodV2Vector difference = RodV2Add(lhs, RodV2Vector(-rhs.linear, -rhs.angular));
-    // 保留压缩方程残差作为第二个量级参考（会被 |S^-1| 放大，只作对照）。
-    float scaledResidual = max(max(max(abs(difference.linear.x), abs(difference.linear.y)),
-        abs(difference.linear.z)), max(max(abs(difference.angular.x),
-        abs(difference.angular.y)), abs(difference.angular.z)));
-    atomicMax(rodKktProbeC, floatBitsToUint(scaledResidual));
-    atomicMax(rodKktProbeA, floatBitsToUint(checkA));
-    atomicMax(rodKktProbeB, floatBitsToUint(checkB));
-}
 
 // 6 宽探针槽：压缩后的块与解。只有探针编译时存在（约 1.7 KB shared）。
-struct RodKkt6Band
-{
-    float lower[36];
-    float diagonal[36];
-    float upper[36];
-    float right[6];
-};
-shared RodKkt6Band rodKktProbeBand[2];
-shared float rodKktProbeDirection[32 * 6];
-shared uint rodKktProbeFactorNext[32];
 
 // 行列主序扁平 6x6 与 RodV2Matrix 互转。
-void RodKkt6Store(out float values6[36], RodV2Matrix matrix)
-{
-    for (uint row = 0u; row < 6u; ++row)
-        for (uint column = 0u; column < 6u; ++column)
-            values6[row * 6u + column] = RodV2Entry(matrix, row, column);
-}
 
-RodV2Matrix RodKkt6Load(float values6[36])
-{
-    RodV2Matrix matrix = RodV2Zero();
-    for (uint row = 0u; row < 6u; ++row)
-        for (uint column = 0u; column < 6u; ++column)
-            RodV2Set(matrix, row, column, values6[row * 6u + column]);
-    return matrix;
-}
 
 // 单点 6x6 主元分解，工作区沿用 10 宽那套（dimension 6 时右端只有 7 列有效：
 // 0..5 是上块，第 6 列是残差；RodKktEquilibratedPivot 照样缩放/求解 11 列，多余的
 // 列无副作用）。
-bool RodKktProbeFactor6(float diagonal[36], float upper[36], float residual[6])
-{
-    for (uint row = 0u; row < 6u; ++row)
-    {
-        for (uint column = 0u; column < 6u; ++column)
-        {
-            rodKktWorkMatrix[row * 20u + column] = diagonal[row * 6u + column];
-            rodKktWorkRight[row * 11u + column] = upper[row * 6u + column];
-        }
-        rodKktWorkRight[row * 11u + 6u] = residual[row];
-    }
-    float pivotRatio;
-    return RodKktEquilibratedPivot(6u, pivotRatio);
-}
 
 // 用顺序块 Thomas 解压缩后的 6x6 系统（和 10 宽路径同一套结构，只是块宽不同）。
 // 返回 0 成功。结果写进 rodKktProbeDirection。
-uint RodKkt10ProbeSolveCondensed(uint lane)
-{
-    uint status = 0u;
-    uint point = 0u;
-    while (point < 32u)
-    {
-        if (lane == point)
-        {
-            RodKkt6Condensed condensed = RodKkt10Condense(point);
-            if (!condensed.valid)
-                status = 1u;
-            else
-            {
-                RodKkt6Store(rodKktProbeBand[0].lower, condensed.lower);
-                RodKkt6Store(rodKktProbeBand[0].diagonal, condensed.diagonal);
-                RodKkt6Store(rodKktProbeBand[0].upper, condensed.upper);
-                for (uint row = 0u; row < 6u; ++row)
-                    rodKktProbeBand[0].right[row] =
-                        row < 3u ? condensed.right.linear[row] :
-                            condensed.right.angular[row - 3u];
-            }
-        }
-        barrier();
-        if (status != 0u)
-            return status;
-        float diagonal[36];
-        float upper[36];
-        float residual[6];
-        for (uint entry = 0u; entry < 36u; ++entry)
-        {
-            diagonal[entry] = rodKktProbeBand[0].diagonal[entry];
-            upper[entry] = rodKktProbeBand[0].upper[entry];
-        }
-        // 压缩后的 right 已经是 b = -(10 分量残差)：块 Thomas 解的就是 M d = right，
-        // 这里**不能**再取负，否则得到的是 -d（探针在收敛状态上 dx ~ 0，看不出这个错）。
-        for (uint row = 0u; row < 6u; ++row)
-            residual[row] = rodKktProbeBand[0].right[row];
-        if (point > 0u)
-            for (uint row = 0u; row < 6u; ++row)
-                for (uint inner = 0u; inner < 6u; ++inner)
-                {
-                    residual[row] -= rodKktProbeBand[0].lower[row * 6u + inner] *
-                        rodKktFactorRight[point - 1u].values[inner];
-                    for (uint column = 0u; column < 6u; ++column)
-                        diagonal[row * 6u + column] -=
-                            rodKktProbeBand[0].lower[row * 6u + inner] *
-                                rodKktFactorUpper[point - 1u].values[inner * 10u + column];
-                }
-        if (!RodKktProbeFactor6(diagonal, upper, residual))
-            return 2u;
-        rodKktProbeFactorNext[point] = point + 1u;
-        for (uint row = 0u; row < 6u; ++row)
-        {
-            rodKktFactorRight[point].values[row] = rodKktWorkRight[row * 11u + 6u];
-            for (uint column = 0u; column < 6u; ++column)
-                rodKktFactorUpper[point].values[row * 10u + column] =
-                    rodKktWorkRight[row * 11u + column];
-        }
-        barrier();
-        ++point;
-    }
-    for (int index = 31; index >= 0; --index)
-    {
-        for (uint row = 0u; row < 6u; ++row)
-        {
-            float value = rodKktFactorRight[index].values[row];
-            if (index + 1 < 32)
-                for (uint column = 0u; column < 6u; ++column)
-                    value -= rodKktFactorUpper[index].values[row * 10u + column] *
-                        rodKktProbeDirection[(index + 1) * 6u + column];
-            rodKktProbeDirection[index * 6u + row] = value;
-        }
-        barrier();
-    }
-    return 0u;
-}
 
 // 从压缩解恢复乘子：dlambda = S^-1 G^T A^-1 (A dx + L dx- + U dx+ - b)。
 // 第五轮的探针已验证这个恒等式在真实状态上成立（checkA <= 7.6e-6）。
-vec3 RodKkt10RecoverMultipliersFromCondensed(uint lane, RodKkt6Condensed condensed,
-    RodV2Vector direction)
-{
-    if (!condensed.valid || condensed.count == 0u)
-        return vec3(0);
-    RodV2Vector value = RodV2Multiply(condensed.diagonal, direction);
-    if (lane > 0u)
-        value = RodV2Add(value, RodV2Multiply(condensed.baseLower,
-            RodV2Vector(vec3(rodKktProbeDirection[(lane - 1u) * 6u + 0u],
-                rodKktProbeDirection[(lane - 1u) * 6u + 1u],
-                rodKktProbeDirection[(lane - 1u) * 6u + 2u]),
-                vec3(rodKktProbeDirection[(lane - 1u) * 6u + 3u],
-                    rodKktProbeDirection[(lane - 1u) * 6u + 4u],
-                    rodKktProbeDirection[(lane - 1u) * 6u + 5u]))));
-    if (lane < 31u)
-        value = RodV2Add(value, RodV2Multiply(condensed.baseUpper,
-            RodV2Vector(vec3(rodKktProbeDirection[(lane + 1u) * 6u + 0u],
-                rodKktProbeDirection[(lane + 1u) * 6u + 1u],
-                rodKktProbeDirection[(lane + 1u) * 6u + 2u]),
-                vec3(rodKktProbeDirection[(lane + 1u) * 6u + 3u],
-                    rodKktProbeDirection[(lane + 1u) * 6u + 4u],
-                    rodKktProbeDirection[(lane + 1u) * 6u + 5u]))));
-    value = RodV2Add(value, RodV2Vector(-condensed.baseRight.linear,
-        -condensed.baseRight.angular));
-    RodV2Vector applied = RodV2Multiply(condensed.inverseA, value);
-    vec3 projected;
-    for (uint row = 0u; row < 3u; ++row)
-        projected[row] = RodKktDot(condensed.gradient[row], applied);
-    return condensed.inverseS * projected;
-}
 
 // 对照：同一状态上 10 宽解 vs 压缩后 6 宽 Thomas 解。
 // checkD = max |dx_condensed - dx_10wide|，checkE = max |dlambda_condensed - dlambda_10wide|。
-shared uint rodKktProbeD;
-shared uint rodKktProbeE;
 
 // 默认路径：压缩到 6x6 + 顺序块 Thomas + 乘子恢复。
 // 代数与求解都已由探针在真实状态上钉住（|Q G| = 0、|dx_condensed - dx_10wide| = 0）。
@@ -1591,69 +1084,5 @@ uint RodKkt10SolveCondensed(uint lane, out RodKkt10Vector direction)
     return 0u;
 }
 
-void RodKkt10ProbeCompare(uint lane, RodKkt10Vector working)
-{
-    if (lane == 0u)
-    {
-        rodKktProbeD = 0u;
-        rodKktProbeE = 0u;
-    }
-    barrier();
-    uint status = RodKkt10ProbeSolveCondensed(lane);
-    if (status != 0u)
-    {
-        if (lane == 0u)
-        {
-            rodKktProbeD = floatBitsToUint(1.0e30);
-            rodKktProbeE = floatBitsToUint(1.0e30);
-        }
-        return;
-    }
-    RodKkt6Condensed condensed = RodKkt10Condense(lane);
-    RodV2Vector direction = RodV2Vector(
-        vec3(rodKktProbeDirection[lane * 6u + 0u], rodKktProbeDirection[lane * 6u + 1u],
-            rodKktProbeDirection[lane * 6u + 2u]),
-        vec3(rodKktProbeDirection[lane * 6u + 3u], rodKktProbeDirection[lane * 6u + 4u],
-            rodKktProbeDirection[lane * 6u + 5u]));
-    RodV2Vector neighbour = RodV2Vector(vec3(0), vec3(0));
-    if (lane > 0u)
-        neighbour = RodV2Add(neighbour, RodV2Multiply(condensed.lower,
-            RodV2Vector(vec3(rodKktProbeDirection[(lane - 1u) * 6u + 0u],
-                rodKktProbeDirection[(lane - 1u) * 6u + 1u],
-                rodKktProbeDirection[(lane - 1u) * 6u + 2u]),
-                vec3(rodKktProbeDirection[(lane - 1u) * 6u + 3u],
-                    rodKktProbeDirection[(lane - 1u) * 6u + 4u],
-                    rodKktProbeDirection[(lane - 1u) * 6u + 5u]))));
-    if (lane < 31u)
-        neighbour = RodV2Add(neighbour, RodV2Multiply(condensed.upper,
-            RodV2Vector(vec3(rodKktProbeDirection[(lane + 1u) * 6u + 0u],
-                rodKktProbeDirection[(lane + 1u) * 6u + 1u],
-                rodKktProbeDirection[(lane + 1u) * 6u + 2u]),
-                vec3(rodKktProbeDirection[(lane + 1u) * 6u + 3u],
-                    rodKktProbeDirection[(lane + 1u) * 6u + 4u],
-                    rodKktProbeDirection[(lane + 1u) * 6u + 5u]))));
-    // 非空指标：压缩系统的**求解残差** |M d - b_right|。与是否收敛无关。
-    RodV2Vector lhs = RodV2Add(RodV2Multiply(condensed.diagonal, direction), neighbour);
-    RodV2Vector difference = RodV2Add(lhs, RodV2Vector(-condensed.right.linear,
-        -condensed.right.angular));
-    float solveResidual = max(max(max(abs(difference.linear.x), abs(difference.linear.y)),
-        abs(difference.linear.z)), max(max(abs(difference.angular.x),
-        abs(difference.angular.y)), abs(difference.angular.z)));
-    // 参考量：右端自身的量级，用来判断残差是绝对大还是相对大。
-    float rightScale = max(max(abs(condensed.right.linear.x), abs(condensed.right.linear.y)),
-        max(abs(condensed.right.linear.z), max(abs(condensed.right.angular.x),
-        max(abs(condensed.right.angular.y), abs(condensed.right.angular.z)))));
-    // 合成量检验仍在：Q G 必须为 0。
-    RodV2Vector contactSum = RodV2Add(RodV2Add(condensed.gradient[0], condensed.gradient[1]),
-        condensed.gradient[2]);
-    RodV2Vector qg = RodV2Multiply(condensed.q, contactSum);
-    float checkQ = max(max(max(abs(qg.linear.x), abs(qg.linear.y)), abs(qg.linear.z)),
-        max(max(abs(qg.angular.x), abs(qg.angular.y)), abs(qg.angular.z)));
-    // 无活跃接触时 M 就是原系统，残差应当接近 0；把两类分开编码：
-    //   rodKktProbeD = solveResidual / max(rightScale, 1)
-    //   rodKktProbeE = checkQ
-    atomicMax(rodKktProbeD, floatBitsToUint(solveResidual / max(rightScale, 1.0)));
-    atomicMax(rodKktProbeE, floatBitsToUint(checkQ));
-}
 
 #endif
