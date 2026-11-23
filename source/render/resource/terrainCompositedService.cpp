@@ -221,7 +221,10 @@ void TerrainCompositedService::SetCookMode(bool enabled) { GlobalCookMode.store(
 
 bool TerrainCompositedService::CookMode() { return GlobalCookMode.load(); }
 
-void TerrainCompositedService::SetQualityLenient(bool enabled) { GlobalQualityLenient.store(enabled); }
+void TerrainCompositedService::SetQualityLenient(bool enabled)
+{
+    GlobalQualityLenient.store(enabled);
+}
 
 bool TerrainCompositedService::QualityLenient() { return GlobalQualityLenient.load(); }
 
