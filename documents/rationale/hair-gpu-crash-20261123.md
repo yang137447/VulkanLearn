@@ -1,4 +1,4 @@
-﻿# Rod GPU 崩溃定位与修复记录（2026-11-23）
+# Rod GPU 崩溃定位与修复记录（2026-11-23）
 
 状态：**rationale（历史与决策）**，不是 runtime 契约，也不构成物理或性能放行。
 记录一次真实的 DeviceLost 定位、三处修复、验证规模与仍然开放的风险。
@@ -100,6 +100,42 @@ what(): Vulkan timestamp query was not ready after its swapchain image fence com
    但属于真实的 API 违规。
 3. 修复 1 的标志没有进入 trace/诊断字段；后续若做 GPU 状态对比，应把它写进
    `RodGpuParams` 的既有诊断输出。
+
+## 追加：validation 收尾（同日）
+
+前文“未完成”第 2 条与编辑器 UI 路径的泄漏已在同日修复；下面的历史记录保留。
+
+### 00303：soft-depth 描述符池每帧重建
+
+`ParticleRenderer::RecordSoftDepth` 的资源签名只取**当前 swapchain image** 的
+depth/soft view 与 sampler，而 `imageIndex` 每帧轮换，导致签名每帧都被判为变化 →
+每帧销毁并重建描述符池，上一帧仍在执行的 command buffer 仍引用这些 set。
+修复：签名覆盖所有 image（稳定混合），只有真正的 view/尺寸变化才重建；重建前
+`WaitIdle`。
+
+### 05137：运行时描述符刷新泄漏整套 pass 描述符
+
+`RenderGraph::SetupDescriptors` 在每次运行时描述符刷新时重新创建同一 pass 的
+descriptor pool/layout/set，却不释放旧对象。开编辑器 UI 的 300 帧运行里刷新了
+3 次，退出时残留 39 个 pool + 78 个 layout + 468 个 set（validation 报
+`vkDestroyDevice ... 585/780 leaked objects`）。
+修复：
+
+- 刷新前调用 `DestroyPassDescriptorState` 释放旧 pool（连带其中的 set）与两个
+  layout；
+- `LoadRenderGraph` 入口在已有状态时按 `Immediate` 清理一次，避免调用方漏掉
+  `Shutdown`。
+
+### 验证
+
+| 运行 | validation 消息 |
+| --- | --- |
+| rod 场景 + 编辑器 UI，300 帧 | **0** |
+| rod 场景 `--no-dev-ui`，90 帧 | **0** |
+| lookdev 场景，90 帧 | **0** |
+
+修复前同规模 UI 运行每轮必有 00303 或 585–780 个泄漏对象；现在 validation 输出
+完全静默。
 
 ## 复现命令
 
