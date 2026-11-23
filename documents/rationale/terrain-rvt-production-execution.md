@@ -759,3 +759,33 @@ R14→R17 已多次进入这一循环。经用户决定，本轮不再以该核�
 分账/telemetry 的正式验收、P4 全量与各阶段独立签署、V1 19.42 GB 清退。本节只是
 “本机可重建 + 默认场景能起量并收敛”的冒烟证据，不是冻结核对表验收；机器未装
 validation layer，也没有性能/预算结论。
+
+### 追加：Release game 构建、包导出与包内冒烟（2026-11-23 晚）
+
+- 配置 `build-game`（MinGW Makefiles，Release，`VULKANLEARN_ENABLE_EDITOR=OFF`，
+  validation off，legacy main off）。依赖全部离线：`VULKANLEARN_DEPS_SOURCE_CACHE`
+  指向 `build/_deps` 的 openexr/imath，`FETCHCONTENT_SOURCE_DIR_VL_JOLT/VL_OZZ`
+  指向 `build/_deps/vl_jolt-src|vl_ozz-src`。构建 `main_game` 与 `vl_export_game` 通过。
+- `main_game --shader-force-rebuild` 把 `shader/spv` 的 compilePolicy 切成
+  `configuration=Release`（61 个 shader 编译，0 失败，16.6 s）。副作用：共享 SPV 缓存
+  现在属于 Release；RelWithDebInfo 开发构建下次运行会按自身策略重编。
+- 导出：`vl_export_game --project-root . --flavor game --initial-scene <V2 scene>
+  --output D:\vlpkg --binary-directory build-game\bin` → 723 文件 / 645,727,733 B；
+  `--verify-package D:\vlpkg` 返回 `{"ok":true}`；
+  `tool/validate-game-package.ps1 -PackagePath D:\vlpkg` 输出
+  “passed all checks”（含包内 CLI 冒烟）。
+- 包内默认场景冒烟：`D:\vlpkg\main_game.exe --exit-after-frames 120
+  --worker-thread-count 2 --no-dev-ui` exit 0，epoch 50 进 interactive，
+  `validAtRawTargetPlusOne=3271/3271`，unresolved/incorrectIdentity 0，
+  rootOnly 0。
+- 一个真实的长路径缺陷：VT 输入文件名是 `inputs/<64hex>-<64hex>.bin`，叠加深层
+  资源工作树后超过 Win32 MAX_PATH（该文件完整路径 259+ 字符）。导出器
+  `TerrainPackageClosure::Resolve` 用 `std::filesystem::is_regular_file` 判为“缺失”，
+  而运行时用目录句柄读取同一文件是成功的——所以 Cook 与 Game 都正常，只有导出失败。
+  本次用 `subst R:` 把资源根临时缩成 3 字符后导出（脚本
+  `artifacts/terrain-rvt-wrapup/run_export.ps1`，导出后恢复 `config/config.json` 并
+  撤销 subst）。这是需要单独修的限制，不算已修；修法要么给导出器加长路径支持，
+  要么缩短 Cook 的输入文件名。
+- 与冻结包的关系：这次包是**全新资产身份 + 新 Release 二进制**，R16/R17 的
+  checkpoint/收据（P5/P6、性能、故障注入）都不适用；冻结与正式验收仍按上节延期表
+  处理，不改判为通过。
