@@ -383,7 +383,8 @@ q单位范数最大误差2.220446049250313e-16。
 
 ## 最终独立结论同步
 
-独立报告 [phase4-audit-baseline-result.md](../../artifacts/hair-ams-20261118/phase4-audit-baseline-result.md)
+独立报告 `artifacts/hair-ams-20261118/phase4-audit-baseline-result.md`
+（gitignored 的原始证据；当前工作区未保留该文件，结论以本文摘录为准）
 确认有限 PASS：全13500步物理残差、指标与能量复算，以及140个预定
 Hessian检查点通过。结论仅限唯一N3、h=.001s、13.5s的数值与五项行为筛选；
 未做长期h细化（long-horizon refinement NOT_RUN），clump NOT_RUN，
