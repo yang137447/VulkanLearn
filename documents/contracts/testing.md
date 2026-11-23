@@ -1954,6 +1954,8 @@ taper，并从最终高度场的 MFD 汇流面积生成河网 mask：
 > `Generated/HoudiniPegasusIsland/` 已从本地资源 worktree 删除，
 > `config/config.json` 默认场景已改为
 > `Maps/SC_fracture_playground/SC_fracture_playground.json`。
+> （2026-11-23：默认场景已再次切到 `Maps/SC_lookdev_article/SC_lookdev_article.json`；
+> 本段日期记录只代表 2026-11-17 当时状态。）
 > `Generated/BlenderPegasusGN*` 的 `SC_terrain_pegasus_4x4.json` 变体**暂时保留**，
 > 仅作历史对照，不作为当前验收/出货路径，也不进入默认启动。
 > 下面 HoudiniPegasusIsland 的实测数字只保留为历史证据，不再可复现。

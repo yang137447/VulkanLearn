@@ -378,7 +378,11 @@ RuntimeValidationServices::RuntimeValidationServices(
 
 std::string RuntimeValidationServices::GetResourcePath() const
 {
-    return engineLoop->GetRuntimeConfig().GetResourcePath();
+    // config.resourcePath 可能是相对路径（如 ../VukanLearnResources）。运行时测试把
+    // 它直接拼进生成场景路径，`..` 会被 SceneAssetValidator 判成 traversal；
+    // 夹具必须使用解析后的绝对资源根。
+    return std::filesystem::weakly_canonical(
+        engineLoop->GetRuntimeConfig().GetResourcePath()).string();
 }
 
 std::array<uint32_t, 2>

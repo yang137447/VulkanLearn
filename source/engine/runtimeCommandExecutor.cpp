@@ -35,8 +35,25 @@
 #include "script/scriptRuntime.h"
 #include "engine/runtimeCommandExecutorInternal.h"
 
+#include "commonFunction.h"
+
 namespace VL
 {
+namespace
+{
+// config.resourcePath 允许相对路径（如 ../VukanLearnResources）。运行时测试把资源根直接
+// 拼进生成场景路径，`..` 会被 SceneAssetValidator 判成 traversal，所以入口处先解析成
+// 绝对路径；绝对配置原样保留，避免改变既有机器行为。
+std::string AbsoluteResourcePath(const RuntimeConfig& runtimeConfig)
+{
+    const std::filesystem::path configured(runtimeConfig.GetResourcePath());
+    if (configured.is_absolute())
+        return configured.lexically_normal().string();
+    return std::filesystem::weakly_canonical(
+        std::filesystem::path(CommonFunction::GetProjectPath()) / configured).string();
+}
+}
+
 RuntimeRendererResourceFingerprint
 CaptureRuntimeRendererResourceFingerprint()
 {
@@ -372,7 +389,7 @@ void RuntimeCommandExecutor::ApplyShaderReloadTest(
     const DiagnosticsSubsystem& diagnostics) const
 {
     (void)runtimeTestHooks.BeginShaderReloadTest(
-        runtimeConfig.GetResourcePath(),
+        AbsoluteResourcePath(runtimeConfig),
         diagnostics);
 }
 
@@ -382,7 +399,7 @@ void RuntimeCommandExecutor::ApplyShaderComputeReloadTest(
     const DiagnosticsSubsystem& diagnostics) const
 {
     (void)runtimeTestHooks.BeginShaderComputeReloadTest(
-        runtimeConfig.GetResourcePath(),
+        AbsoluteResourcePath(runtimeConfig),
         diagnostics);
 }
 
@@ -392,7 +409,7 @@ void RuntimeCommandExecutor::ApplyWorldGraphTransactionTest(
     const DiagnosticsSubsystem& diagnostics) const
 {
     (void)runtimeTestHooks.BeginWorldGraphTransactionTest(
-        runtimeConfig.GetResourcePath(),
+        AbsoluteResourcePath(runtimeConfig),
         diagnostics);
 }
 
