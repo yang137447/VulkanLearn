@@ -15,9 +15,11 @@
 `cosseratImplicitV3` 是独立 tag，标识完整动量残差带状 Newton 与渐进四次
 支撑能的候选；它不是 XPBD 的别名，也不继承 V1 的数值或运行结论。
 tag 的配置可接受性不等于求解器质量放行。
-当前 runtime 的 V3 GPU 求解只接受 `hairCollision.capsules`；声明 `hairCollision.mesh`
-的 V3 对象在录制阶段显式抛错（SDF 活跃集尚未收敛，证据见
-`documents/rationale/hair-rod-gpu-v3-contact-20261123.md`），不回退、不静默忽略。
+当前 runtime 的 V3 GPU 求解接受 `hairCollision.capsules` 与 `hairCollision.mesh`：
+胶囊走解析 Hessian，SDF 走逐帧代理场的 Gauss-Newton（Hessian 取 0）。
+两者都只接受**场可用**的接触——SDF 栅格只在 `margin + 2*cellSize` 的截断带内有值，
+更深的作者穿模对 V1 与 V3 同样不可见（证据见
+`documents/rationale/hair-rod-gpu-v3-contact-20261123.md`）。
 本轮 runtime 场景仍使用 `cosseratXpbdV1`。
 
 `simulationDefaults.solver` 接受 `tressfx`（缺省）、`cosseratXpbdV1`
