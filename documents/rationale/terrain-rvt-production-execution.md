@@ -677,3 +677,30 @@ R14→R17 已多次进入这一循环。经用户决定，本轮不再以该核�
 | `TerrainPaintManifestTest` / `TerrainPaintFileTest` | 固定临时目录名使并行进程互相 `remove_all`；按用例名隔离 |
 
 文档门禁 4 处失败均为指向被忽略 `artifacts/` 的链接，原执行机器上存在。
+
+### 追加：收尾提交、文档门禁与默认场景前置条件（2026-11-23）
+
+- 在 `47b9d101` 之上并入两个收尾提交：
+  - `6a3a530a`【Fix】`tool/validation/terrain/build_composited_fixture.py` 不再写死原机
+    绝对路径，改为只接受同级 `VukanLearnResources`、要求其分支为
+    `codex/terrain-openworld-assets` 并拒绝符号链接。此前该脚本换机后无法再生成
+    RVTv2 作者夹具。
+  - `14d96ae4`【Doc】去掉 P3 与 World bindings 审计中 4 处指向被忽略 `artifacts/` 的
+    链接，路径与 SHA256 保留为出处文字。`py -3 tool/validate-docs.py` 现 exit 0
+    （此前 4 problem），此前一节记录的文档门禁失败已关闭。
+- 截至该 HEAD 的验证沿用上一节：44 个目标全量构建、ctest `-j 32` 4060/4060 连续两轮、
+  `main_game`（worker 2×3、worker 1）与 `main_editor` 在 `SC_fracture_playground` 上
+  `--exit-after-frames` 均退出 0；未安装 validation layer，故仍无 validation 结论。
+- 默认 RVTv2 场景仍未运行，且不是补一次冒烟就能关闭：本机三个资源入口（topic 的
+  `VukanLearnResources`、共享 `D:\Github\VukanLearnResources`、`pegasus-work`）都没有
+  `Generated/Validation/TerrainCompositedVT`，也没有 `Generated/HoudiniPegasusIsland`。
+  后者的生成入口见 `tool/houdini-terrain-import/README.md`：需要 Houdini/hython 对
+  Pegasus 工程 landscape 采样出 `decoded/island2k`，再经
+  `prepare_pegasus_4km.py` + 切片 + 合场景生成；该导出不在本机。本地只有 PolyHaven
+  4K 贴图（`pegasus-work/polyhaven`），够重建图层贴图，不够生成岛屿高度/TR 场景。
+  关闭该项的前置条件是把 Houdini 导出（或现成 `Generated/HoudiniPegasusIsland`）放进
+  资源工作树，之后依次执行 `build_composited_fixture.py --generate`、
+  `main_editor --terrain-vt-cook`、`vl_export_game --verify-package` 与默认场景
+  `main_game` 冒烟；结果另行记录，不预填通过。
+- 因此本次收尾的可交付状态是：**代码、构建、地形模块测试、非 RVT 冒烟与文档门禁关闭；
+  默认 RVTv2 场景与 R17 包仍为显式延期**，与上节延期表一致，不改写为通过。
