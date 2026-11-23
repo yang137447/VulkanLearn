@@ -63,6 +63,9 @@ shared uint rodKktFeasible;
 // w = max |multiplier| / forceScale。kernel 结尾写进 V3 未使用的
 // rodState.guides[].residuals，随 snapshot 的 rod-diagnostics 侧车读回。
 shared uvec4 rodKktDebug;
+// 诊断：活跃接触里最大的**有符号**归一化 gap（正 = 已分离）。存 bits(gap+1) 以复用
+// 无符号 atomicMax；读回时减 1。
+shared uint rodKktSeparatedGapBits;
 // 重叠修复统计（也只在 DEBUG 下写回）：触发次数与最深重叠（bits）。
 shared uint rodKktRepairCount;
 shared uint rodKktRepairDepthBits;
@@ -254,12 +257,23 @@ bool RodKkt10ContactGap(uint id, vec3 position, out float gap, out vec3 gradient
 #endif
 }
 
+// 接触的二阶项（几何刚度）。
+//
+// CPU 用解析 Hessian：胶囊是 (I-nnᵀ)/ρ（内段再减 ttᵀ/ρ），装配时以
+// `-λ H (L/F)` 加进位置块。这一项量级是 λ/(ρF)·L，深穿透（ρ 很小）时会把位置块
+// 从正定推成负定，理论上会丢掉牛顿方向的下降性。
+//
+// 【已实测否决】把它换成 Gauss-Newton（H=0）在 200-guide 场景上**更差**：
+// 失败 guide 从 3 个增到 4 个，最大 merit 从 0.062 升到 0.112。所以解析二阶项
+// 在这批 guide 上是净收益，不能靠丢它换条件数。保留解析形式。
+// 定义 VL_ROD_KKT10_GAUSS_NEWTON_CONTACT 可以复核这个反例。
 mat3 RodKkt10ContactHessian(uint id, vec3 position, vec3 gradient)
 {
+#ifndef VL_ROD_KKT10_GAUSS_NEWTON_CONTACT
     if (id < 8u)
         return RodKkt10CapsuleHessian(id, position, normalize(gradient));
-    // SDF 的解析二阶导需要 6 次额外三线性采样；M1 先用 Gauss-Newton（0）。
-    // 这是一处明确的近似，不能声称与 CPU 中心差分 Hessian 等价。
+#endif
+    // SDF 的解析二阶导需要 6 次额外三线性采样；M1 用 Gauss-Newton（0）。
     return mat3(0);
 }
 
@@ -705,7 +719,10 @@ void RodKkt10Measure(uint lane, bool incrementValid)
 #ifdef VL_ROD_KKT10_DEBUG
     // 每个 measure 重新累积，保留的是「最近一次测量」的画像。
     if (lane == 0u)
+    {
         rodKktDebug = uvec4(0u);
+        rodKktSeparatedGapBits = floatBitsToUint(1.0);
+    }
     barrier();
     float contactResidual = 0.0;
     for (uint component = 6u; component < 9u; ++component)
@@ -715,17 +732,20 @@ void RodKkt10Measure(uint lane, bool incrementValid)
         positionResidual = max(positionResidual, abs(residual.values[component]));
     uint activeSlots = 0u;
     float maximumMultiplier = 0.0;
+    float separatedGap = -1.0;
     for (uint slot = 0u; slot < 3u; ++slot)
         if (rodKktContacts[slot].w != 0.0)
         {
             ++activeSlots;
             maximumMultiplier = max(maximumMultiplier,
                 abs(rodKktContacts[slot].z) / v2ForceScale);
+            separatedGap = max(separatedGap, residual.values[6u + slot]);
         }
     atomicAdd(rodKktDebug.x, activeSlots);
     atomicMax(rodKktDebug.y, floatBitsToUint(contactResidual));
     atomicMax(rodKktDebug.z, floatBitsToUint(positionResidual));
     atomicMax(rodKktDebug.w, floatBitsToUint(maximumMultiplier));
+    atomicMax(rodKktSeparatedGapBits, floatBitsToUint(separatedGap + 1.0));
 #endif
     barrier();
     if (lane == 0u)

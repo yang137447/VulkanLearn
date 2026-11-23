@@ -694,7 +694,14 @@ void main()
     uint guide = rod.flags.y != 0u ? simulationGuides.indices[slot] : slot;
     if (lane == 0u)
     {
-        failure = rod.flags.x != 0u ? 0u : uint(rodState.guides[slot].diagnostic.x);
+        // 【行为变更】不再把上一帧的失败码读回 `failure`。
+        // 旧策略：失败码写进 rodState.guides[].diagnostic.x，下一帧在下面的
+        // `if (failure != 0u && flags.x == 0u) return;` 直接返回，配合 C++ 侧
+        // `gpuStatus != 0 -> steps = 0`，**一个 guide 的牛顿预算耗尽会让整个对象
+        // 永久冻结**（200-guide 场景实测 3/200 guide 就会停摆）。
+        // 新策略：每帧都从已发布状态重试；失败的 guide 因为不发布而保持上一次
+        // 接受的状态，其余 guide 继续推进。失败仍写回 diagnostic.x 供 C++ 报告。
+        failure = 0u;
         v2Iterations = 0u;
         v2Maximum = 0.0;
         v2Merit = 0.0;
@@ -704,8 +711,6 @@ void main()
         simulatedSeconds = rod.flags.x != 0u ? 0.0 : rodState.guides[slot].timing.x;
     }
     barrier();
-    if (failure != 0u && rod.flags.x == 0u)
-        return;
     if (rod.flags.x != 0u)
         RodInitialize(slot, guide, lane);
     else
@@ -1189,9 +1194,10 @@ void main()
 #endif
 #ifndef VL_ROD_V3_CONTINUATION
         // energies.x = 本帧累计的回溯减半次数，y = 重叠修复触发次数，
-        // z = 修复前的最深重叠（米），w 保留。
+        // z = 修复前的最深重叠（米），w = 活跃接触里最大的有符号归一化 gap（正 = 分离）。
         rodState.guides[slot].energies = vec4(float(v3BacktrackCount),
-            float(rodKktRepairCount), uintBitsToFloat(rodKktRepairDepthBits), 0);
+            float(rodKktRepairCount), uintBitsToFloat(rodKktRepairDepthBits),
+            uintBitsToFloat(rodKktSeparatedGapBits) - 1.0);
 #endif
 #endif
         rodState.guides[slot].timing = vec4(failure == 0u ? simulatedSeconds :

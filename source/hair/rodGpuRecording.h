@@ -192,6 +192,10 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
         output << std::setprecision(10);
         const float* values = static_cast<const float*>(state.readback[frameSlot].mapped);
         double accepted = state.receivedSeconds;
+        // 每帧重新求最大值：gpuStatus 现在是逐帧报告量，不再是永久粘滞的冻结开关。
+        // `accepted` 仍是「所有 guide 都接受」的最小模拟时间，因此有 guide 停住时
+        // 该列会停在它的时间上——这是有意的信息，调度不再依赖它。
+        state.gpuStatus = 0;
         float maxBlockDefect = 0.0f;
         float maxPredictorDefect = 0.0f;
         uint32_t failedGuides = 0;
@@ -240,8 +244,10 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
             save(".controls.bin", state.implicitParams[frameSlot].mapped, 32);
             state.failureEvidenceWritten = true;
         }
-        if (state.gpuStatus != 0)
-            state.debtSeconds = std::max(0.0, state.receivedSeconds - accepted);
+        // 【行为变更】`gpuStatus` 现在只用于报告，不再改写求解器侧的时间债。
+        // 旧策略把“有一个 guide 失败”折算成整个对象的时间债，再配合下面的
+        // `gpuStatus == 0` 门控把 steps 归零。现在单 guide 失败由 shader 侧
+        // 不发布 + 下帧重试处理，债只反映调度（收到多少时间、派发多少步）。
         output << state.readbackFrame[frameSlot] << ',' << state.guides << ',' <<
             state.gpuStatus << ',' << maxBlockDefect << ',' << maxPredictorDefect << ',' <<
             accepted << ',' << state.receivedSeconds << ',' << state.dispatchedSeconds << ',' <<
@@ -293,7 +299,9 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
         state.previousPose = pose;
         state.lastFrame = renderScene.frameIndex;
     }
-    const uint32_t steps = newFrame && delta > 0.0f && state.gpuStatus == 0 &&
+    // 单 guide 的失败不再冻结整个对象：失败的 guide 因为不发布而保持上一次接受的
+    // 状态，下一帧重试；其余 guide 照常推进。gpuStatus 只作报告（见上面的读回）。
+    const uint32_t steps = newFrame && delta > 0.0f &&
         !(progressive && state.reset) ? std::min(RodGpuMaxSteps,
         static_cast<uint32_t>(std::floor((state.debtSeconds + 1.0e-9) / RodGpuStepSeconds))) : 0;
     RodGpuParams params;
