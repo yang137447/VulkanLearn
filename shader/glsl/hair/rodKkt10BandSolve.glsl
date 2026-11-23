@@ -2,6 +2,9 @@
 #define VL_ROD_KKT10_BAND_SOLVE
 
 #include "rodV3Kkt10.glsl"
+// 压缩后的 6x6 带宽系统走既有的分布式块循环约化（RodCrSolveBand32）。
+// 这里直接 include，因为 kernel 只在 VL_ROD_V3_CR_SOLVE 下才包含它。
+#include "rodCrBand.glsl"
 
 // ===========================================================================
 // CosseratImplicitV3 的 10 分量活跃集 KKT 带状求解。
@@ -1534,96 +1537,42 @@ shared uint rodKktProbeE;
 // 代数与求解都已由探针在真实状态上钉住（|Q G| = 0、|dx_condensed - dx_10wide| = 0）。
 // 相比原来的 10 宽路径：每点块从 10x10/11 列右端降到 6x6/7 列右端，
 // 每 warp 指令数约从 83k 降到 12k（顺序 Thomas 仍然全 lane 冗余）。
+// 从 CR 解恢复乘子：dlambda = S^-1 G^T A^-1 (A dx + L dx- + U dx+ - b)。
+// 邻居的方向取自 rodCrSolution（RodCrSolveBand32 结尾已有 barrier）。
+vec3 RodKkt10RecoverMultipliers(uint lane, RodKkt6Condensed condensed,
+    RodV2Vector direction)
+{
+    if (!condensed.valid || condensed.count == 0u)
+        return vec3(0);
+    RodV2Vector value = RodV2Multiply(condensed.diagonal, direction);
+    if (lane > 0u)
+        value = RodV2Add(value, RodV2Multiply(condensed.baseLower, rodCrSolution[lane - 1u]));
+    if (lane < 31u)
+        value = RodV2Add(value, RodV2Multiply(condensed.baseUpper, rodCrSolution[lane + 1u]));
+    value = RodV2Add(value, RodV2Vector(-condensed.baseRight.linear,
+        -condensed.baseRight.angular));
+    RodV2Vector applied = RodV2Multiply(condensed.inverseA, value);
+    vec3 projected;
+    for (uint row = 0u; row < 3u; ++row)
+        projected[row] = RodKktDot(condensed.gradient[row], applied);
+    return condensed.inverseS * projected;
+}
+
 uint RodKkt10SolveCondensed(uint lane, out RodKkt10Vector direction)
 {
     for (uint component = 0u; component < 10u; ++component)
         direction.values[component] = 0.0;
-    // 每个 lane 只压缩自己那一个点一次：既用于生产槽写入，也用于求解后的乘子恢复。
-    RodKkt6Condensed own = RodKkt10Condense(lane);
-    if (!own.valid)
+    RodKkt6Condensed condensed = RodKkt10Condense(lane);
+    if (!condensed.valid)
         return 2u;
-    uint status = 0u;
-    uint point = 0u;
-    while (point < 32u)
-    {
-        if (lane == point)
-        {
-            RodKkt6Store(rodKktProbeBand[0].lower, own.lower);
-            RodKkt6Store(rodKktProbeBand[0].diagonal, own.diagonal);
-            RodKkt6Store(rodKktProbeBand[0].upper, own.upper);
-            for (uint row = 0u; row < 6u; ++row)
-                rodKktProbeBand[0].right[row] =
-                    row < 3u ? own.right.linear[row] : own.right.angular[row - 3u];
-        }
-        barrier();
-        float diagonal[36];
-        float upper[36];
-        float residual[6];
-        for (uint entry = 0u; entry < 36u; ++entry)
-        {
-            diagonal[entry] = rodKktProbeBand[0].diagonal[entry];
-            upper[entry] = rodKktProbeBand[0].upper[entry];
-        }
-        // 压缩后的 right 已经是 b = -(10 分量残差)：块 Thomas 解的就是 M d = right，
-        // 这里**不能**再取负，否则得到的是 -d（探针在收敛状态上 dx ~ 0，看不出这个错）。
-        for (uint row = 0u; row < 6u; ++row)
-            residual[row] = rodKktProbeBand[0].right[row];
-        if (point > 0u)
-            for (uint row = 0u; row < 6u; ++row)
-                for (uint inner = 0u; inner < 6u; ++inner)
-                {
-                    residual[row] -= rodKktProbeBand[0].lower[row * 6u + inner] *
-                        rodKktFactorRight[point - 1u].values[inner];
-                    for (uint column = 0u; column < 6u; ++column)
-                        diagonal[row * 6u + column] -=
-                            rodKktProbeBand[0].lower[row * 6u + inner] *
-                                rodKktFactorUpper[point - 1u].values[inner * 10u + column];
-                }
-        if (!RodKktProbeFactor6(diagonal, upper, residual))
-        {
-            // 同样兜底：给对角加相对 eps 再分解一次，避免单个退化块让整个 guide 失败。
-            float pivotScale = 0.0;
-            for (uint entry = 0u; entry < 36u; entry += 7u)
-                pivotScale = max(pivotScale, abs(diagonal[entry]));
-            for (uint entry = 0u; entry < 36u; entry += 7u)
-                diagonal[entry] += 1.0e-6 * max(pivotScale, 1.0);
-            if (!RodKktProbeFactor6(diagonal, upper, residual))
-            {
-                status = 3u;
-                break;
-            }
-        }
-        for (uint row = 0u; row < 6u; ++row)
-        {
-            rodKktFactorRight[point].values[row] = rodKktWorkRight[row * 11u + 6u];
-            for (uint column = 0u; column < 6u; ++column)
-                rodKktFactorUpper[point].values[row * 10u + column] =
-                    rodKktWorkRight[row * 11u + column];
-        }
-        barrier();
-        ++point;
-    }
-    if (status != 0u)
-        return status;
-    for (int index = 31; index >= 0; --index)
-    {
-        for (uint row = 0u; row < 6u; ++row)
-        {
-            float value = rodKktFactorRight[index].values[row];
-            if (index + 1 < 32)
-                for (uint column = 0u; column < 6u; ++column)
-                    value -= rodKktFactorUpper[index].values[row * 10u + column] *
-                        rodKktProbeDirection[(index + 1) * 6u + column];
-            rodKktProbeDirection[index * 6u + row] = value;
-        }
-        barrier();
-    }
-    RodV2Vector solution = RodV2Vector(
-        vec3(rodKktProbeDirection[lane * 6u + 0u], rodKktProbeDirection[lane * 6u + 1u],
-            rodKktProbeDirection[lane * 6u + 2u]),
-        vec3(rodKktProbeDirection[lane * 6u + 3u], rodKktProbeDirection[lane * 6u + 4u],
-            rodKktProbeDirection[lane * 6u + 5u]));
-    vec3 multiplier = RodKkt10RecoverMultipliersFromCondensed(lane, own, solution);
+    // 分布式块循环约化：每个 lane 只处理自己那一个 6x6 块，不再是
+    // 「32 点顺序 Thomas 由所有 lane 冗余执行」——后者每 warp 约 32*(6^3/3+7*36)
+    // 条指令，CR 把它变成常数轮（每轮一次 6x6 求逆 + 两次块乘）。
+    RodV2Vector solution = RodV2Vector(vec3(0), vec3(0));
+    if (!RodCrSolveBand32(lane, condensed.lower, condensed.diagonal, condensed.upper,
+            condensed.right, solution))
+        return 3u;
+    vec3 multiplier = RodKkt10RecoverMultipliers(lane, condensed, solution);
     direction.values[0] = solution.linear.x;
     direction.values[1] = solution.linear.y;
     direction.values[2] = solution.linear.z;
