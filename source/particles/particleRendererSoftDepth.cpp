@@ -3,6 +3,15 @@
 namespace VL
 {
 
+namespace
+{
+// 稳定的 64 位混合：同一组 handle 在任意帧序下都得到同一签名。
+uint64_t MixSoftDepthSignature(uint64_t value, uint64_t entry, uint64_t weight)
+{
+    return (value ^ (entry * weight)) * 1099511628211ull;
+}
+}
+
 void ParticleRenderer::DestroySoftDepthResources()
 {
     if (backend == nullptr)
@@ -56,17 +65,36 @@ void ParticleRenderer::RecordSoftDepth(
     }
 
     const uint32_t imageCount = backend->GetSwapchainImageCount();
-    const uint64_t signature =
-        reinterpret_cast<uintptr_t>(
-            static_cast<VkImageView>(depth.imageView)) * 1315423911ull ^
-        reinterpret_cast<uintptr_t>(
-            static_cast<VkSampler>(depth.sampler)) * 2654435761ull ^
-        reinterpret_cast<uintptr_t>(
-            static_cast<VkImageView>(soft.imageView)) * 40503ull ^
-        static_cast<uint64_t>(imageCount) * 97ull;
+    // 资源按 swapchain image 分配，签名必须覆盖所有 image；只算当前 image 会让
+    // imageIndex 交替时每帧误判资源变化，进而每帧销毁/重建描述符池，
+    // 而上一帧的 command buffer 可能仍在引用这些 descriptor set。
+    uint64_t signature = static_cast<uint64_t>(imageCount) * 97ull;
+    for (uint32_t image = 0; image < imageCount; ++image)
+    {
+        const auto& imageDepth = depthList.at(
+            std::min<size_t>(image, depthList.size() - 1));
+        const auto& imageSoft = softList.at(
+            std::min<size_t>(image, softList.size() - 1));
+        signature = MixSoftDepthSignature(signature,
+            reinterpret_cast<uintptr_t>(
+                static_cast<VkImageView>(imageDepth.GetShaderDescriptorView())),
+            1315423911ull);
+        signature = MixSoftDepthSignature(signature,
+            reinterpret_cast<uintptr_t>(
+                static_cast<VkSampler>(imageDepth.sampler)),
+            2654435761ull);
+        signature = MixSoftDepthSignature(signature,
+            reinterpret_cast<uintptr_t>(
+                static_cast<VkImageView>(imageSoft.imageView)),
+            40503ull);
+        signature = MixSoftDepthSignature(signature, image, 31ull);
+    }
     if (softDepthResources.signature != signature ||
         softDepthResources.sets.size() != imageCount)
     {
+        // 真正的 view/尺寸变化很少见；旧 pool 的 set 可能仍被在途帧引用。
+        if (softDepthResources.descriptorPool)
+            backend->WaitIdle();
         DestroySoftDepthResources();
 
         std::vector<vk::DescriptorPoolSize> poolSizes{
