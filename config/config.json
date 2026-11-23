@@ -1,4 +1,8 @@
 {
+  "scripts": {
+    "enabled": true,
+    "autoPlay": true
+  },
   "resourcePath": "../VukanLearnResources",
   "windowSize": [
     1280,
