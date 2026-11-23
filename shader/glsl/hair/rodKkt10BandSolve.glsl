@@ -1052,4 +1052,274 @@ uint RodKkt10SolveBand(uint count)
     return 0u;
 }
 
+#ifdef VL_ROD_KKT10_CONDENSE_PROBE
+// 6x6 小工具。RodV2Matrix 的 mat3 是列主序，元素 (row,column) 在 mat3[column][row]，
+// 与 RodV2Entry/RodV2Set 及 RodV2Multiply 的乘法律一致。
+// 6x6 的 A^-T v（Q 的右因子需要它；A 不对称，不能省）。
+RodV2Vector RodKktApplyTranspose(RodV2Matrix matrix, RodV2Vector vector)
+{
+    return RodV2Vector(
+        transpose(matrix.linearLinear) * vector.linear +
+            transpose(matrix.angularLinear) * vector.angular,
+        transpose(matrix.linearAngular) * vector.linear +
+            transpose(matrix.angularAngular) * vector.angular);
+}
+
+float RodKktDot(RodV2Vector first, RodV2Vector second)
+{
+    return dot(first.linear, second.linear) + dot(first.angular, second.angular);
+}
+
+// 6 维外积 a b^T，写成 RodV2Matrix（outerProduct 的 index 顺序与列主序约定一致）。
+RodV2Matrix RodKktOuter(RodV2Vector first, RodV2Vector second)
+{
+    return RodV2Matrix(
+        outerProduct(first.linear, second.linear),
+        outerProduct(first.linear, second.angular),
+        outerProduct(first.angular, second.linear),
+        outerProduct(first.angular, second.angular));
+}
+
+// 位置块左上 3x3 加一个矩阵项，对应 RodKkt10AddPosition 的 6x6 版本。
+void RodKktAddPosition(inout RodV2Matrix matrix, mat3 value)
+{
+    for (uint column = 0u; column < 3u; ++column)
+        for (uint row = 0u; row < 3u; ++row)
+            matrix.linearLinear[column][row] += value[column][row];
+}
+
+struct RodKkt6Condensed
+{
+    RodV2Matrix lower;       // 压缩后的下块 Q L
+    RodV2Matrix diagonal;    // = A
+    RodV2Matrix upper;       // 压缩后的上块 Q U
+    RodV2Vector right;       // 压缩后的右端
+    RodV2Matrix baseLower;   // 原始 L（恢复乘子用）
+    RodV2Matrix baseUpper;   // 原始 U
+    RodV2Vector baseRight;   // 原始 b（恢复乘子用）
+    RodV2Matrix inverseA;
+    mat3 inverseS;
+    RodV2Matrix q;
+    RodV2Vector gradient[3];
+    vec3 gapRow;
+    uint count;
+    bool valid;
+};
+
+// 单个点的装配 + 压缩。由**每个 lane 对自己的点并行**调用。
+RodKkt6Condensed RodKkt10Condense(uint point)
+{
+    RodKkt6Condensed result;
+    result.lower = RodV2Zero();
+    result.diagonal = RodV2Zero();
+    result.upper = RodV2Zero();
+    result.right = RodV2Vector(vec3(0), vec3(0));
+    result.baseLower = RodV2Zero();
+    result.baseUpper = RodV2Zero();
+    result.baseRight = RodV2Vector(vec3(0), vec3(0));
+    result.inverseA = RodV2Identity();
+    result.inverseS = mat3(1);
+    result.q = RodV2Identity();
+    result.gapRow = vec3(0);
+    result.count = 0u;
+    result.valid = false;
+    RodV2Matrix baseLower = point > 0u ? RodV2Tangent(point, point - 1u) : RodV2Zero();
+    RodV2Matrix baseUpper = point < 31u ? RodV2Tangent(point, point + 1u) : RodV2Zero();
+    RodV2Matrix baseDiagonal = RodV2Tangent(point, point);
+    // 位置块的接触几何刚度项，与 RodKkt10AssembleRow 的
+    // RodKkt10AddPosition(diagonal, -lambda * hessian * (L/F)) 一致。
+    RodKkt10Contact contacts[3];
+    RodKkt10BuildContacts(point, RodKkt10PointPosition(point), contacts);
+    bool freePoint = v2Positions[point].w != 0.0;
+    float hessianScale = v2LengthScale / v2ForceScale;
+    for (uint slot = 0u; slot < 3u; ++slot)
+    {
+        if (!freePoint || !contacts[slot].enabled)
+            continue;
+        RodKktAddPosition(baseDiagonal,
+            -contacts[slot].multiplier * contacts[slot].hessian * hessianScale);
+        if (result.count < 3u)
+        {
+            result.gradient[result.count] = RodV2Vector(contacts[slot].gradient, vec3(0));
+            result.gapRow[result.count] = contacts[slot].gap / v2LengthScale;
+            ++result.count;
+        }
+    }
+    for (uint slot = result.count; slot < 3u; ++slot)
+        result.gradient[slot] = RodV2Vector(vec3(0), vec3(0));
+    // 右端 = -(完整 10 分量残差)：位置行已含当前乘子的 -lambda g/F 贡献，
+    // 接触行是 gap/L。走同一条 RodKkt10ResidualVector 保证与测量一致。
+    RodKkt10Vector residual = RodKkt10ResidualVector(point);
+    RodV2Vector baseB = RodV2Vector(
+        vec3(-residual.values[0], -residual.values[1], -residual.values[2]),
+        vec3(-residual.values[3], -residual.values[4], -residual.values[5]));
+    result.diagonal = baseDiagonal;
+    result.baseLower = baseLower;
+    result.baseUpper = baseUpper;
+    result.baseRight = baseB;
+    result.lower = baseLower;
+    result.upper = baseUpper;
+    result.right = baseB;
+    result.valid = true;
+    if (result.count == 0u)
+        return result;                       // 无活跃接触：压缩即原系统
+    RodV2Matrix inverseA;
+    if (!RodV2Inverse(baseDiagonal, inverseA))
+    {
+        result.valid = false;
+        return result;
+    }
+    result.inverseA = inverseA;
+    RodV2Vector applied[3];
+    RodV2Vector appliedTransposed[3];
+    for (uint slot = 0u; slot < 3u; ++slot)
+    {
+        applied[slot] = RodV2Multiply(inverseA, result.gradient[slot]);
+        appliedTransposed[slot] = RodKktApplyTranspose(inverseA, result.gradient[slot]);
+    }
+    // S = G^T A^-1 G；未用槽位补单位对角线，使 S 恒可逆且多余 dlambda 恒为 0。
+    mat3 s = mat3(0);
+    for (uint column = 0u; column < 3u; ++column)
+        for (uint row = 0u; row < 3u; ++row)
+            s[column][row] = row < result.count && column < result.count ?
+                RodKktDot(result.gradient[row], applied[column]) :
+                (row == column ? 1.0 : 0.0);
+    float determinantS = determinant(s);
+    if (!(abs(determinantS) > 1.0e-24) || isnan(determinantS) || isinf(determinantS))
+    {
+        result.valid = false;
+        return result;
+    }
+    mat3 inverseS = inverse(s);
+    result.inverseS = inverseS;
+    // Q = I - G S^-1 G^T A^-1 = I - sum_{i,j} S^-1[i][j] g_i (A^-T g_j)^T
+    // 注意右因子必须用 A^-T：A 是不对称的（RodV2Tangent 的 6x6 块），用 A^-1 会让
+    // Q G lambda != 0，压缩方程残差就会出现与 lambda 同阶的偏置（探针 checkB 实测
+    // 约 0.9 * max|lambda|/F）。S 与乘子恢复用的是 A^-1，不要混。
+    RodV2Matrix update = RodV2Zero();
+    for (uint row = 0u; row < 3u; ++row)
+        for (uint column = 0u; column < 3u; ++column)
+        {
+            float weight = inverseS[column][row];
+            if (weight == 0.0)
+                continue;
+            update = RodV2Add(update,
+                RodKktOuter(result.gradient[row], appliedTransposed[column]));
+        }
+    RodV2Matrix q = RodV2Add(RodV2Identity(), RodV2Negative(update));
+    result.q = q;
+    result.lower = RodV2Multiply(q, baseLower);
+    result.upper = RodV2Multiply(q, baseUpper);
+    // 额外项 G S^-1 h，其中 h = -(gap/L)，即 -gapRow。
+    RodV2Vector extra = RodV2Vector(vec3(0), vec3(0));
+    for (uint row = 0u; row < 3u; ++row)
+    {
+        float weight = 0.0;
+        for (uint column = 0u; column < 3u; ++column)
+            weight -= inverseS[column][row] * result.gapRow[column];
+        extra = RodV2Add(extra, RodV2Vector(
+            result.gradient[row].linear * weight,
+            result.gradient[row].angular * weight));
+    }
+    result.right = RodV2Add(RodV2Multiply(q, baseB), extra);
+    return result;
+}
+
+
+// ===========================================================================
+// 压缩代数对照探针（VL_ROD_KKT10_CONDENSE_PROBE）
+//
+// 上一轮把 10x10 KKT 压缩到 6x6 后整场景不收敛，但整场景信号无法区分
+// 「压缩代数写错」和「压缩后的系统求解/CR 用错」。这里用**工作路径已解出的
+// dx / dlambda** 反过来检验压缩恒等式，把两个偏差直接量出来：
+//
+//   checkA = max |S^-1 G^T A^-1 (A dx + L dx- + U dx+ - b) - dlambda_10wide|
+//   checkB = max |A dx + Q(L dx- + U dx+) - Q b - G S^-1 h|   压缩方程残差
+//
+// 两者之一明显非零 → 压缩代数错（问题在 RodKkt10Condense）；
+// 两者都接近 0 → 代数对，问题在压缩系统的求解（上一轮的 6x6 Thomas / CR 使用）。
+// 探针只计算、不改变工作路径的解，因此可以直接在真实轨迹上跑。
+// ===========================================================================
+shared uint rodKktProbeA;
+shared uint rodKktProbeB;
+shared uint rodKktProbeC;
+
+void RodKkt10ProbeCondensed(uint lane, RodKkt10Vector working)
+{
+    if (lane == 0u)
+    {
+        rodKktProbeA = 0u;
+        rodKktProbeB = 0u;
+        rodKktProbeC = 0u;
+    }
+    barrier();
+    RodKkt6Condensed condensed = RodKkt10Condense(lane);
+    if (!condensed.valid || condensed.count == 0u)
+        return;
+    RodV2Vector direction = RodV2Vector(
+        vec3(working.values[0u], working.values[1u], working.values[2u]),
+        vec3(working.values[3u], working.values[4u], working.values[5u]));
+    vec3 multiplier = vec3(working.values[6u], working.values[7u], working.values[8u]);
+    RodV2Vector neighbour = RodV2Vector(vec3(0), vec3(0));
+    if (lane > 0u)
+        neighbour = RodV2Add(neighbour, RodV2Multiply(condensed.baseLower,
+            RodV2Vector(vec3(rodKktDirection[lane - 1u].values[0u],
+                rodKktDirection[lane - 1u].values[1u],
+                rodKktDirection[lane - 1u].values[2u]),
+                vec3(rodKktDirection[lane - 1u].values[3u],
+                    rodKktDirection[lane - 1u].values[4u],
+                    rodKktDirection[lane - 1u].values[5u]))));
+    if (lane < 31u)
+        neighbour = RodV2Add(neighbour, RodV2Multiply(condensed.baseUpper,
+            RodV2Vector(vec3(rodKktDirection[lane + 1u].values[0u],
+                rodKktDirection[lane + 1u].values[1u],
+                rodKktDirection[lane + 1u].values[2u]),
+                vec3(rodKktDirection[lane + 1u].values[3u],
+                    rodKktDirection[lane + 1u].values[4u],
+                    rodKktDirection[lane + 1u].values[5u]))));
+    // checkA：从位置方程反推乘子
+    RodV2Vector row = RodV2Add(RodV2Multiply(condensed.diagonal, direction), neighbour);
+    row = RodV2Add(row, RodV2Vector(-condensed.baseRight.linear,
+        -condensed.baseRight.angular));
+    RodV2Vector applied = RodV2Multiply(condensed.inverseA, row);
+    vec3 projected;
+    for (uint entry = 0u; entry < 3u; ++entry)
+        projected[entry] = RodKktDot(condensed.gradient[entry], applied);
+    vec3 recovered = condensed.inverseS * projected;
+    vec3 multiplierError = recovered - multiplier;
+    float checkA = max(max(abs(multiplierError.x), abs(multiplierError.y)),
+        abs(multiplierError.z));
+    // checkB：压缩恒等式等价于 G^T dx = h，直接量这个接触行残差。
+    // 不量 |A dx + Q(...) - Q b - G S^-1 h|：它等于 |G S^-1 (G^T dx - h)|，
+    // 被 |S^-1| ~ |A| ~ 1e3 放大，1e-5 的求解容差会显示成 1e-2 量级的假偏置
+    // （第一版探针就是这样误报的）。
+    vec3 contactRow;
+    for (uint entry = 0u; entry < 3u; ++entry)
+        contactRow[entry] = RodKktDot(condensed.gradient[entry], direction) -
+            (-condensed.gapRow[entry]);
+    float checkB = max(max(abs(contactRow.x), abs(contactRow.y)), abs(contactRow.z));
+    RodV2Vector lhs = RodV2Add(RodV2Multiply(condensed.diagonal, direction),
+        RodV2Multiply(condensed.q, neighbour));
+    RodV2Vector extra = RodV2Vector(vec3(0), vec3(0));
+    for (uint entry = 0u; entry < 3u; ++entry)
+    {
+        float weight = 0.0;
+        for (uint column = 0u; column < 3u; ++column)
+            weight -= condensed.inverseS[column][entry] * condensed.gapRow[column];
+        extra = RodV2Add(extra, RodV2Vector(
+            condensed.gradient[entry].linear * weight,
+            condensed.gradient[entry].angular * weight));
+    }
+    RodV2Vector rhs = RodV2Add(RodV2Multiply(condensed.q, condensed.baseRight), extra);
+    RodV2Vector difference = RodV2Add(lhs, RodV2Vector(-rhs.linear, -rhs.angular));
+    // 保留压缩方程残差作为第二个量级参考（会被 |S^-1| 放大，只作对照）。
+    float scaledResidual = max(max(max(abs(difference.linear.x), abs(difference.linear.y)),
+        abs(difference.linear.z)), max(max(abs(difference.angular.x),
+        abs(difference.angular.y)), abs(difference.angular.z)));
+    atomicMax(rodKktProbeC, floatBitsToUint(scaledResidual));
+    atomicMax(rodKktProbeA, floatBitsToUint(checkA));
+    atomicMax(rodKktProbeB, floatBitsToUint(checkB));
+}
+#endif // VL_ROD_KKT10_CONDENSE_PROBE
+
 #endif

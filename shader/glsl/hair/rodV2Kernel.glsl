@@ -975,6 +975,9 @@ void main()
                     rodKktDirection[lane].values[2u]),
                 vec3(rodKktDirection[lane].values[3u], rodKktDirection[lane].values[4u],
                     rodKktDirection[lane].values[5u]));
+#ifdef VL_ROD_KKT10_CONDENSE_PROBE
+            RodKkt10ProbeCondensed(lane, rodKktDirection[lane]);
+#endif
 #else
             RodV2Vector residual = RodV2Residual(lane);
             RodV2Matrix lower = lane > 0u ? RodV2Tangent(lane, lane - 1u) : RodV2Zero();
@@ -1198,6 +1201,12 @@ void main()
         rodState.guides[slot].energies = vec4(float(v3BacktrackCount),
             float(rodKktRepairCount), uintBitsToFloat(rodKktRepairDepthBits),
             uintBitsToFloat(rodKktSeparatedGapBits) - 1.0);
+#ifdef VL_ROD_KKT10_CONDENSE_PROBE
+        // 探针：压缩代数对照（A = 乘子反推误差，B = 压缩方程残差）。
+        rodState.guides[slot].energies = vec4(float(v3BacktrackCount),
+            float(rodKktRepairCount), uintBitsToFloat(rodKktProbeA),
+            uintBitsToFloat(rodKktProbeB));
+#endif
 #endif
 #endif
         rodState.guides[slot].timing = vec4(failure == 0u ? simulatedSeconds :
