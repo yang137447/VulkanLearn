@@ -675,6 +675,51 @@ merit **在这条方向上根本不下降**，不是回溯次数不够、也不�
 线搜索看不见接触的改善。下一轮可试的最小改动是给 merit 里的接触行乘以 `F/L`
 使两类残差同量纲，再看 0.36% 会不会下降；这只影响 merit，不改 `v2Maximum` 的收敛判据。
 
+## 第十四轮：三个否定结果，把 0.36% 的失败逼到一个很小的范围
+
+本轮做了三次针对性实验，全部是**否定**结果——但它们把范围收得很窄。
+
+### 1. 方向不是上升方向（排除了 Jacobian 不自洽）
+
+在 kernel 里加了一个诊断：每 lane 计算 `F^T d`（10 分量残差与方向的点积），
+取正部按位 `atomicMax`。牛顿方向必须满足 `F^T d < 0`。实测 2000 个 guide 里
+**没有任何一个 lane 的 `F^T d` 为正**。所以「装配的 Jacobian 与实测残差不自洽」
+这个假设被排除，压缩求解给出的确实是下降方向。
+
+### 2. 失败时残差早就远低于容差
+
+失败 guide 的 merit 常在 1e-13 量级（逐分量约 1e-7），而收敛判据是
+`v2Maximum <= implicitControls.originTolerance.w`（**1e-4**）。所以它们不是
+「残差没降到容差」——残差早就够了，卡住的是与残差无关的另外两个门：
+`rodKktFeasible` 与 `v2DomainValid`。
+
+### 3. 负乘子不是卡点
+
+把负乘子在接受步之后投影到 0 是个正确的 KKT 投影（不等式约束要求 λ ≥ 0），
+但实测**没有变化**：0.36% → 0.336%（噪声内），defect 还从 0.15 涨到 2.34。
+所以「负乘子导致可行性判定永久失败」这个假设也被排除，改动已回退，
+代码保持在最后一次验证过的状态。
+
+### 剩下的唯一嫌疑：`v2DomainValid`
+
+试算接受需要 `v2DomainValid != 0`，它是 32 个 lane 的 `v2Metric.w` 的最小值；
+而 `RodKkt10Measure` 里判定 valid 的条件之一是
+
+```text
+length(RodLog(conj(oldOrientations[lane]) * v2Orientations[lane])) < RodRotationLimit
+```
+
+`oldOrientations` 是**子步开始时**的姿态，不是上一次迭代的姿态。也就是说这是
+**累积**转角判据：一个 guide 在一个 substep 内累计转过超过 `RodRotationLimit` 之后，
+无论 α 取多小，试算都不可能再 valid（α→0 也消不掉已经累积的转角），于是线搜索
+必然失败——这正好解释了为什么失败集中在 `SC_tressfx_rod_animated`（身体带动头发的
+动画场景）而静态场景少得多。
+
+下一轮的验证方式很直接：`v2Metric.z` 目前是未使用的 0，把 validity 的具体失败原因
+（incrementValid / 非有限 / NaN 残差 / 转角 / 关节）编码进去，用 debug 通道读出来，
+就能确认是不是转角这一条。若确认，修法是让转角判据对齐「本子步内的增量」而不是
+「相对子步起点的累积」，或者对超限 guide 采取分段推进。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
