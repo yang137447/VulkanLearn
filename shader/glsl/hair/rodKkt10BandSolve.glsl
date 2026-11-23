@@ -1174,8 +1174,23 @@ RodKkt6Condensed RodKkt10Condense(uint point)
     RodV2Matrix inverseA;
     if (!RodV2Inverse(baseDiagonal, inverseA))
     {
-        result.valid = false;
-        return result;
+        // 退化点兜底：给 A 加相对 eps 的正则项再试一次。压缩路径没有 10 宽那套
+        // supernode 兜底，如果这里直接放弃，整个 guide 会掉出 KKT 秩并失败；
+        // 给一个近似方向交给 merit 线搜索裁决要好得多。
+        float diagonalScale = 0.0;
+        for (uint row = 0u; row < 6u; ++row)
+            diagonalScale = max(diagonalScale, abs(RodV2Entry(baseDiagonal, row, row)));
+        RodV2Matrix regularized = baseDiagonal;
+        for (uint row = 0u; row < 6u; ++row)
+            RodV2Set(regularized, row, row,
+                RodV2Entry(baseDiagonal, row, row) + 1.0e-6 * max(diagonalScale, 1.0));
+        if (!RodV2Inverse(regularized, inverseA))
+        {
+            result.valid = false;
+            return result;
+        }
+        baseDiagonal = regularized;
+        result.diagonal = baseDiagonal;
     }
     result.inverseA = inverseA;
     RodV2Vector applied[3];
@@ -1195,8 +1210,17 @@ RodKkt6Condensed RodKkt10Condense(uint point)
     float determinantS = determinant(s);
     if (!(abs(determinantS) > 1.0e-24) || isnan(determinantS) || isinf(determinantS))
     {
-        result.valid = false;
-        return result;
+        // 接触法向接近平行或量级过小时 S 会退化：加 eps*trace(S) 到对角线，
+        // 让局部乘子解仍然存在（多余的分量随后由 Q 投影掉）。
+        float traceS = abs(s[0][0]) + abs(s[1][1]) + abs(s[2][2]);
+        for (uint entry = 0u; entry < 3u; ++entry)
+            s[entry][entry] += 1.0e-6 * max(traceS, 1.0e-12);
+        determinantS = determinant(s);
+        if (!(abs(determinantS) > 1.0e-30) || isnan(determinantS) || isinf(determinantS))
+        {
+            result.valid = false;
+            return result;
+        }
     }
     mat3 inverseS = inverse(s);
     result.inverseS = inverseS;
@@ -1557,8 +1581,17 @@ uint RodKkt10SolveCondensed(uint lane, out RodKkt10Vector direction)
                 }
         if (!RodKktProbeFactor6(diagonal, upper, residual))
         {
-            status = 3u;
-            break;
+            // 同样兜底：给对角加相对 eps 再分解一次，避免单个退化块让整个 guide 失败。
+            float pivotScale = 0.0;
+            for (uint entry = 0u; entry < 36u; entry += 7u)
+                pivotScale = max(pivotScale, abs(diagonal[entry]));
+            for (uint entry = 0u; entry < 36u; entry += 7u)
+                diagonal[entry] += 1.0e-6 * max(pivotScale, 1.0);
+            if (!RodKktProbeFactor6(diagonal, upper, residual))
+            {
+                status = 3u;
+                break;
+            }
         }
         for (uint row = 0u; row < 6u; ++row)
         {
