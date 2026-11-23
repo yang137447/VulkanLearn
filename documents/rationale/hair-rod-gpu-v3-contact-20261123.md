@@ -1303,6 +1303,38 @@ shared 要 ≤24 KB 才有 2 个 workgroup、≤12 KB 才有 4 个。
 替换 `rodCrBand.glsl` 里的 `RodCrSolveBand32`，然后实测 shared 占用与
 每 guide-iteration 成本。若 5.3x 里能拿到 3x 以上，2000 guide 就落在 60 fps 附近。
 
+### 测量口径确认：`hairSimulation` 就是墙钟，且瓶颈是单 warp 延迟
+
+先排除一个怀疑：`--frame-limit 60` 的节流等待是否被算进 `hairSimulation`。
+用 `--frame-limit 1000`（不节流）复测，读数几乎不变：
+
+| guides | 节流 60 | 不节流 1000 |
+| --- | --- | --- |
+| 200 | 19.2 ms | 19.2 ms |
+| 800 | 22.0 ms | 22.1 ms |
+| 2000 | 33.5 ms | 36.3 ms |
+
+所以那是真实墙钟，不是被 pacing 稀释的数字。
+
+**关键一致性检查**：200 guide 场景 meanIters 只有 0.6，但 maxIters = 64，
+整帧 19.2 ms 完全由那**一个** guide 决定（其余几乎不迭代）。也就是
+
+```text
+64 次迭代 ≈ 19 ms  →  单 warp 一次迭代 ≈ 300 µs ≈ 540,000 cycle
+```
+
+而一次迭代的理论指令量只有约 4,200 条（压缩 1,300 + CR 2,900）。
+540,000 / 4,200 ≈ **128 cycle/指令**——这正是「**每个 SM 只驻留一个 warp、
+完全无法隐藏访存延迟**」的典型特征（一次依赖访存就是数百 cycle）。
+
+所以占用率假设得到实测支持：**不是指令多，是只有一个 warp 在跑、每次访存都裸露延迟**。
+shared 被 `rodCr`（约 20 KB）钉在 1 workgroup/SM 就是根因，把它让出来
+（1 → 3~4 warp/SM）正好是 3~4x 的延迟隐藏收益。
+
+补充：静态累加 shared 声明没有意义——声明里还有 `rodV2BandStorage[1728]`（27,648 B）
+这类 KKT 路径根本不用的数组，合计远超 48 KB 却仍能创建管线，说明驱动做了死代码消除，
+真实分配只能靠实测（本次用「单 warp 迭代成本」反推）。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
