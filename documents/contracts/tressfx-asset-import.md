@@ -27,7 +27,10 @@ runtime 的 rod 隔离验证资产
 
 这次切换只声明**正确性范围**：接触活跃集、胶囊解析 Hessian、SDF 代理场都已接上，
 `SC_tressfx_rod_animated` 与 `SC_tressfx_rod_sdf_animated` 无 validation 消息地跑完，
-稳态帧的组分残差在 1e-04 量级。它**不**声明性能验收：
+稳态帧的组分残差收敛到 **1e-02** 的视觉下限即停（见
+`documents/rationale/hair-rod-gpu-v3-contact-20261123.md` 第二十轮）；
+`originTolerance.w` 的 1e-4 对画面没有意义，而接触间隙容差仍按 1e-4 量级独立判定，
+不受这个停止条件影响。它**不**声明性能验收：
 2000 根模拟 guide 时 hair pass 约 80 ms（RTX 3070 Laptop），不满足 60 fps；
 稳态约 1% 的 guide 会因牛顿预算耗尽而失败，失败按 guide 隔离并在下一帧重试，
 不会冻结整个物体。全头风/回正/成本验收属于后续阶段。
