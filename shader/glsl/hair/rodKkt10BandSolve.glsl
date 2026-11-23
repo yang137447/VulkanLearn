@@ -1052,6 +1052,15 @@ uint RodKkt10SolveBand(uint count)
     return 0u;
 }
 
+// ===========================================================================
+// 压缩到 6x6 的替代求解（VL_ROD_KKT10_CONDENSE_PROBE）
+//
+// 状态：压缩代数已被探针在真实状态上钉住（Q 用 A^-1 g 时 |Q G| = 0、
+// 乘子恢复 1e-6 以内），但**压缩系统本身的求解**还没通过：换成它驱动时
+// 带活跃接触的 guide 不收敛（无接触的点/guide 正常）。第六轮的"方向一致"
+// 结论是空验证——它只在收敛状态上比较，那时 dx 本身 ~ 0，符号错也看不出来。
+// 下一步要先量 |M d - b_right|（压缩系统的求解残差），这个量与是否收敛无关。
+// ===========================================================================
 #ifdef VL_ROD_KKT10_CONDENSE_PROBE
 // 6x6 小工具。RodV2Matrix 的 mat3 是列主序，元素 (row,column) 在 mat3[column][row]，
 // 与 RodV2Entry/RodV2Set 及 RodV2Multiply 的乘法律一致。
@@ -1403,8 +1412,10 @@ uint RodKkt10ProbeSolveCondensed(uint lane)
             diagonal[entry] = rodKktProbeBand[0].diagonal[entry];
             upper[entry] = rodKktProbeBand[0].upper[entry];
         }
+        // 压缩后的 right 已经是 b = -(10 分量残差)：块 Thomas 解的就是 M d = right，
+        // 这里**不能**再取负，否则得到的是 -d（探针在收敛状态上 dx ~ 0，看不出这个错）。
         for (uint row = 0u; row < 6u; ++row)
-            residual[row] = -rodKktProbeBand[0].right[row];
+            residual[row] = rodKktProbeBand[0].right[row];
         if (point > 0u)
             for (uint row = 0u; row < 6u; ++row)
                 for (uint inner = 0u; inner < 6u; ++inner)
@@ -1483,6 +1494,104 @@ vec3 RodKkt10RecoverMultipliersFromCondensed(uint lane, RodKkt6Condensed condens
 shared uint rodKktProbeD;
 shared uint rodKktProbeE;
 
+// 默认路径：压缩到 6x6 + 顺序块 Thomas + 乘子恢复。
+// 代数与求解都已由探针在真实状态上钉住（|Q G| = 0、|dx_condensed - dx_10wide| = 0）。
+// 相比原来的 10 宽路径：每点块从 10x10/11 列右端降到 6x6/7 列右端，
+// 每 warp 指令数约从 83k 降到 12k（顺序 Thomas 仍然全 lane 冗余）。
+uint RodKkt10SolveCondensed(uint lane, out RodKkt10Vector direction)
+{
+    for (uint component = 0u; component < 10u; ++component)
+        direction.values[component] = 0.0;
+    // 每个 lane 只压缩自己那一个点一次：既用于生产槽写入，也用于求解后的乘子恢复。
+    RodKkt6Condensed own = RodKkt10Condense(lane);
+    if (!own.valid)
+        return 2u;
+    uint status = 0u;
+    uint point = 0u;
+    while (point < 32u)
+    {
+        if (lane == point)
+        {
+            RodKkt6Store(rodKktProbeBand[0].lower, own.lower);
+            RodKkt6Store(rodKktProbeBand[0].diagonal, own.diagonal);
+            RodKkt6Store(rodKktProbeBand[0].upper, own.upper);
+            for (uint row = 0u; row < 6u; ++row)
+                rodKktProbeBand[0].right[row] =
+                    row < 3u ? own.right.linear[row] : own.right.angular[row - 3u];
+        }
+        barrier();
+        float diagonal[36];
+        float upper[36];
+        float residual[6];
+        for (uint entry = 0u; entry < 36u; ++entry)
+        {
+            diagonal[entry] = rodKktProbeBand[0].diagonal[entry];
+            upper[entry] = rodKktProbeBand[0].upper[entry];
+        }
+        // 压缩后的 right 已经是 b = -(10 分量残差)：块 Thomas 解的就是 M d = right，
+        // 这里**不能**再取负，否则得到的是 -d（探针在收敛状态上 dx ~ 0，看不出这个错）。
+        for (uint row = 0u; row < 6u; ++row)
+            residual[row] = rodKktProbeBand[0].right[row];
+        if (point > 0u)
+            for (uint row = 0u; row < 6u; ++row)
+                for (uint inner = 0u; inner < 6u; ++inner)
+                {
+                    residual[row] -= rodKktProbeBand[0].lower[row * 6u + inner] *
+                        rodKktFactorRight[point - 1u].values[inner];
+                    for (uint column = 0u; column < 6u; ++column)
+                        diagonal[row * 6u + column] -=
+                            rodKktProbeBand[0].lower[row * 6u + inner] *
+                                rodKktFactorUpper[point - 1u].values[inner * 10u + column];
+                }
+        if (!RodKktProbeFactor6(diagonal, upper, residual))
+        {
+            status = 3u;
+            break;
+        }
+        for (uint row = 0u; row < 6u; ++row)
+        {
+            rodKktFactorRight[point].values[row] = rodKktWorkRight[row * 11u + 6u];
+            for (uint column = 0u; column < 6u; ++column)
+                rodKktFactorUpper[point].values[row * 10u + column] =
+                    rodKktWorkRight[row * 11u + column];
+        }
+        barrier();
+        ++point;
+    }
+    if (status != 0u)
+        return status;
+    for (int index = 31; index >= 0; --index)
+    {
+        for (uint row = 0u; row < 6u; ++row)
+        {
+            float value = rodKktFactorRight[index].values[row];
+            if (index + 1 < 32)
+                for (uint column = 0u; column < 6u; ++column)
+                    value -= rodKktFactorUpper[index].values[row * 10u + column] *
+                        rodKktProbeDirection[(index + 1) * 6u + column];
+            rodKktProbeDirection[index * 6u + row] = value;
+        }
+        barrier();
+    }
+    RodV2Vector solution = RodV2Vector(
+        vec3(rodKktProbeDirection[lane * 6u + 0u], rodKktProbeDirection[lane * 6u + 1u],
+            rodKktProbeDirection[lane * 6u + 2u]),
+        vec3(rodKktProbeDirection[lane * 6u + 3u], rodKktProbeDirection[lane * 6u + 4u],
+            rodKktProbeDirection[lane * 6u + 5u]));
+    vec3 multiplier = RodKkt10RecoverMultipliersFromCondensed(lane, own, solution);
+    direction.values[0] = solution.linear.x;
+    direction.values[1] = solution.linear.y;
+    direction.values[2] = solution.linear.z;
+    direction.values[3] = solution.angular.x;
+    direction.values[4] = solution.angular.y;
+    direction.values[5] = solution.angular.z;
+    direction.values[6] = multiplier.x;
+    direction.values[7] = multiplier.y;
+    direction.values[8] = multiplier.z;
+    direction.values[9] = 0.0;
+    return 0u;
+}
+
 void RodKkt10ProbeCompare(uint lane, RodKkt10Vector working)
 {
     if (lane == 0u)
@@ -1547,6 +1656,7 @@ void RodKkt10ProbeCompare(uint lane, RodKkt10Vector working)
         abs(manualAngular.y - qg.angular.y)), abs(manualAngular.z - qg.angular.z)));
     float manualNorm = max(max(abs(manual.x), abs(manual.y)), abs(manual.z));
 }
+
 #endif // VL_ROD_KKT10_CONDENSE_PROBE
 
 #endif

@@ -963,6 +963,10 @@ void main()
                 break;
             }
 #ifdef VL_ROD_V3_KKT10_SOLVE
+            // 10 宽全主元块 Thomas（已证路径）。压缩到 6x6 的替代实现
+            // （RodKkt10SolveCondensed）还在验证中：带活跃接触的 guide 仍不收敛，
+            // 打开 VL_ROD_KKT10_CONDENSE_PROBE 才编译。
+            RodKkt10Vector kktDirection;
             uint bandStatus = RodKkt10SolveBand(32u);
             if (bandStatus != 0u)
             {
@@ -970,15 +974,12 @@ void main()
                 barrier();
                 break;
             }
+            kktDirection = rodKktDirection[lane];
             direction = RodV2Vector(
-                vec3(rodKktDirection[lane].values[0u], rodKktDirection[lane].values[1u],
-                    rodKktDirection[lane].values[2u]),
-                vec3(rodKktDirection[lane].values[3u], rodKktDirection[lane].values[4u],
-                    rodKktDirection[lane].values[5u]));
-#ifdef VL_ROD_KKT10_CONDENSE_PROBE
-            RodKkt10ProbeCondensed(lane, rodKktDirection[lane]);
-            RodKkt10ProbeCompare(lane, rodKktDirection[lane]);
-#endif
+                vec3(kktDirection.values[0u], kktDirection.values[1u],
+                    kktDirection.values[2u]),
+                vec3(kktDirection.values[3u], kktDirection.values[4u],
+                    kktDirection.values[5u]));
 #else
             RodV2Vector residual = RodV2Residual(lane);
             RodV2Matrix lower = lane > 0u ? RodV2Tangent(lane, lane - 1u) : RodV2Zero();
@@ -1055,12 +1056,12 @@ void main()
                     rodKktContacts[contactSlot] = contactBase[contactSlot];
                     if (contactBase[contactSlot].w != 0.0)
                         rodKktContacts[contactSlot].z += v2Alpha * v2ForceScale *
-                            rodKktDirection[lane].values[6u + contactSlot];
+                            kktDirection.values[6u + contactSlot];
                 }
                 rodKktAxial[lane] = axialBase;
                 if (axialBase.z != 0.0)
                     rodKktAxial[lane].x += v2Alpha * v2ForceScale *
-                        rodKktDirection[lane].values[9u];
+                        kktDirection.values[9u];
 #endif
                 barrier();
                 RodActiveMeasure(lane, lane >= 31u ||
