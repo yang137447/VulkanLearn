@@ -508,7 +508,9 @@ map directory. Its cooked package is the gitignored
 `VT/worldV2/SC_pegasus_rvt/`; rebuild it with
 `main_editor.exe --terrain-vt-cook --initial-scene Maps/SC_pegasus_rvt/SC_pegasus_rvt.json --exit-after-frames 2`.
 `Generated/Validation/TerrainCompositedVT/Variants/...` is validation evidence, not
-the map source.
+the map source. `Maps/SC_pegasus_rvt/SC_pegasus_rvt_play.json` is the playable variant:
+the same terrain plus the UE GASP Echo character on the old tile-05 spawn, with
+`runtimeMode=gameplay`; it needs a C#-enabled build and `--autoplay` to enter Play.
 Default selection is not proof of complete runtime/package acceptance; check the scoped evidence
 linked from [the acceptance entry](documents/reference/rendering/terrain-composited-vt-acceptance.md).
 Gates that were explicitly deferred rather than passed (full P4 editing, authoring-mode fault
