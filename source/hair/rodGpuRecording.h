@@ -199,6 +199,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
         float maxBlockDefect = 0.0f;
         float maxPredictorDefect = 0.0f;
         uint32_t failedGuides = 0;
+        uint32_t maxIterations = 0;
         std::ofstream failures("artifacts/hair-landing-20261119/gpu-failed-guides.csv", std::ios::app);
         const auto& section = object->GetImported()->modelResource.sections[
             object->GetImportedSectionIndex()];
@@ -209,6 +210,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
             state.gpuStatus = std::max(state.gpuStatus, static_cast<uint32_t>(diagnostic[0]));
             maxBlockDefect = std::max(maxBlockDefect, diagnostic[1]);
             maxPredictorDefect = std::max(maxPredictorDefect, diagnostic[2]);
+            maxIterations = std::max(maxIterations, static_cast<uint32_t>(diagnostic[3]));
             failedGuides += diagnostic[0] != 0.0f ? 1 : 0;
             if (diagnostic[0] != 0.0f)
             {
@@ -220,6 +222,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
             }
         }
         state.acceptedSeconds = accepted;
+        state.maxIterationsLastFence = maxIterations;
         if (failedGuides != 0 && !state.failureEvidenceWritten &&
             state.captureFailureSlot != UINT32_MAX &&
             values[state.captureFailureSlot * 16] != 0.0f)
@@ -301,8 +304,14 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     }
     // 单 guide 的失败不再冻结整个对象：失败的 guide 因为不发布而保持上一次接受的
     // 状态，下一帧重试；其余 guide 照常推进。gpuStatus 只作报告（见上面的读回）。
+    // 另外按上一批读回的牛顿轮数限制单帧 substep：还在瞬态（硬帧）时只派发
+    // RodGpuV3HardFrameSteps，把“每 guide 数十轮 × 8 substep × 数千 guide”摊到多帧，
+    // 避免单次 dispatch 超过 OS 提交上限；稳态（0–8 轮）仍是满 RodGpuMaxSteps。
+    const uint32_t substepBudget = progressive &&
+        state.maxIterationsLastFence > RodGpuV3HardFrameIterations ?
+        RodGpuV3HardFrameSteps : RodGpuMaxSteps;
     const uint32_t steps = newFrame && delta > 0.0f &&
-        !(progressive && state.reset) ? std::min(RodGpuMaxSteps,
+        !(progressive && state.reset) ? std::min(substepBudget,
         static_cast<uint32_t>(std::floor((state.debtSeconds + 1.0e-9) / RodGpuStepSeconds))) : 0;
     RodGpuParams params;
     params.hairToWorld = draw.model;

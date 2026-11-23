@@ -21,6 +21,12 @@ namespace VL::Hair
 inline constexpr uint32_t RodGpuMaxSteps = 8;
 inline constexpr uint32_t RodGpuSweeps = 16;
 inline constexpr double RodGpuStepSeconds = 1.0 / 240.0;
+// V3 带接触的“硬帧”判据：上一批读回里某个 guide 用了超过这么多轮牛顿，就说明
+// 它还在首个瞬态里。此时单帧只派发 1 个 substep，把瞬态摊到多帧——2000 guide
+// 实测「8 substep × 每 guide 数十轮」会让单次 dispatch 超过 OS 的提交上限
+// （vk::DeviceLostError）。稳态（0–8 轮）仍然是满 8 个 substep。
+inline constexpr uint32_t RodGpuV3HardFrameIterations = 12;
+inline constexpr uint32_t RodGpuV3HardFrameSteps = 1;
 inline constexpr uint32_t RodGpuGuideVec4Count = 32 * 5 + 31 * 8 + 4;
 inline constexpr uint32_t RodGpuReferenceVec4Count = 96;
 
@@ -167,6 +173,9 @@ struct RodGpuObject
     double debtSeconds = 0.0;
     double acceptedSeconds = 0.0;
     uint32_t gpuStatus = 0;
+    // 上一批读回里单 guide 的最大牛顿轮数（UINT32_MAX = 还没有读回，按“硬帧”处理，
+    // 因此 reset 后的头两帧一定走保守的 1 substep）。见 RodGpuV3HardFrameIterations。
+    uint32_t maxIterationsLastFence = UINT32_MAX;
     RodGpuPose previousPose;
     RodGpuPose referencePose;
     bool poseInitialized = false;
@@ -200,6 +209,8 @@ struct RodGpuObject
         ++simulationGeneration;
         reset = true;
         sdfHistoryValid = false;
+        // reset 之后重新进入瞬态：把硬帧判据恢复成保守值（未知）。
+        maxIterationsLastFence = UINT32_MAX;
     }
 
     RodGpuPose Sample(double time) const
