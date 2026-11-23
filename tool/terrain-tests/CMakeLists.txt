@@ -230,7 +230,7 @@ target_include_directories(terrain_production_priority_tests BEFORE PRIVATE
     ${CMAKE_CURRENT_SOURCE_DIR}/terrain-composited-runtime-private
     ${PROJECT_SOURCE_DIR}/source)
 target_compile_definitions(terrain_production_priority_tests PRIVATE VL_FILE_IO_TEST_HOOKS
-    VL_TERRAIN_SERVICE_SOURCE="${PROJECT_SOURCE_DIR}/source/render/resource/terrainCompositedService.cpp")
+    VL_TERRAIN_SERVICE_SOURCE="${PROJECT_SOURCE_DIR}/source/render/resource/terrainCompositedServiceImplProduction.cpp")
 target_link_libraries(terrain_production_priority_tests PRIVATE
     Vulkan::Vulkan Eigen3 Json Threads::Threads BLAKE3::blake3)
 vulkanlearn_add_gtest(terrain_production_priority_tests)

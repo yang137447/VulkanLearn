@@ -258,8 +258,8 @@ TEST(TerrainProductionPriorityWiring, ActualServiceConsumesSelectorWithoutLegacy
     std::ifstream input(VL_TERRAIN_SERVICE_SOURCE);
     ASSERT_TRUE(input);
     const std::string source((std::istreambuf_iterator<char>(input)), {});
-    const auto begin = source.find("    void RecordProduction(");
-    const auto end = source.find("    void Capture(", begin);
+    const auto begin = source.find("void TerrainCompositedService::Impl::RecordProduction(");
+    const auto end = source.find("void TerrainCompositedService::Impl::SnapshotStats(", begin);
     ASSERT_NE(begin, std::string::npos);
     ASSERT_NE(end, std::string::npos);
     const auto body = source.substr(begin, end - begin);
