@@ -1000,6 +1000,45 @@ A 的两个子目标都已达成并复验：
 （bind pose 与碰撞体摆放的关系），或对这类 guide 单独做「初始状态投影」，
 而不是继续调求解参数。按当前验收口径（发型整体保住、单根隔离）保持为已知债务。
 
+## B 阶段入口盘点（先查清已有基础，不从头设计）
+
+在动 B 之前先把仓库里已有的成绺/耦合基础查清了，结论是**不是从零开始**：
+
+`tool/hair/` 下已有一套 CPU 原型，并且在构建图里（`CMakeLists.txt:104`
+无条件 `add_subdirectory(tool/hair)`，四个可执行目标都在 `build/Makefile` 里）：
+
+| 目标 | 源文件 | 内容 |
+| --- | --- | --- |
+| `vl_hair_clump_cpu` | `hairClumpPrototype.cpp` + `hairClumpControl.cpp`(48 KB) | C1 成对 clump 能量 + C0 startup/control |
+| `vl_hair_clump_coupled` | `hairClumpCoupled.cpp`(68 KB) | C2 45 维联合能量与交叉装配 |
+| `vl_hair_clump_long_run` | `hairClumpLongRun.cpp`(28 KB) | 长跑台 |
+| `vl_hair_rod_ghost` | `rodGhostPrototype.cpp` | 冻结的单根求解器参照 |
+
+C1 的能量形式是 world-oriented **vector-rest**：
+
+```text
+U = 0.5*k*sum_{a<b, j=1..3} |((x_a,j - x_b,j) - (x*_a,j - x*_b,j))|^2,  k = 0.1 N/m
+```
+
+文档记录的状态（`documents/rationale/hair-clump-control-20261119.md`、
+`hair-clump-coupled-c2-20261119.md`）：
+
+- C1：`execution-002` 本地自检 `checks=PASS failures=0`（v1 曾 5 项失败，v2 只修 oracle/诊断，
+  没有调 k 或放宽阈值）；
+- C0 startup：`execution-003` 完成 9 组共 840 步、执行侧门槛全满足，**独立验收 PENDING**；
+- C2：45 维联合能量 fixtures 与 FD 装配已实现，**独立审计 PENDING**；
+- **coupled 长跑、volume、clump 物理 PASS、runtime/shader/assets 修改：全部 NOT_RUN**，
+  文档明确写着「等待主线程依据 C1 失败闭环重新授权」。
+
+而 GPU runtime 侧目前**没有**任何 clump/volume 项：`rodKkt10BandSolve.glsl` /
+`rodV2Kernel.glsl` 里没有成对能量，资产 schema 的 `simulationDefaults` 也只有
+`enabled/backend/solver/solverProfile` 四个字段。
+
+所以 B 的真实入口是：**0）把 C2 独立审计与 coupled 长跑补上 → 1）把已验证的成对能量
+搬进 GPU KKT 系统（作为点间耦合项，会打破当前"点间只在同一条杆上耦合"的块三对角结构，
+这是 B 的主要架构代价）→ 2）体积项 → 3）资产字段与验收。** 第 1 步之前需要确认
+C2 的审计结论，否则会把未审计的能量形式搬上 GPU。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
