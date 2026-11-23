@@ -240,8 +240,16 @@ bool TerrainCompositedService::QualityConvergenceFailed() const noexcept
 {
     if (!CookMode() && impl->qualityClock.Failed(QualityMonotonicMs()))
     {
-        impl->qualityConvergenceFailed.store(true, std::memory_order_release);
-        impl->interactiveReady.store(false, std::memory_order_release);
+        if (QualityLenient())
+        {
+            // 互动模式：查询路径同样不能把超时锁死，否则 arrival gate 会永久关闭。
+            impl->qualityClock.ResetAfterTimeout(QualityMonotonicMs());
+        }
+        else
+        {
+            impl->qualityConvergenceFailed.store(true, std::memory_order_release);
+            impl->interactiveReady.store(false, std::memory_order_release);
+        }
     }
     return impl->qualityConvergenceFailed.load(std::memory_order_acquire);
 }
