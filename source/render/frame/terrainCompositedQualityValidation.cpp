@@ -73,14 +73,22 @@ bool TerrainQualityViewWithinValidatedDomain(
     return true;
 }
 
-void TerrainQualityValidation::Invalidate(
+void TerrainQualityValidation::Relocate(
     const Eigen::Matrix4f& viewProjection, double monotonicMs)
 {
+    // 视角漂移只丢弃“本视角已通过”的证据，到达收敛保持不变。
     ++current.poseId;
     arrivalCamera = viewProjection;
     arrivedMs = monotonicMs;
     ready = false;
     lastEpoch = 0;
+}
+
+void TerrainQualityValidation::Invalidate(
+    const Eigen::Matrix4f& viewProjection, double monotonicMs)
+{
+    Relocate(viewProjection, monotonicMs);
+    arrivalReady = false;
 }
 
 TerrainQualityValidationStamp TerrainQualityValidation::Begin(
@@ -102,13 +110,14 @@ TerrainQualityValidationStamp TerrainQualityValidation::Begin(
         surfaceCount = 0;
         ++current.resourceVersion;
     }
-    if (replaced || explicitArrival ||
-        (ready && !TerrainQualityViewWithinValidatedDomain(validatedCamera, viewProjection)))
+    if (replaced || explicitArrival)
     {
         if (explicitArrival)
             current.invalidationSequence = invalidation.sequence;
         Invalidate(viewProjection, explicitArrival ? invalidation.arrivedMonotonicMs : monotonicMs);
     }
+    else if (ready && !TerrainQualityViewWithinValidatedDomain(validatedCamera, viewProjection))
+        Relocate(viewProjection, monotonicMs);
     return current;
 }
 
@@ -144,7 +153,11 @@ bool TerrainQualityValidation::Observe(const TerrainQualityValidationStamp& stam
     lastEpoch = submissionEpoch;
     ready = serviceAccepted && counts.MeetsQualityThreshold();
     if (ready)
+    {
         validatedCamera = capturedCamera;
+        // 本次到达至少有一次真实捕获达标；之后的视角漂移不再撤销它。
+        arrivalReady = true;
+    }
     return ready;
 }
 
@@ -167,6 +180,15 @@ bool TerrainQualityValidation::Ready(uint64_t worldGeneration,
         !(invalidation.worldGeneration == worldGeneration &&
             invalidation.sequence != current.invalidationSequence) &&
         TerrainQualityViewWithinValidatedDomain(validatedCamera, viewProjection);
+}
+
+bool TerrainQualityValidation::ArrivalConverged(uint64_t worldGeneration,
+    TerrainQualityInvalidation invalidation) const
+{
+    std::lock_guard<std::mutex> lock(mutex);
+    return arrivalReady && current.worldGeneration == worldGeneration &&
+        !(invalidation.worldGeneration == worldGeneration &&
+            invalidation.sequence != current.invalidationSequence);
 }
 
 double TerrainQualityValidation::PoseArrivedMonotonicMs() const

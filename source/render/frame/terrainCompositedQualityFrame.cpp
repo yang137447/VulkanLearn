@@ -125,6 +125,21 @@ bool TerrainCompositedQualityReady(uint64_t worldGeneration, const Eigen::Matrix
         validation->Ready(worldGeneration, viewProjection, TerrainCompositedQualityInvalidation());
 }
 
+bool TerrainCompositedArrivalReady(uint64_t worldGeneration,
+    const Eigen::Matrix4f& viewProjection)
+{
+    (void)viewProjection;
+    std::shared_ptr<TerrainQualityValidation> validation;
+    std::shared_ptr<TerrainCompositedService> producer;
+    {
+        std::lock_guard<std::mutex> lock(observerMutex);
+        validation = readinessValidation.lock();
+        producer = readinessService.lock();
+    }
+    return validation && producer && !producer->QualityConvergenceFailed() &&
+        validation->ArrivalConverged(worldGeneration, TerrainCompositedQualityInvalidation());
+}
+
 struct TerrainCompositedQualityFrame::State
 {
     static std::weak_ptr<State> active;
@@ -606,7 +621,7 @@ void TerrainCompositedQualityFrame::RecordLoading(
     auto producer = service.lock();
     if (!producer || !producer->HasSurfaces())
         return;
-    const bool ready = TerrainCompositedQualityReady(state->worldGeneration, state->camera);
+    const bool ready = TerrainCompositedArrivalReady(state->worldGeneration, state->camera);
     auto queueEvidence = [&](bool loading)
     {
         const char* directory = std::getenv("VULKANLEARN_RVT_QUALITY_EVIDENCE_DIR");

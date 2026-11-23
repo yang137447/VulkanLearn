@@ -182,6 +182,14 @@ target_include_directories(terrain_quality_readback_tests PRIVATE ${PROJECT_SOUR
 target_link_libraries(terrain_quality_readback_tests PRIVATE Vulkan::Vulkan Eigen3 Json)
 vulkanlearn_add_gtest(terrain_quality_readback_tests)
 
+# 到达收敛语义：加载闸门只跟随本代/显式到达，不随普通转身与走动重新生效。
+add_executable(terrain_quality_readiness_tests
+    terrainCompositedQualityReadinessTests.cpp
+    ${PROJECT_SOURCE_DIR}/source/render/frame/terrainCompositedQualityValidation.cpp)
+target_include_directories(terrain_quality_readiness_tests PRIVATE ${PROJECT_SOURCE_DIR}/source)
+target_link_libraries(terrain_quality_readiness_tests PRIVATE Vulkan::Vulkan Eigen3 Json)
+vulkanlearn_add_gtest(terrain_quality_readiness_tests)
+
 # R16 截图停顿修复：staging 内存类型 / BMP 朝向与格式 / 有界 fence 等待。
 # 纯 CPU，不需要图形设备；BMP 布局与 R15 落盘尺寸逐字节同规格。
 add_executable(terrain_screenshot_readback_tests

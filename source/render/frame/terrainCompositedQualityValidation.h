@@ -41,11 +41,16 @@ public:
         const TerrainQualityAbi::Counts& counts, bool serviceAccepted);
     bool Ready(uint64_t worldGeneration, const Eigen::Matrix4f& viewProjection,
         TerrainQualityInvalidation invalidation) const;
+    // 到达收敛只看本代/本次显式到达是否曾通过一次质量快照，不随视角漂移失效；
+    // 加载黑帧与输入闸门用它，避免转身/走动把交互状态打回 Loading。
+    bool ArrivalConverged(uint64_t worldGeneration,
+        TerrainQualityInvalidation invalidation) const;
     double PoseArrivedMonotonicMs() const;
     void Revoke();
 
 private:
     void Invalidate(const Eigen::Matrix4f& viewProjection, double monotonicMs);
+    void Relocate(const Eigen::Matrix4f& viewProjection, double monotonicMs);
     mutable std::mutex mutex;
     TerrainQualityValidationStamp current;
     Eigen::Matrix4f arrivalCamera = Eigen::Matrix4f::Identity();
@@ -55,6 +60,7 @@ private:
     double arrivedMs = 0;
     uint64_t lastEpoch = 0;
     bool ready = false;
+    bool arrivalReady = false;
 };
 
 bool TerrainQualityViewWithinValidatedDomain(

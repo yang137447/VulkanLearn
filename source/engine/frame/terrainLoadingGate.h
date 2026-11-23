@@ -14,7 +14,7 @@ inline bool TerrainLoadingRequired(
     bool terrainView,
     uint64_t worldGeneration,
     const Eigen::Matrix4f& viewProjection,
-    TerrainQualityReadyGetter getter = TerrainCompositedQualityReady)
+    TerrainQualityReadyGetter getter = TerrainCompositedArrivalReady)
 {
     return !offlineMode && terrainView && !getter(worldGeneration, viewProjection);
 }
