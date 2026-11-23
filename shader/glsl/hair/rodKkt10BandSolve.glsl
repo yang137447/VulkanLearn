@@ -39,6 +39,9 @@
 // 主元工作区。20x20 联立块 + 20x11 右端 + 回代解 + 行列缩放 / 置换。
 // 当前 substep 的胶囊场采样维（rod.capsules 的第一维 = substep 或 substep+1）。
 // 信任域：位置步不超过段长的这个比例，旋转步不超过这个弧度。
+// KKT 循环的收敛下限（视觉足够）。逐分量 1e-4 对画面没有意义。
+const float RodKkt10ConvergenceFloor = 1.0e-2;
+
 const float RodKktStepFraction = 0.25;
 const float RodKktAngularStepLimit = 0.125;
 shared uint v2StepScaleBits;

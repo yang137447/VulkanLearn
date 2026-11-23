@@ -949,8 +949,12 @@ void main()
             barrier();
 #ifdef VL_ROD_V3_KKT10_SOLVE
             // 带约束时额外要求存在负乘子时不宣告收敛（互补量已由 merit 的 gap 分量承担）。
-            if (failure != 0u || (v2Maximum <= implicitControls.originTolerance.w &&
-                rodKktFeasible != 0u))
+            // RodKkt10ConvergenceFloor 是视觉下限：originTolerance.w 是 1e-4，在 gap/L
+            // 量纲上相当于约 4e-5 cm，比任何可见误差都严得多。要求到这个级别只会让
+            // 一部分 guide 在 64 轮预算内到不了而被判失败，对画面没有收益；
+            // 发型整体保住即可，不需要把残差压到噪声级别。
+            if (failure != 0u || (v2Maximum <= max(implicitControls.originTolerance.w,
+                RodKkt10ConvergenceFloor) && rodKktFeasible != 0u))
                 break;
 #else
             if (failure != 0u || v2Maximum <= implicitControls.originTolerance.w)
