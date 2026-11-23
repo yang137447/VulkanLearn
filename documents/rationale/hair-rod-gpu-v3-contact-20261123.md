@@ -587,6 +587,34 @@ validation 0 条消息。
 也就是说 A 的「切 runtime」还需要两步结构性的成本下降，而不是继续调求解器细节。
 在 607 ms / 帧、1.05% guide 失败的前提下切 runtime 资产是不合适的。
 
+## 第十一轮：分布式 CR 接上，2000 guide 从 607 ms 降到 ~85 ms
+
+`rodCrBand.glsl` 其实早就被 kernel 在 `VL_ROD_V3_CR_SOLVE` 下包含了，所以把压缩后的
+6x6 系统交给 `RodCrSolveBand32` **不增加 shared 内存**（那 20 KB 本来就在预算里）。
+`RodKkt10SolveCondensed` 里那段「32 点顺序 Thomas」换成 CR，乘子改从 `rodCrSolution`
+读邻居方向恢复。
+
+| 指标（2000 guide） | 顺序 Thomas | 分布式 CR |
+| --- | --- | --- |
+| hair pass | 607 ms | **84.4 – 94.1 ms**（约 7x） |
+| 失败 guide | 21 | 20 |
+| maxBlockDefect | 0.602 | 1.344 |
+| merit | 0.79 | 1.856 |
+
+16 guide 胶囊/SDF 仍然 `gpuStatus=0`、0 失败。胶囊残差从 2.488e-05 变成 5.800e-05
+（多次 Schur 补会损失一些精度，相对于整带分解），SDF 仍是 2.488e-05，两者都远在
+1e-04 收敛阈值内。V1 在同规模是 6.83 ms，所以 V3 从 **89x 降到约 13x**。
+
+### 剩下的成本杠杆（按收益排序）
+
+1. **每帧求解次数**：现在是 8 substep x 最多 64 轮牛顿。难 guide 吃满 64 轮，
+   但只占 1%，所以限制轮数对总量影响约 10%，不是主要问题。
+2. **substep 数**：8 降到 2 就是 4x，但会改变行为，需要单独验收。
+3. **occupancy**：当前 shared 约 43 KB（rodCr 20 KB + rodKkt 23 KB），
+   1 workgroup/SM。把已经死掉的 10 宽数组（`rodKktFactorUpper/band/work*`，约 17 KB）
+   删掉能降到约 26 KB——仍然只够 1 个 workgroup（需要 <= 24 KB 才能翻倍），
+   所以这条的收益不确定，优先级最低。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
