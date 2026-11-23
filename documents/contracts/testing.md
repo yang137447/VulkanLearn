@@ -77,6 +77,8 @@ lock 哈希，不匹配时构建失败而不是静默使用旧库。
 
 编辑器与游戏入口都用 `--exit-after-frames <N>` 正常退出。该参数统计完整
 `Tick()`；`--frame-limit` 是 1..1000 Hz 节拍上限，不是帧数。
+`--autoplay` 只覆盖本进程的 `scripts.autoPlay`（含蓝图场景启动即 Play），
+不写回 `config/config.json`；默认仍以 config 为准。
 
 ```powershell
 build\bin\main_editor.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json --exit-after-frames 60

@@ -166,6 +166,14 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        // 蓝图场景启动即 Play：默认仍读 config.scripts.autoPlay，显式 flag 只做启动覆盖，
+        // 供无 UI 的 Game/编辑器命令行直接进入可操作状态，不改变仓库默认行为。
+        if (argument == "--autoplay")
+        {
+            options.autoplay = true;
+            continue;
+        }
+
         if (argument == "--gpu-stats")
         {
             options.gpuStats = true;
@@ -464,6 +472,7 @@ void PrintLaunchUsage()
         << "  --dev-ui                            Enable the RmlUi editor workspace for this launch.\n"
         << "  --no-dev-ui                         Disable the RmlUi editor workspace for this launch.\n"
         << "  --focus-window                      Request OS keyboard focus at startup (input automation).\n"
+        << "  --autoplay                          Start blueprint scenes in Play for this process (overrides config scripts.autoPlay).\n"
         << "  --exit-after-tests                  Exit with 0 on success or 2 on test failure.\n";
 }
 

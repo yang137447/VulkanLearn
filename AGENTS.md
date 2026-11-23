@@ -232,7 +232,10 @@ build\bin\main_game.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_
 
 `--exit-after-frames <N>` exits with code 0 after `N` completed `Tick()` calls.
 `--frame-limit` is a 1..1000 Hz pacing cap, not a frame count. The console
-`quit` command requests the same clean shutdown path.
+`quit` command requests the same clean shutdown path. `--autoplay` starts
+blueprint scenes in Play for this process only (it overrides
+`config/config.json -> scripts.autoPlay` without writing the file), which is
+how AI runs a playable map headlessly.
 
 Game-flavor packaging requires a Release game cache and the game binary:
 

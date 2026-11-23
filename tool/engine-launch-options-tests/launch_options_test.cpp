@@ -40,6 +40,15 @@ TEST(LaunchOptions, GpuStatsIsOffByDefault)
     EXPECT_FALSE(options.perfJsonlPath.has_value());
 }
 
+TEST(LaunchOptions, AutoplayIsOffByDefaultAndOnlyOptsInExplicitly)
+{
+    EXPECT_FALSE(Parse({"main.exe"}).autoplay);
+    const auto options = Parse({"main_game.exe", "--autoplay", "--no-dev-ui"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_TRUE(options.autoplay);
+    EXPECT_FALSE(options.perfJsonlPath.has_value());
+}
+
 TEST(LaunchOptions, TerrainVtCookIsExplicitAndKeepsSceneOverride)
 {
     EXPECT_FALSE(Parse({"main_editor.exe"}).terrainVtCook);

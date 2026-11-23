@@ -1,14 +1,10 @@
 {
-  "scripts": {
-    "enabled": true,
-    "autoPlay": true
-  },
   "resourcePath": "../VukanLearnResources",
   "windowSize": [
     1280,
     720
   ],
-  "initScene": "Generated/Validation/TerrainCompositedVT/Variants/RVTv2_Full4x4_R8192_Default_CoverageAtlas/SC_composited_vt_4x4.json",
+  "initScene": "Generated/HoudiniPegasusIsland/SC_terrain_pegasus_4x4.json",
   "msaa": 2,
   "workerThreadCount": 2,
   "ui": {

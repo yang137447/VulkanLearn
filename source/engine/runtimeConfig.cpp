@@ -294,6 +294,12 @@ const UiSettings& RuntimeConfig::GetUiSettings() const
     return uiSettings;
 }
 
+void RuntimeConfig::OverrideScriptAutoPlay(bool value)
+{
+    EnsureLoaded();
+    scriptSettings.autoPlay = value;
+}
+
 std::string RuntimeConfig::ResolvePath(const std::string& path) const
 {
     EnsureLoaded();

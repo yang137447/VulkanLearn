@@ -70,6 +70,9 @@ static int RunApplicationBody(
         diagnostics.ReportRuntimeError("Runtime config load failed", configResult.Error());
         return 1;
     }
+    // 启动参数只覆盖本进程的脚本自动 Play，不写回 config。
+    if (launchOptions.autoplay)
+        runtimeConfig.OverrideScriptAutoPlay(true);
 
     PlatformApplicationDesc platformDesc;
     platformDesc.windowWidth = static_cast<int>(runtimeConfig.GetWindowSize().x());

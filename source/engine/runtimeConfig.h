@@ -54,6 +54,8 @@ public:
     uint32_t GetShadowCascadeCount() const;
     const UiSettings& GetUiSettings() const;
     const ScriptSettings& GetScriptSettings() const { EnsureLoaded(); return scriptSettings; }
+    // 启动参数覆盖（--autoplay）：只改本进程的脚本自动 Play，不写回 config。
+    void OverrideScriptAutoPlay(bool value);
 
     std::string ResolvePath(const std::string& path) const;
 
