@@ -1243,6 +1243,66 @@ static_assert。
 它可能是并行度/占用率随 workgroup 数变化，也可能是计时口径（fence 等待、
 与其他 pass 重叠）在这个规模上不同。C 的下一件事就是这个，而不是先动求解器。
 
+### 尺度反常已解释：不是「每 guide 成本」，是「每次迭代成本 × 最大迭代数」
+
+先纠正我自己的两个错误读数：
+
+1. 之前把 `received/dispatched` 当性能指标——它们其实是**仿真时间**。
+   `dispatched/frame = 4.2 ms` 在任何规模下都恒定，因为那就是 1 substep × 1/240 s
+   = 4.167 ms。唯一真实计时是 perf jsonl 的 `hairSimulation`。
+2. 所以上一节「200 guide 每 guide 成本 0.097 ms」的换算毫无意义。
+
+用 `hair snapshot` 读每个 guide 的实际迭代数（固定 1 substep，70 帧）：
+
+| guides | hairSimulation | maxIters | meanIters |
+| --- | --- | --- | --- |
+| 16 | 1.2 ms | **1** | 0.2 |
+| 200 | 19.2 ms | **64** | 0.6 |
+| 2000 | 33.5 ms | **3** | 1.1 |
+
+结论很清楚：**帧时间由「最慢的那批 workgroup 的迭代数」决定**。
+200 guide 那 19.2 ms 完全来自**单个 guide 跑满 64 轮**；16 guide 只迭代 1 次所以 1.2 ms；
+2000 guide 平均 1.1 次、最大 3 次，33.5 ms 是「2000 个 workgroup × 约 1.1 次迭代」。
+
+于是单位成本可以定出来：2000 guide、1 substep、约 1.1 次迭代 = 33.5 ms
+（其中固定成分约 12 ms），即 **每 guide 每次迭代约 9.5 µs**。
+
+**60 fps 的预算**：4 substep × 约 1.1 次迭代 × 2000 guide = 8,800 次 guide-iteration
+要压进 16 ms → **每次 guide-iteration 需 ~1.8 µs，即 5.3x**。
+
+### 这 5.3x 大概率在占用率，不在指令数
+
+一次 guide-iteration 是一个 warp 跑完 32 点：压缩约 1,300 条指令 + CR 约 2,900 条
+≈ 4,200 条 warp 指令。1.8 µs @1.8 GHz = 3,240 cycle，也就是「接近 1 IPC」就够——
+**指令数本身已经接近这个目标**。实测 9.5 µs ≈ 17,000 cycle，是理论值的 5 倍，
+差在延迟/占用率而不是算法量。
+
+而占用率被 shared 钉死在 **1 workgroup/SM**：`rodCr` 四个矩阵数组
+（32 × 144 B = 18,432）+ 两个向量数组（32 × 24 B = 1,536）≈ **20 KB**。
+shared 要 ≤24 KB 才有 2 个 workgroup、≤12 KB 才有 4 个。
+
+### C 的方向：把 CR 从 shared 换成 subgroup shuffle
+
+`local_size_x = 32` 正好是一个 subgroup，块循环约化天然适合
+`subgroupShuffle` / `subgroupShuffleXor`。换成 shuffle 版 CR 可以把那 ~20 KB shared
+全部让出来，占用率 1 → 3~4，正好覆盖 5.3x 的目标量级。
+
+**前提已验证通过**：
+
+- 仓库本来就以 `shaderc_env_version_vulkan_1_4` 编译着色器
+  （`source/shaderCompiler.cpp:439-441`，缓存键里的 `target=Vulkan1.4` 就是它），
+  所以**不需要改动编译目标**，只要在着色器里加
+  `#extension GL_KHR_shader_subgroup_shuffle : require`；
+- 实测：`subgroupShuffle` + `subgroupShuffleXor` 在 `--target-env=vulkan1.3` 下编译通过
+  （856 字节 SPIR-V）；**默认的 vulkan1.0 目标会报 `requires SPIR-V 1.3`**——
+  这解释了为什么必须走仓库自己的编译路径，而不能用默认 glslc；
+- 设备是 `VK_API_VERSION_1_3`，`local_size_x = 32` 与 NVIDIA 的 subgroupSize=32 一致，
+  shuffle 语义可直接对应到当前「每个 lane 一个点」的布局。
+
+所以 C 的下一个实现步骤很明确：写一个不依赖 shared 的 shuffle 版块循环约化，
+替换 `rodCrBand.glsl` 里的 `RodCrSolveBand32`，然后实测 shared 占用与
+每 guide-iteration 成本。若 5.3x 里能拿到 3x 以上，2000 guide 就落在 60 fps 附近。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
