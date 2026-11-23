@@ -1211,6 +1211,38 @@ static_assert。
 结论：C 要做成本对比，得**新增一个明确的固定 substep 诊断模式**（或把 substep 数
 做成可查询/可覆盖的调试参数），而不是改常量。这本身是 C 的第一件正事。
 
+### 固定 substep 诊断开关与分解结果
+
+新增环境变量 `VL_ROD_FIXED_SUBSTEPS=<n>`（`source/hair/rodGpuRecording.h`，仅在设置时生效），
+把每帧 substep 数强制成 n（上限 `RodGpuMaxSteps`），绕开自适应上限与债务的耦合。
+
+**2000 guide（正式动画场景）：**
+
+| substeps | hairSimulation |
+| --- | --- |
+| 1 | **35.0 ms** |
+| 4 | **103.6 ms** |
+
+→ 每 substep ≈ **22.9 ms**，固定成分 ≈ 12.1 ms。
+按 60 fps、4 substep（4 × 1/240 = 1/60 s，恰好实时）算，需要整帧 ≤16 ms，
+即每 substep ≤ **4 ms**——**目标是 5.7x**。
+
+**不同规模（固定 1 substep）：**
+
+| guides | hairSimulation | 每 guide |
+| --- | --- | --- |
+| 16 | 1.3 ms | 0.081 ms |
+| 200 | 19.4 / 21.1 / 21.3 ms（三次复现） | 0.097 ms |
+| 2000 | 35.0 ms | **0.0175 ms** |
+
+**这里有个还没解释的现象**：16 → 200 是线性的（每 guide 0.08–0.10 ms），
+但 2000 的每 guide 成本只有 200 的 **1/5.5**。如果按 200 的斜率外推，
+2000 guide 应该是 ~194 ms，实测只有 35 ms。
+
+在解释清楚这个尺度依赖之前，**任何「优化到多少 ms」的结论都不可靠**——
+它可能是并行度/占用率随 workgroup 数变化，也可能是计时口径（fence 等待、
+与其他 pass 重叠）在这个规模上不同。C 的下一件事就是这个，而不是先动求解器。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
