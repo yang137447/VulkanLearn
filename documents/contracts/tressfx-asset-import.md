@@ -17,9 +17,13 @@
 tag 的配置可接受性不等于求解器质量放行。
 当前 runtime 的 V3 GPU 求解接受 `hairCollision.capsules` 与 `hairCollision.mesh`：
 胶囊走解析 Hessian，SDF 走逐帧代理场的 Gauss-Newton（Hessian 取 0）。
-两者都只接受**场可用**的接触——SDF 栅格只在 `margin + 2*cellSize` 的截断带内有值，
-更深的作者穿模对 V1 与 V3 同样不可见（证据见
+两者都只接受**场可用**的接触——SDF 栅格只在 `truncation = margin + 2*cellSize'`
+的截断带内有值，更深的作者穿模对两者都不可见（证据见
 `documents/rationale/hair-rod-gpu-v3-contact-20261123.md`）。
+按当前作者化参数（`cellSize: 1`、`margin: 0.05`）这个带是 **2.225 cm**，
+`cellSize` 无法加宽它（分辨率被 48 的下限钳住），只有 `margin` 能加宽。
+V3 的 SDF 采样单位曾在 KKT 路径上错乘 100（V1 路径的位置是米制、KKT 路径是厘米制），
+导致 SDF 接触长期形同虚设；该缺陷已修（`dff263d5`），现在带内的接触真实生效。
 runtime 的 rod 隔离验证资产
 `Maps/SC_tressfx_rod_validation/Meshes/TF_female_rod_validation.json` 现在
 `simulationDefaults.solver` 是 `cosseratImplicitV3`、`solverProfile` 是
