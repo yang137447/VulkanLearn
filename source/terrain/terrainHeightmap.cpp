@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstring>
+#include <limits>
 #include <stdexcept>
 #include <string>
 
@@ -20,6 +21,22 @@ size_t RowStride(const HostImage& image)
         : static_cast<size_t>(image.width) * image.GetPixelSize();
 }
 
+float HalfToFloat(uint16_t value)
+{
+    const float sign = (value & 0x8000u) != 0 ? -1.0f : 1.0f;
+    const int exponent = static_cast<int>((value >> 10u) & 0x1fu);
+    const int mantissa = static_cast<int>(value & 0x03ffu);
+    if (exponent == 0)
+        return sign * std::ldexp(static_cast<float>(mantissa), -24);
+    if (exponent == 31)
+    {
+        return mantissa == 0
+            ? sign * std::numeric_limits<float>::infinity()
+            : std::numeric_limits<float>::quiet_NaN();
+    }
+    return sign * std::ldexp(static_cast<float>(1024 + mantissa), exponent - 25);
+}
+
 float ReadPixel(const HostImage& image, uint32_t x, uint32_t y)
 {
     const size_t stride = RowStride(image);
@@ -35,6 +52,20 @@ float ReadPixel(const HostImage& image, uint32_t x, uint32_t y)
     case HostImage::PixelFormat::RGBA8_UNORM:
     case HostImage::PixelFormat::RGBA8_SRGB:
         return static_cast<float>(row[static_cast<size_t>(x) * 4]) / 255.0f;
+    case HostImage::PixelFormat::R16_UNORM:
+        // Terrain layer heights keep their native 16-bit precision; truncating
+        // to 8 bits here would quantize the CPU sampler differently from the
+        // GPU texture array.
+        return static_cast<float>(
+            reinterpret_cast<const uint16_t*>(row)[x]) / 65535.0f;
+    case HostImage::PixelFormat::R16_FLOAT:
+        return HalfToFloat(reinterpret_cast<const uint16_t*>(row)[x]);
+    case HostImage::PixelFormat::RG16_FLOAT:
+        return HalfToFloat(
+            reinterpret_cast<const uint16_t*>(row)[static_cast<size_t>(x) * 2]);
+    case HostImage::PixelFormat::RGBA16_FLOAT:
+        return HalfToFloat(
+            reinterpret_cast<const uint16_t*>(row)[static_cast<size_t>(x) * 4]);
     case HostImage::PixelFormat::R32_FLOAT:
         return reinterpret_cast<const float*>(row)[x];
     case HostImage::PixelFormat::RGBA32_FLOAT:

@@ -101,12 +101,30 @@ void Renderpass::SetupDescriptors(
     uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
     inputDescriptorImageInfos.clear();
     inputDescriptorImageInfos.resize(swapChainImageCount);
+    VL::DescriptorBindingSnapshot worldBindings;
+    for (const auto& input : inputDescriptorPlan)
+        if (input.source == "worldTexture")
+        {
+            if (!descriptorContext.resourceCache)
+                throw std::runtime_error("World descriptor input has no resource cache");
+            worldBindings = descriptorContext.resourceCache->CaptureDescriptorBindingVersion();
+            break;
+        }
+    worldBindingRegistryLease = worldBindings ?
+        VL::PrepareWorldBindingRegistry(worldBindings, swapChainImageCount,
+            inputDescriptorPlan.size()) : nullptr;
+    worldBindingImageOwners.clear();
+    worldBindingImageOwners.resize(swapChainImageCount);
+    worldBindingWrites.clear();
+    worldBindingWrites.resize(swapChainImageCount);
     // 总览：按 compiled descriptor plan 为每个输入资源建立 DescriptorImageInfo
     // 1) 先从 resolve 里找，找不到再从 msaa 里找
     // 2) shadowMap 使用深度只读 layout
     // 3) 按 binding 写入 inputDescriptorImageInfos
     for(uint32_t imageIndex = 0; imageIndex < swapChainImageCount; ++imageIndex)
     {
+        worldBindingImageOwners[imageIndex].InstallAfterFence(worldBindings, worldBindingRegistryLease);
+        worldBindingWrites[imageIndex].reserve(inputDescriptorPlan.size());
         for(const VL::CompiledRenderGraphPassInputDescriptor& inputDescriptor : inputDescriptorPlan)
         {
             const std::string& inputResource = inputDescriptor.resource;
@@ -119,9 +137,8 @@ void Renderpass::SetupDescriptors(
                         "Renderpass external input is missing a resource cache: " +
                         name + ":" + inputResource);
                 }
-                const std::shared_ptr<Texture> texture =
-                    descriptorContext.resourceCache->GetWorldTexture(inputResource);
-                if (texture == nullptr)
+                const auto descriptor = worldBindings->descriptors.find(inputResource);
+                if (descriptor == worldBindings->descriptors.end())
                 {
                     throw std::runtime_error(
                         "Renderpass external worldTexture is not active: " +
@@ -133,7 +150,7 @@ void Renderpass::SetupDescriptors(
                         inputDescriptor.binding + 1);
                 }
                 inputDescriptorImageInfos[imageIndex][inputDescriptor.binding] =
-                    texture->GetDescriptorInfo();
+                    descriptor->second;
                 continue;
             }
             
@@ -175,6 +192,75 @@ void Renderpass::SetupDescriptors(
             }
             inputDescriptorImageInfos[imageIndex][inputDescriptor.binding] = imageInfo;
         }
+    }
+}
+
+void RenderGraph::SafeUpdateCurrentImageWorldBindings(
+    VL::RendererBackendVulkan& rendererBackend,
+    VL::RendererResourceCache& resourceCache, uint32_t imageIndex) const
+{
+    SafeUpdateCurrentImageWorldBindings(resourceCache, imageIndex,
+        [](void* context, const std::vector<vk::WriteDescriptorSet>& writes) {
+            static_cast<VL::RendererBackendVulkan*>(context)->UpdateDescriptorSets(writes);
+        }, &rendererBackend);
+}
+
+void RenderGraph::SafeUpdateCurrentImageWorldBindings(
+    VL::RendererResourceCache& resourceCache, uint32_t imageIndex,
+    void (*writer)(void*, const std::vector<vk::WriteDescriptorSet>&),
+    void* writerContext) const
+{
+    const auto snapshot = resourceCache.CaptureDescriptorBindingVersion();
+    if (!snapshot)
+        throw std::logic_error("World descriptor refresh requires an active immutable snapshot");
+    for (auto& entry : const_cast<RenderGraph*>(this)->renderpasses)
+    {
+        auto& pass = entry.second;
+        if (imageIndex >= pass.worldBindingImageOwners.size())
+            continue;
+        auto& owner = pass.worldBindingImageOwners[imageIndex];
+        if (!owner.Snapshot() || owner.Snapshot() == snapshot)
+            continue;
+        if (pass.worldBindingRegistryLease &&
+            pass.worldBindingRegistryLease->worldGeneration != snapshot->worldGeneration)
+        {
+            VL::RunWorldDescriptorOperation(snapshot->worldGeneration, snapshot->revision,
+                imageIndex, "registry-prepare", [&] {
+                pass.worldBindingRegistryLease = VL::PrepareWorldBindingRegistry(
+                    snapshot, static_cast<uint32_t>(pass.worldBindingImageOwners.size()),
+                    pass.inputDescriptorPlan.size());
+            });
+        }
+        auto& writes = pass.worldBindingWrites[imageIndex];
+        writes.clear();
+        for (const auto& input : pass.inputDescriptorPlan)
+        {
+            if (input.source != "worldTexture")
+                continue;
+            const auto found = snapshot->descriptors.find(input.resource);
+            if (found == snapshot->descriptors.end() ||
+                imageIndex >= pass.descriptorSets.size() ||
+                pass.descriptorSets[imageIndex].size() <= 3 ||
+                input.binding >= pass.inputDescriptorImageInfos[imageIndex].size())
+                throw std::runtime_error("World descriptor refresh plan no longer matches graph");
+            vk::WriteDescriptorSet write;
+            write.setDstSet(pass.descriptorSets[imageIndex][3])
+                .setDstBinding(input.binding)
+                .setDescriptorType(vk::DescriptorType::eCombinedImageSampler)
+                .setDescriptorCount(1)
+                .setPImageInfo(&found->second);
+            writes.push_back(write);
+        }
+        if (!writes.empty())
+        {
+            VL::RunWorldDescriptorOperation(snapshot->worldGeneration, snapshot->revision,
+                imageIndex, "descriptor-write", [&] { writer(writerContext, writes); });
+        }
+        for (const auto& input : pass.inputDescriptorPlan)
+            if (input.source == "worldTexture")
+                pass.inputDescriptorImageInfos[imageIndex][input.binding] =
+                    snapshot->descriptors.at(input.resource);
+        owner.InstallAfterFence(snapshot, pass.worldBindingRegistryLease);
     }
 }
 
@@ -902,6 +988,12 @@ void RenderGraph::RenderInitialize(
         {
             continue;
         }
+        // 同一个 graph 可能在上一轮 RenderInitialize 中途失败后被重跑
+        // （例如编辑器缩略图会话缺少 terrainFeedback 的 worldTexture 输入）。
+        // 在触碰该 pass 的任何新状态之前先释放已有 descriptor 批次，避免新
+        // handle 覆盖旧值：旧批次一旦失去 owner，RenderGraph::Shutdown 只看到
+        // 最后一组，整批 layout/pool/set 会泄漏到 vkDestroyDevice。
+        renderpass.DestroyPassDescriptors(rendererBackend);
         renderpass.CreateUniformBuffers();
         renderpass.SetupDescriptors(*this, rendererBackend, descriptorContext);
         if (auto passMaterialInstance = renderpass.materialInstance.lock())

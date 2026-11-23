@@ -1,0 +1,61 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "materialFunction/terrainCompositedEvaluation.glsl"
+
+layout(local_size_x=8,local_size_y=8) in;
+layout(std430,set=0,binding=1) buffer Output { uint words[]; } result;
+layout(set=0,binding=7) uniform sampler2DArray sourceAlbedo;
+layout(set=0,binding=14) uniform sampler2DArray bakedAlbedo;
+const uint Texels=136u*136u;
+
+vec3 Direct(vec2 sourceTexel)
+{
+    return textureLod(sourceAlbedo,vec3((sourceTexel+0.5)/1024.0,0),0.0).rgb;
+}
+
+vec3 AreaTexel(ivec2 virtualTexel, float resolution)
+{
+    vec3 value=vec3(0);
+    float lod=max(0.0,log2(4096.0/(resolution*4.0)));
+    for(int row=0;row<4;++row)
+        for(int column=0;column<4;++column)
+        {
+            vec2 uv=(vec2(virtualTexel)+(vec2(column,row)+0.5)/4.0)/resolution*4.0;
+            value+=textureLod(sourceAlbedo,vec3(uv,0),lod).rgb/16.0;
+        }
+    return value;
+}
+
+vec3 AreaReference(vec2 local, int mip)
+{
+    float resolution=4096.0/exp2(float(mip));
+    ivec2 page=mip==1?ivec2(4,5):mip==2?ivec2(2,2):ivec2(1,1);
+    vec2 position=vec2(page*128)+local-4.0-0.5;
+    ivec2 base=ivec2(floor(position));
+    vec2 blend=fract(position);
+    return mix(mix(AreaTexel(base,resolution),AreaTexel(base+ivec2(1,0),resolution),blend.x),
+        mix(AreaTexel(base+ivec2(0,1),resolution),AreaTexel(base+ivec2(1,1),resolution),blend.x),blend.y);
+}
+
+uint Pack(vec3 value)
+{
+    return packUnorm4x8(vec4(TerrainCompositedLinearToSrgb(value),1));
+}
+
+void main()
+{
+    uvec2 pixel=gl_GlobalInvocationID.xy;
+    if(any(greaterThanEqual(pixel,uvec2(136))))return;
+    uint index=pixel.y*136u+pixel.x;
+    vec2 local=vec2(pixel)+vec2(0.37,0.71);
+    vec3 direct=Direct(vec2(9*128,11*128)+local-4.0-0.5);
+    result.words[index]=Pack(textureLod(bakedAlbedo,vec3(local/136.0,0),0).rgb);
+    result.words[Texels+index]=Pack(direct);
+    result.words[2u*Texels+index]=Pack(textureLod(bakedAlbedo,vec3(local/136.0,1),0).rgb);
+    for(int mip=1;mip<=3;++mip)
+    {
+        result.words[uint(2*mip+1)*Texels+index]=Pack(
+            textureLod(bakedAlbedo,vec3(local/136.0,float(mip+1)),0).rgb);
+        result.words[uint(2*mip+2)*Texels+index]=Pack(AreaReference(local,mip));
+    }
+}

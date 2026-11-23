@@ -1,4 +1,5 @@
 #pragma once
+#include "render/diagnostics/terrainCaptureHooks.h"
 #include <array>
 #include <atomic>
 #include <memory>
@@ -113,7 +114,9 @@ public:
         std::vector<uint32_t> indices,
         VL::RendererBackendVulkan& rendererBackend,
         const std::string& name = "",
-        bool dynamicVertices = false);
+        bool dynamicVertices = false,
+        // 地形的四边形 patch 索引（LOD0/粗 LOD 由 builder 生成）；非地形对象为空。
+        std::vector<uint32_t> patchIndices = {});
     RenderableObject(
         std::shared_ptr<const MeshAssetImportResult> imported,
         size_t sectionIndex,
@@ -132,8 +135,20 @@ public:
         const std::string& name = "");
     ~RenderableObject();
 
-    void Draw(vk::CommandBuffer& commandBuffer, uint32_t frameSlot);
-    void Draw(vk::CommandBuffer& commandBuffer) { Draw(commandBuffer, 0); }
+    // usePatchIndices 由绘制端按 pipeline 是否使用 tessellation 决定；
+    // 对象没有 patch 缓冲时跳过绘制，绝不回退到普通索引（PATCH_LIST 下错误）。
+    void Draw(
+        vk::CommandBuffer& commandBuffer,
+        uint32_t frameSlot,
+        bool usePatchIndices);
+    void Draw(vk::CommandBuffer& commandBuffer, uint32_t frameSlot)
+    {
+        Draw(commandBuffer, frameSlot, false);
+    }
+    void Draw(vk::CommandBuffer& commandBuffer)
+    {
+        Draw(commandBuffer, 0, false);
+    }
     // 静态植被/石头批量实例。空列表等价于一个 identity 实例；矩阵按列主序
     // 写入 binding 1 的 InstanceVertex 流。params.x=windPhase, .y=lodBias,
     // .z=variant, .w=seed，留给后续风/植被系统消费。
@@ -162,6 +177,8 @@ public:
     void ResetDynamicContentForReuse();
     size_t GetVertexCapacity() const { return vertexCapacity; }
     size_t GetIndexCapacity() const { return indexCapacity; }
+    bool HasPatchIndices() const { return patchIndexCount != 0; }
+    VL::TerrainMeshDrawBindings DescribeDrawBindings(uint32_t frameSlot, bool usePatchIndices) const;
     const Eigen::Vector3f& GetBoundsMin() const { return boundsMin; }
     const Eigen::Vector3f& GetBoundsMax() const { return boundsMax; }
     const std::string& GetName() const { return name; }
@@ -428,6 +445,9 @@ private:
 
     void CreateIndexBuffer();
     void DestroyIndexBuffer();
+    void CreatePatchIndexBuffer(
+        const std::vector<uint32_t>& patchIndices);
+    void DestroyPatchIndexBuffer();
     void WriteDynamicIndexSlot(
         uint32_t slot,
         const std::vector<uint32_t>& indices);
@@ -466,6 +486,11 @@ private:
     vk::Buffer indexBuffer = nullptr;
     vk::DeviceMemory indexBufferMemory = nullptr;
     vk::DescriptorBufferInfo indexBufferInfo;
+    // 地形的四边形 patch 索引是静态拓扑（LOD0 为 base quads，粗 LOD 含
+    // 退化过渡三角形），与普通索引缓冲同样使用 device-local uint32 缓冲。
+    vk::Buffer patchIndexBuffer = nullptr;
+    vk::DeviceMemory patchIndexMemory = nullptr;
+    uint32_t patchIndexCount = 0;
     std::array<vk::Buffer, DynamicMeshFrameSlotCount> dynamicVertexBuffers{};
     std::array<vk::DeviceMemory, DynamicMeshFrameSlotCount>
         dynamicVertexMemories{};

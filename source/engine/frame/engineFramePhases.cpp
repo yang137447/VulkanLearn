@@ -1,10 +1,14 @@
 #include "engine/frame/engineFramePhases.h"
+#include "engine/frame/terrainLoadingGate.h"
 
 #include <algorithm>
 #include <chrono>
+#include <cstdlib>
 #include <exception>
 #include <filesystem>
+#include <iomanip>
 #include <iostream>
+#include <sstream>
 #include <string>
 #include <utility>
 #include <vector>
@@ -13,6 +17,7 @@
 #include "audio/audioRuntime.h"
 #include "controller.h"
 #include "core/cpuFrameProfiler.h"
+#include "core/logStore.h"
 #include "core/performanceSnapshot.h"
 #include "engine/destructibleRuntime.h"
 #include "engine/editorHost.h"
@@ -47,10 +52,55 @@ namespace VL
 namespace
 {
 
+// --gpu-stats 下的卡顿帧诊断：只记录超过阈值的单帧，并给出该帧自己的阶段
+// 耗时（窗口平均会掩盖尖峰）。每秒最多 5 条，避免长卡顿把日志刷爆。
+void LogFrameHitchIfNeeded(
+    const CpuFrameProfiler& profiler,
+    double frameMilliseconds,
+    double preTickMilliseconds,
+    double clockDeltaMilliseconds)
+{
+    constexpr double HitchThresholdMilliseconds = 20.0;
+    if (!(frameMilliseconds >= HitchThresholdMilliseconds))
+        return;
+
+    static std::chrono::steady_clock::time_point windowStart{};
+    static int loggedInWindow = 0;
+    const std::chrono::steady_clock::time_point now =
+        std::chrono::steady_clock::now();
+    if (windowStart.time_since_epoch().count() == 0 ||
+        now - windowStart >= std::chrono::seconds(1))
+    {
+        windowStart = now;
+        loggedInWindow = 0;
+    }
+    if (loggedInWindow >= 5)
+        return;
+    ++loggedInWindow;
+
+    std::ostringstream message;
+    message << "[Hitch] frame " << std::fixed << std::setprecision(1)
+            << frameMilliseconds << " ms (pre-tick " << preTickMilliseconds
+            << ", clock dt " << clockDeltaMilliseconds << "):";
+    const auto& durations = profiler.LastFrameDurations();
+    for (size_t index = 0; index < kCpuFrameStageCount; ++index)
+    {
+        if (!durations[index].has_value())
+            continue;
+        message << ' '
+                << CpuFrameStageName(static_cast<CpuFrameStage>(index))
+                << ' ' << std::fixed << std::setprecision(2) << *durations[index];
+    }
+    const std::string line = message.str();
+    VL::ProcessLog().Append(VL::LogSeverity::Warning, "Perf", line);
+    std::cout << line << std::endl;
+}
+
 void RunEngineUpdatePhase(
     const EngineFrameContext& context,
     float deltaTime,
-    float simulationDelta)
+    float simulationDelta,
+    bool terrainLoading)
 {
     SubsystemCollection& subsystems = *context.subsystems;
     AudioRuntime* const& audioRuntime = context.audioRuntime;
@@ -82,10 +132,16 @@ void RunEngineUpdatePhase(
         CpuFrameStageScope scriptsStage(cpuFrameProfiler, CpuFrameStage::Scripts);
         // 命令先决定 Pause/World，再清理上一完整帧；Console/BeginPlay 的新请求仍保留。
         if (world && !scripts.IsPaused()) world->GetDebugDraw().BeginFrame();
-        TickEngineBlueprintAssets(context.scriptBuild);
+        {
+            PROFILE_SCOPE("Scripts.BlueprintAssets");
+            TickEngineBlueprintAssets(context.scriptBuild);
+        }
         // 故障 Stop 后先收回动态模板，再构造程序集候选，避免把上一轮资产收录为常驻模板。
-        TickEngineScriptBuild(context.scriptBuild, deltaTime);
-        if (world && world->GetGeneration() != autoPlayWorldGeneration &&
+        {
+            PROFILE_SCOPE("Scripts.ScriptBuild");
+            TickEngineScriptBuild(context.scriptBuild, deltaTime);
+        }
+        if (!terrainLoading && world && world->GetGeneration() != autoPlayWorldGeneration &&
             runtimeConfig.GetScriptSettings().autoPlay &&
             !RenderSystem::GetInstance().IsOfflineMode() &&
             std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json")
@@ -105,15 +161,19 @@ void RunEngineUpdatePhase(
             std::string error;
             scripts.Control(*world, ScriptPlayState::Editing, error);
         }
-        if (scripts.IsEditing())
+        if (!terrainLoading && scripts.IsEditing())
             controller->Update(simulationDelta, subsystems.GetInputSubsystem().GetActionState());
-        scripts.Tick(world, simulationDelta,
-            subsystems.GetInputSubsystem().GetActionState(),
-            subsystems.GetDiagnosticsSubsystem());
+        {
+            PROFILE_SCOPE("Scripts.RuntimeTick");
+            if (!terrainLoading)
+                scripts.Tick(world, simulationDelta,
+                    subsystems.GetInputSubsystem().GetActionState(),
+                    subsystems.GetDiagnosticsSubsystem());
+        }
         // 粒子模拟跟随脚本时钟：Pause 冻结，Playing 使用 timeScale 后的 delta，
         // Editing 保持编辑器时间。必须在 Tick 之后、发布快照之前写入。
         RenderSystem::GetInstance().SetPendingSimulationDelta(
-            scripts.ParticleDeltaOr(simulationDelta));
+            terrainLoading ? 0.0f : scripts.ParticleDeltaOr(simulationDelta));
     }
     {
         // 可破坏物会话跟着 Play/Editing 状态切换；先恢复作者场景再步进共享冲击世界。
@@ -121,7 +181,7 @@ void RunEngineUpdatePhase(
         const bool nativeGameplay = world && world->IsNativeGameplay();
         const bool sessionActive = world && !offline &&
             (nativeGameplay || !scripts.IsEditing());
-        const bool gameplayActive = sessionActive &&
+        const bool gameplayActive = !terrainLoading && sessionActive &&
             (nativeGameplay || !scripts.IsPaused());
         const bool editingNow =
             world && !offline && !nativeGameplay && scripts.IsEditing();
@@ -172,7 +232,7 @@ void RunEngineUpdatePhase(
     }
     // 普通动画的编辑预览独立于 C# Play；绑定蓝图角色的发丝则消费
     // 同一份 scaled dt。冻结后交给 RT，不让曝光墙钟绕过 Pause/TimeScale。
-    const float gameSimulationDelta =
+    const float gameSimulationDelta = terrainLoading ? 0.0f :
         scripts.ContextTime().at("deltaTime").get<float>();
     const float hairSimulationDelta = scripts.IsEditing()
         ? simulationDelta : gameSimulationDelta;
@@ -180,12 +240,16 @@ void RunEngineUpdatePhase(
     // master SpeedTree 用连续墙钟，风自身的 1/60 固定步长和 0.25 s 追帧上限会消化
     // 长帧；这里若用夹取后的值，hitch 时风会永久变慢。
     RenderSystem::GetInstance().SetSimulationFrameDeltas(
-        simulationDelta, gameSimulationDelta, hairSimulationDelta, deltaTime);
+        simulationDelta, gameSimulationDelta, hairSimulationDelta,
+        terrainLoading ? 0.0f : deltaTime);
     {
         CpuFrameStageScope animationStage(cpuFrameProfiler, CpuFrameStage::Animation);
         // 动画 CPU 蒙皮/求值发生在 World::TickAnimations，毛发 GT 步进在下一段单独计时。
-        if (world && !RenderSystem::GetInstance().IsOfflineMode())
+        if (!terrainLoading && world && !RenderSystem::GetInstance().IsOfflineMode())
+        {
+            PROFILE_SCOPE("World.TickAnimations");
             world->TickAnimations(simulationDelta);
+        }
     }
     {
         CpuFrameStageScope hairStage(cpuFrameProfiler, CpuFrameStage::HairSimulation);
@@ -203,6 +267,7 @@ void RunEngineUpdatePhase(
     }
     {
         CpuFrameStageScope scriptsStage(cpuFrameProfiler, CpuFrameStage::Scripts);
+        PROFILE_SCOPE("Scripts.PollAssetChanges");
         if (world && !RenderSystem::GetInstance().IsOfflineMode() &&
             std::filesystem::path(world->GetScenePath()).filename() != "SC_model_preview.json" &&
             scripts.PollBlueprintAssetChanges(*world, deltaTime))
@@ -266,6 +331,8 @@ void RunEngineRenderSubmitPhase(const EngineFrameContext& context)
 
 void TickEngineFrame(EngineFrameContext& context)
 {
+    const std::chrono::steady_clock::time_point frameStart =
+        std::chrono::steady_clock::now();
     SubsystemCollection& subsystems = *context.subsystems;
     CpuFrameProfiler& cpuFrameProfiler = *context.cpuFrameProfiler;
     bool& shouldClose = *context.shouldClose;
@@ -359,10 +426,6 @@ void TickEngineFrame(EngineFrameContext& context)
     {
         RenderSystem::GetInstance().ReportTerrainStatistics();
     }
-    if (commandResult.terrainLayerStatisticsRequested)
-    {
-        RenderSystem::GetInstance().ReportTerrainLayerStatistics();
-    }
     if (commandResult.terrainLodStatisticsRequested)
     {
         RenderSystem::GetInstance().ReportTerrainLodStatistics();
@@ -449,11 +512,13 @@ void TickEngineFrame(EngineFrameContext& context)
         }
     }
 
+    const std::chrono::steady_clock::time_point preTickEnd =
+        std::chrono::steady_clock::now();
     const float deltaTime = subsystems.GetRuntimeClock().TickDeltaSeconds();
     // UE 用 MaxUndilatedFrameTime/MaxSimulationTimeStep 防止 hitch 一帧推进整段：
     // 游戏/动画只消费上限 0.1 s 的模拟时间，FPS 与资产轮询仍用原始帧间隔。
     constexpr float MaxSimulationDelta = 0.1f;
-    const float simulationDelta = std::min(deltaTime, MaxSimulationDelta);
+    float simulationDelta = std::min(deltaTime, MaxSimulationDelta);
 
     // input 由两段不连续区间组成（平台事件轮询 + 动作状态更新），其余 UI 策略
     // 与命令执行归入 other；同一阶段的多个区间在累加器里相加。
@@ -508,12 +573,24 @@ void TickEngineFrame(EngineFrameContext& context)
         return;
     }
 
+    const auto& inputWorld = subsystems.GetWorldManager().GetActiveWorld();
+    const bool terrainLoading = IsTerrainWorldLoading(
+        inputWorld.get(), RenderSystem::GetInstance().IsOfflineMode());
+    if (terrainLoading)
+        simulationDelta = 0.0f;
     {
         CpuFrameStageScope inputStage(cpuFrameProfiler, CpuFrameStage::Input);
+        if (terrainLoading)
+        {
+            auto& input = subsystems.GetInputSubsystem();
+            input.SetGameKeyboardEnabled(false);
+            input.SetGamePointerEnabled(false);
+            input.SetRelativeMouseModeAllowed(false);
+        }
         subsystems.GetInputSubsystem().UpdateActionState();
     }
 
-    RunEngineUpdatePhase(context, deltaTime, simulationDelta);
+    RunEngineUpdatePhase(context, deltaTime, simulationDelta, terrainLoading);
 
     // 即使当前没有 World，也要持续补音频流，避免设备欠载造成爆音。
     if (audioRuntime) audioRuntime->Update();
@@ -586,6 +663,22 @@ void TickEngineFrame(EngineFrameContext& context)
         RenderSystem::GetInstance().PublishCpuStageSamples(
             cpuStages,
             cpuFrameProfiler.WindowFrameCount());
+        // 独立于 --gpu-stats：timestamp 采集会串行化 GPU，改变被测帧本身。
+        static const bool hitchLogEnabled = []
+        {
+            const char* value = std::getenv("VL_HITCH_LOG");
+            return value != nullptr && value[0] != '\0' && value[0] != '0';
+        }();
+        if (hitchLogEnabled)
+        {
+            LogFrameHitchIfNeeded(
+                cpuFrameProfiler,
+                std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - frameStart).count(),
+                std::chrono::duration<double, std::milli>(
+                    preTickEnd - frameStart).count(),
+                static_cast<double>(deltaTime) * 1000.0);
+        }
     }
 
     {

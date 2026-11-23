@@ -1,4 +1,5 @@
 #include "shader/build/contentHash.h"
+#include "core/tracingIfstream.h"
 
 #include <algorithm>
 #include <fstream>
@@ -126,7 +127,8 @@ ContentDigest ContentHasher::HashString(std::string_view text)
 
 ContentDigest ContentHasher::HashFile(const std::filesystem::path& path)
 {
-    std::ifstream input(path, std::ios::binary);
+    RuntimeFileTrace::TracingIfstream input(
+        path, std::ios::binary, "ContentHasher.HashFile");
     if (!input.is_open())
     {
         throw std::runtime_error("Failed to open file for BLAKE3 hashing: " + path.string());

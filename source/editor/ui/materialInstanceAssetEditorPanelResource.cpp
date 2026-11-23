@@ -143,6 +143,18 @@ void MaterialInstanceAssetEditorPanel::CloseResource(const std::string& path)
     requestedTressfxDocuments.erase(path);
     // 后台关闭只移除标签，不切预览 World，也不覆盖当前页面的选择。
     RefreshResourceEditor();
+    // 最后一份材质关闭后必须回到关卡；预览 World 不能残留成可编辑场景。
+    const bool previewWorld =
+        std::filesystem::path(runtimeView.activeWorldPath).filename() ==
+            "SC_model_preview.json" ||
+        std::filesystem::path(runtimeView.activeWorldPath).filename() ==
+            "SC_particle_preview.json";
+    if (resourceEditor.Tabs().empty() && (requestedPreviewMaterial || previewWorld))
+    {
+        requestedPreviewMaterial = false;
+        ReturnToLevel();
+        return;
+    }
     if (!next.empty()) ActivateWorkspacePanel(next);
 }
 
@@ -325,8 +337,14 @@ void MaterialInstanceAssetEditorPanel::ReturnToLevel()
     previewDragButton = -1;
     resourceEditorVisible = false;
     docking.Activate("viewport");
+    const bool previewWorld =
+        std::filesystem::path(runtimeView.activeWorldPath).filename() ==
+            "SC_model_preview.json" ||
+        std::filesystem::path(runtimeView.activeWorldPath).filename() ==
+            "SC_particle_preview.json";
     // 当前只有一个活动 World；返回关卡须重新走加载事务，不能把模型 World 冒充关卡。
-    if (!requestedPreviewPath.empty() && !levelWorldPath.empty() && runtimeActionSink != nullptr)
+    if ((!requestedPreviewPath.empty() || previewWorld) &&
+        !levelWorldPath.empty() && runtimeActionSink != nullptr)
     {
         UiAction request;
         request.type = UiActionType::LoadWorld;

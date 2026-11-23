@@ -19,6 +19,20 @@ PostProcess(Constraint → Twist → Helpers)
 `World` 在 `TickScriptAnimations` 中调用；`SkeletalPlayback::CopyPoseGlobals` /
 `ApplyPoseGlobals` 负责局部姿态与世界矩阵的转换。
 
+### 1.1 每个播放器每 tick 只步进一次
+
+一个 `SKM_*` 的 section 会展开成多个 `WorldMeshObject`，它们共享同一个
+`SkeletalPlayback` 和同一个 `sceneObjectIdentity`（section 数量由资产决定）。
+骨骼物理解算必须放在
+`updated.insert(mesh.animation.get()).second` 成立的那一次循环里（与 `Tick` /
+接地修正同一层），**不能**在每个 section 上各执行一次：
+
+- 按 section 求解会对同一个 Jolt PhysicsSystem 重复调用 `Update`，物理时间被放大
+  与 section 数相同的倍数，并重复支付求解开销；
+- `CopyPoseGlobals` / `ApplyPoseGlobals` 是全骨架操作，重复执行不会产生新结果。
+
+测量与修复前后数据见 `documents/rationale/performance-hitches-2026-11-14.md`。
+
 ## 2. 资产格式
 
 ```json

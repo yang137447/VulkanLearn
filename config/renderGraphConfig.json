@@ -338,7 +338,7 @@
             ]
         },
         {
-            "name": "terrainLayerFeedback0",
+            "name": "terrainCompositedFeedback0",
             "format": "R8G8B8A8_UNORM",
             "widthSize": 128,
             "heightSize": 128,
@@ -348,7 +348,7 @@
             ]
         },
         {
-            "name": "terrainLayerFeedback1",
+            "name": "terrainCompositedFeedback1",
             "format": "R8G8B8A8_UNORM",
             "widthSize": 128,
             "heightSize": 128,
@@ -358,7 +358,7 @@
             ]
         },
         {
-            "name": "terrainLayerFeedback2",
+            "name": "terrainCompositedFeedback2",
             "format": "R8G8B8A8_UNORM",
             "widthSize": 128,
             "heightSize": 128,
@@ -368,7 +368,7 @@
             ]
         },
         {
-            "name": "terrainLayerFeedback3",
+            "name": "terrainCompositedFeedback3",
             "format": "R8G8B8A8_UNORM",
             "widthSize": 128,
             "heightSize": 128,
@@ -376,6 +376,22 @@
                 "colorAttachment",
                 "transferSrc"
             ]
+        },
+        {
+            "name": "terrainQualityWinner0",
+            "format": "R32G32B32A32_UINT",
+            "widthSize": 128,
+            "heightSize": 128,
+            "clearColor": [0, 0, 0, 0],
+            "usage": ["colorAttachment", "sampled"]
+        },
+        {
+            "name": "terrainQualityWinner1",
+            "format": "R32G32B32A32_UINT",
+            "widthSize": 128,
+            "heightSize": 128,
+            "clearColor": [0, 0, 0, 0],
+            "usage": ["colorAttachment", "sampled"]
         },
         {
             "name": "terrainFeedbackDepth",
@@ -383,7 +399,8 @@
             "widthSize": 128,
             "heightSize": 128,
             "usage": [
-                "depthStencilAttachment"
+                "depthStencilAttachment",
+                "sampled"
             ]
         },
         {
@@ -837,6 +854,11 @@
                     "resource": "terrainLayerWeights",
                     "source": "worldTexture",
                     "binding": 3
+                },
+                {
+                    "resource": "terrainCompositedSurfaceMap",
+                    "source": "worldTexture",
+                    "binding": 4
                 }
             ],
             "output": [
@@ -846,22 +868,32 @@
                     "storeOp": "store"
                 },
                 {
-                    "resource": "terrainLayerFeedback0",
+                    "resource": "terrainCompositedFeedback0",
                     "loadOp": "clear",
                     "storeOp": "store"
                 },
                 {
-                    "resource": "terrainLayerFeedback1",
+                    "resource": "terrainCompositedFeedback1",
                     "loadOp": "clear",
                     "storeOp": "store"
                 },
                 {
-                    "resource": "terrainLayerFeedback2",
+                    "resource": "terrainCompositedFeedback2",
                     "loadOp": "clear",
                     "storeOp": "store"
                 },
                 {
-                    "resource": "terrainLayerFeedback3",
+                    "resource": "terrainCompositedFeedback3",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "terrainQualityWinner0",
+                    "loadOp": "clear",
+                    "storeOp": "store"
+                },
+                {
+                    "resource": "terrainQualityWinner1",
                     "loadOp": "clear",
                     "storeOp": "store"
                 },

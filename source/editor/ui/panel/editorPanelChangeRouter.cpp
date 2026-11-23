@@ -99,6 +99,117 @@ void HandlePanelChange(MaterialInstanceAssetEditorPanel& panel, Rml::Element& el
         return;
     }
     if (panel.terrainAssetEditor.HandleChange(element, action)) return;
+    if (action == "terrain-material-uv-scale")
+    {
+        const std::string path = panel.TerrainMaterialPath();
+        if (path.empty()) return;
+        float value = 0.0f;
+        if (!ParseNumber(ControlValue(element), value) || value <= 0.0f)
+        {
+            panel.localStatus = "Global UV tiling must be a positive finite number.";
+            return;
+        }
+        if (!panel.QueueMaterialFloat(path, "u_uvScale", value))
+        {
+            panel.localStatus = "Open the terrain material before editing global tiling.";
+            return;
+        }
+        panel.localStatus = "Terrain global UV tiling queued.";
+        panel.RefreshTerrainMaterialPanel();
+        return;
+    }
+    {
+        struct TessEdit
+        {
+            const char* action;
+            const char* parameter;
+            float minimum;
+            float maximum;
+        };
+        static constexpr TessEdit tessEdits[] = {
+            {"terrain-material-tess-max", "u_terrainTessMax", 1.0f, 32.0f},
+            {"terrain-material-tess-pixels", "u_terrainTessTargetPixels", 1.0f, 16.0f},
+            {"terrain-material-tess-radius", "u_terrainTessRadiusM", 0.0f, 500.0f},
+            {"terrain-material-detail-uv", "u_detailUvScale", 1.0f, 32.0f},
+            {"terrain-material-displacement-scale", "u_layerDisplacementScale", 0.0f, 8.0f},
+        };
+        for (const TessEdit& edit : tessEdits)
+        {
+            if (action != edit.action) continue;
+            const std::string path = panel.TerrainDetailMaterialPath();
+            if (path.empty()) return;
+            float value = 0.0f;
+            if (!ParseNumber(ControlValue(element), value) ||
+                !std::isfinite(value))
+            {
+                panel.localStatus = "Terrain tessellation value must be finite.";
+                return;
+            }
+            if (value < edit.minimum || value > edit.maximum)
+            {
+                panel.localStatus = std::string(edit.parameter) +
+                    " must be within " + TerrainNumber(edit.minimum) +
+                    ".." + TerrainNumber(edit.maximum) + ".";
+                return;
+            }
+            if (!panel.QueueMaterialFloat(path, edit.parameter, value))
+            {
+                panel.localStatus =
+                    "Open the terrain detail MI before editing tessellation.";
+                return;
+            }
+            panel.localStatus = "Terrain tessellation parameter queued.";
+            panel.RefreshTerrainMaterialPanel();
+            return;
+        }
+    }
+    if (action == "terrain-layer-uv-scale" || action == "terrain-layer-uv-rotation" ||
+        action == "terrain-layer-displacement")
+    {
+        const EditorSceneActorSnapshot* actor = panel.TerrainMaterialActor();
+        if (actor == nullptr || actor->terrainPlan == nullptr) return;
+        const auto& layers = actor->terrainPlan->desc.layers;
+        if (panel.terrainPaintLayer >= layers.size()) return;
+        float value = 0.0f;
+        if (!ParseNumber(ControlValue(element), value) ||
+            (action == "terrain-layer-uv-scale" && value <= 0.0f) ||
+            (action == "terrain-layer-displacement" &&
+                (value < 0.0f || value > 1000.0f)))
+        {
+            panel.localStatus = action == "terrain-layer-uv-scale"
+                ? "Layer UV scale must be a positive finite number."
+                : action == "terrain-layer-displacement"
+                    ? "Layer displacement must be a non-negative finite number."
+                    : "Layer UV rotation must be a finite number.";
+            return;
+        }
+        const std::string path = panel.TerrainAssetPath();
+        if (path.empty()) return;
+        const auto* document = panel.TerrainDocument(path);
+        if (document == nullptr)
+        {
+            panel.localStatus = "Loading terrain asset; press Enter again.";
+            return;
+        }
+        EditorAssetFieldChange change;
+        change.field = action == "terrain-layer-uv-scale"
+            ? "uvScale"
+            : action == "terrain-layer-displacement"
+                ? "displacementM"
+                : "uvRotation";
+        change.layerIndex = panel.terrainPaintLayer;
+        change.expectedLayerName = layers[panel.terrainPaintLayer].name;
+        change.value = static_cast<double>(
+            action == "terrain-layer-displacement" ? value / 100.0f : value);
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::ModifyTerrainDocument;
+        command.expectedDocumentRevision = document->documentRevision;
+        command.payload = ModifyAssetDocumentPayload{path, {std::move(change)}};
+        panel.Submit(std::move(command));
+        panel.localStatus =
+            "Layer material updated in the TR draft. Save TR, then reload the scene.";
+        return;
+    }
     if (action == "terrain-layer-search")
     {
         panel.terrainLayerSearch = ControlValue(element);

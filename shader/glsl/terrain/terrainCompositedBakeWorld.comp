@@ -1,0 +1,180 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+
+#include "terrainCompositedBakeWorldTypes.glsl"
+
+layout(local_size_x = 64) in;
+layout(std430, set = 0, binding = 0) readonly buffer World
+{
+    uvec4 page;
+    uvec4 control;
+    TerrainBakeSurface surfaces[16];
+} world;
+layout(std430, set = 0, binding = 1) buffer Output
+{
+    uint words[];
+} outputPage;
+
+layout(set = 0, binding = 2) uniform sampler2D coveragePageTables[16];
+layout(set = 0, binding = 3) uniform sampler2D coverageIdMaps[16];
+layout(set = 0, binding = 4) uniform sampler2D coverageWeightMaps[16];
+layout(set = 0, binding = 5) uniform sampler2DArray localLayerWeightMaps[16];
+layout(set = 0, binding = 6) uniform sampler2D layerCatalogs[16];
+layout(set = 0, binding = 7) uniform sampler2DArray layerAlbedos[16];
+layout(set = 0, binding = 8) uniform sampler2DArray layerNormals[16];
+layout(set = 0, binding = 9) uniform sampler2DArray layerOrms[16];
+layout(set = 0, binding = 10) uniform sampler2D surfaceLocalNormals[16];
+layout(set = 0, binding = 11) uniform sampler2D surfaceLocalTangents[16];
+layout(set = 0, binding = 12) uniform sampler2DArray layerHeights[16];
+
+struct Chart
+{
+    vec4 rowU;
+    vec4 rowV;
+    vec4 metricU;
+    vec4 metricV;
+};
+layout(std430, set = 0, binding = 13) readonly buffer Charts
+{
+    Chart entries[];
+} charts;
+
+#include "terrainCompositedBakeRoute.glsl"
+#include "terrainCompositedBakeWorldEvaluator.glsl"
+
+#define TERRAIN_BAKE_LITERAL_CASE(surface) \
+    case surface: \
+        EvaluateBase(surface, \
+            coveragePageTables[surface], coverageIdMaps[surface], coverageWeightMaps[surface], \
+            localLayerWeightMaps[surface], layerCatalogs[surface], \
+            layerAlbedos[surface], layerNormals[surface], layerOrms[surface], \
+            surfaceLocalNormals[surface], surfaceLocalTangents[surface], layerHeights[surface], \
+            domainUv, footprintU, footprintV, colour, normal, orm, diagnostic); \
+        break
+
+void EvaluateTarget(uint target, vec2 domainUv, vec2 footprintU, vec2 footprintV,
+    out vec3 colour, out vec3 normal, out vec3 orm, inout uint diagnostic)
+{
+    switch (target)
+    {
+    TERRAIN_BAKE_LITERAL_CASE(0);
+    TERRAIN_BAKE_LITERAL_CASE(1);
+    TERRAIN_BAKE_LITERAL_CASE(2);
+    TERRAIN_BAKE_LITERAL_CASE(3);
+    TERRAIN_BAKE_LITERAL_CASE(4);
+    TERRAIN_BAKE_LITERAL_CASE(5);
+    TERRAIN_BAKE_LITERAL_CASE(6);
+    TERRAIN_BAKE_LITERAL_CASE(7);
+    TERRAIN_BAKE_LITERAL_CASE(8);
+    TERRAIN_BAKE_LITERAL_CASE(9);
+    TERRAIN_BAKE_LITERAL_CASE(10);
+    TERRAIN_BAKE_LITERAL_CASE(11);
+    TERRAIN_BAKE_LITERAL_CASE(12);
+    TERRAIN_BAKE_LITERAL_CASE(13);
+    TERRAIN_BAKE_LITERAL_CASE(14);
+    TERRAIN_BAKE_LITERAL_CASE(15);
+    default:
+        diagnostic |= 32u;
+        colour = vec3(0);
+        normal = vec3(0, 1, 0);
+        orm = vec3(1);
+        break;
+    }
+}
+
+shared vec4 parallelColour[64];
+shared vec4 parallelNormal[64];
+shared vec4 parallelOrm[64];
+
+void main()
+{
+    const uint lane = gl_LocalInvocationIndex;
+    const uint samples = world.control.x;
+    const uint sampleCount = samples * samples;
+    const uint lanesPerTexel = sampleCount <= 1u ? 1u :
+        sampleCount <= 4u ? 4u : sampleCount <= 16u ? 8u : 64u;
+    const uint texelsPerGroup = 64u / lanesPerTexel;
+    const uint sampleLane = lane % lanesPerTexel;
+    const uint texelLane = lane / lanesPerTexel;
+    const uvec2 pixel = uvec2(gl_WorkGroupID.x * texelsPerGroup + texelLane, gl_WorkGroupID.y);
+    const uvec2 evaluationExtent = world.control.y != 0u ? uvec2(136) :
+        min(uvec2(128), world.page.xy - world.page.zw * 128u) + 8u;
+    const bool validPixel = all(lessThan(pixel, evaluationExtent));
+    vec3 colourSum = vec3(0);
+    vec3 normalSum = vec3(0);
+    vec3 ormSum = vec3(0);
+    for (uint sampleBase = 0u; sampleBase < sampleCount; sampleBase += lanesPerTexel)
+    {
+        parallelColour[lane] = vec4(0);
+        parallelNormal[lane] = vec4(0);
+        parallelOrm[lane] = vec4(0);
+        if (validPixel && sampleBase + sampleLane < sampleCount)
+        {
+            const vec2 resolution = vec2(world.page.xy);
+            const vec2 origin = vec2(world.page.zw * 128u) + vec2(pixel) - 4.0;
+            const vec2 subpixel = (vec2((sampleBase + sampleLane) % samples,
+                (sampleBase + sampleLane) / samples) + 0.5) / float(samples);
+            const vec2 query = (origin + subpixel) / resolution;
+            const vec2 footprint = 1.0 / (resolution * float(samples));
+            uint target = world.control.z;
+            vec2 domainUv = fract(query);
+            vec2 footprintU = vec2(footprint.x, 0);
+            vec2 footprintV = vec2(0, footprint.y);
+            uint diagnostic = 0u;
+            if (world.control.y == 0u)
+            {
+                target = TerrainBakeResolve(query, world.control.z, world.control.w,
+                    world.surfaces[0].adjacency.x == 2u);
+                if (target < world.control.w)
+                {
+                    const Chart chart = charts.entries[target];
+                    domainUv = clamp(vec2(dot(chart.rowU.xyz, vec3(query, 1)),
+                        dot(chart.rowV.xyz, vec3(query, 1))), 0.0, 1.0);
+                    footprintU = vec2(chart.rowU.x, chart.rowV.x) * footprint.x;
+                    footprintV = vec2(chart.rowU.y, chart.rowV.y) * footprint.y;
+                }
+                else
+                    diagnostic |= 32u;
+            }
+            if (diagnostic == 0u)
+            {
+                vec3 colour;
+                vec3 normal;
+                vec3 orm;
+                EvaluateTarget(target, domainUv, footprintU, footprintV,
+                    colour, normal, orm, diagnostic);
+                normal = normalize(mat3(world.surfaces[target].normalToSource) * normal);
+                parallelColour[lane] = vec4(colour, 0);
+                parallelNormal[lane] = vec4(normal, 0);
+                parallelOrm[lane] = vec4(orm.r, orm.g * orm.g, orm.b, 0);
+            }
+            if (diagnostic != 0u)
+                atomicOr(outputPage.words[3u * 136u * 136u], diagnostic);
+        }
+        barrier();
+        if (validPixel && sampleLane == 0u)
+        {
+            const uint phaseCount = min(lanesPerTexel, sampleCount - sampleBase);
+            for (uint sampleIndex = 0u; sampleIndex < phaseCount; ++sampleIndex)
+            {
+                const uint sharedIndex = texelLane * lanesPerTexel + sampleIndex;
+                colourSum += parallelColour[sharedIndex].xyz;
+                normalSum += parallelNormal[sharedIndex].xyz;
+                ormSum += parallelOrm[sharedIndex].xyz;
+            }
+        }
+        if (sampleBase + lanesPerTexel < sampleCount)
+            barrier();
+    }
+    if (!validPixel || sampleLane != 0u)
+        return;
+    const float inverseCount = 1.0 / float(sampleCount);
+    const vec3 colour = TerrainCompositedLinearToSrgb(colourSum * inverseCount);
+    const vec3 normal = TerrainCompositedNormal(normalSum, vec3(0, 1, 0));
+    vec3 orm = ormSum * inverseCount;
+    orm.g = sqrt(max(orm.g, 0.0));
+    const uint texel = pixel.y * 136u + pixel.x;
+    outputPage.words[texel] = packUnorm4x8(vec4(colour, 1));
+    outputPage.words[136u * 136u + texel] = packUnorm4x8(vec4(normal * 0.5 + 0.5, 1));
+    outputPage.words[2u * 136u * 136u + texel] = packUnorm4x8(vec4(orm, 1));
+}

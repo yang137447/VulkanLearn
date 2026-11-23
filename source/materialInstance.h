@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+#include <atomic>
 #include <map>
 #include <memory>
 #include <mutex>
@@ -21,6 +22,7 @@ class Texture;
 namespace VL
 {
 class RendererBackendVulkan;
+class MaterialInstanceStateBatch;
 }
 
 enum class ParamType
@@ -162,10 +164,19 @@ public:
         const std::shared_ptr<Texture>& texture,
         std::optional<std::string> textureAssetIdentity,
         std::optional<std::string> textureCacheIdentity);
+    // 运行时生成的地形页/层资源替换同名占位纹理时保留作者资产 identity，
+    // 数值预览仍能证明这些槽位没有改贴图。
+    void SetTextureKeepingIdentity(
+        const std::string& textureName,
+        const std::shared_ptr<Texture>& texture);
     //获取纹理
     std::shared_ptr<Texture> GetTexture(const std::string& textureName) const;
     //检查纹理是否存在
     bool HasTexture(const std::string& textureName) const;
+    uint64_t GetTextureBindingVersion() const noexcept
+    {
+        return textureBindingVersion.load(std::memory_order_acquire);
+    }
     
     void SetBaseMaterial(const std::shared_ptr<Material>& baseMaterial) { this->baseMaterial = baseMaterial; }
     const std::weak_ptr<Material>& GetBaseMaterial() const { return baseMaterial; }
@@ -184,6 +195,7 @@ public:
     // material instance and its CPU parameters stay alive.
     void ShutdownRenderResources();
 private:
+    friend class VL::MaterialInstanceStateBatch;
     // 调用方必须已持有 stateMutex（独占或共享）。
     void ClearParameterValues(const std::string& parameterName);
     MaterialInstanceNumericParameterValues
@@ -193,6 +205,7 @@ private:
     void SetupDescriptors();
 
     std::string materialInstanceName;
+    std::atomic<uint64_t> textureBindingVersion{1};
     std::weak_ptr<Material> baseMaterial;
     // 数值参数、纹理绑定与预览提交共用一把锁；锁从不包裹 Vulkan 调用。
     mutable std::shared_mutex stateMutex;

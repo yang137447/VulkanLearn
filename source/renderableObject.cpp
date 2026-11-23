@@ -17,7 +17,8 @@ RenderableObject::RenderableObject(
     std::vector<uint32_t> indices,
     VL::RendererBackendVulkan& rendererBackend,
     const std::string& name,
-    bool dynamicVertices)
+    bool dynamicVertices,
+    std::vector<uint32_t> patchIndices)
 {
     this->rendererBackend = &rendererBackend;
     this->vertices = std::move(vertices);
@@ -31,6 +32,7 @@ RenderableObject::RenderableObject(
     CreateVertexBuffer();
     // 创建索引缓冲区
     CreateIndexBuffer();
+    CreatePatchIndexBuffer(patchIndices);
     CreateInstanceBuffer();
 }
 RenderableObject::RenderableObject(
@@ -202,6 +204,7 @@ RenderableObject::~RenderableObject()
         rendererBackend->DestroyBuffer(skinInfluenceBuffer, skinInfluenceMemory);
     // 销毁索引缓冲区
     DestroyIndexBuffer();
+    DestroyPatchIndexBuffer();
     // 销毁顶点缓冲区
     DestroyVertexBuffer();
     DestroyInstanceBuffer();
@@ -270,31 +273,32 @@ std::shared_ptr<RenderableObject> RenderableObject::CloneForPlacement(
         tressfxPlacementResources, resolvedGroups, tressfxGuideGroupBinding);
 }
 
-void RenderableObject::Draw(
-    vk::CommandBuffer &commandBuffer,
-    uint32_t frameSlot)
+VL::TerrainMeshDrawBindings RenderableObject::DescribeDrawBindings(
+    uint32_t frameSlot, bool usePatchIndices) const
 {
-    // viewport/scissor 由 PassRuntime 按 pass 统一设置，避免每个对象把中心
-    // 视口覆盖回整张资源。
     const uint32_t slot = frameSlot % DynamicMeshFrameSlotCount;
-    const vk::Buffer boundVertexBuffer =
-        dynamicVertices ? dynamicVertexBuffers[slot] : vertexBuffer;
-    const vk::DescriptorBufferInfo& boundVertexInfo =
-        dynamicVertices ? dynamicVertexBufferInfos[slot] : vertexBufferInfo;
-    const vk::Buffer boundIndexBuffer =
-        fixedCapacity ? dynamicIndexBuffers[slot] : indexBuffer;
-    const vk::Buffer vertexBuffers[2] = {boundVertexBuffer, instanceBuffer};
-    const vk::DeviceSize vertexOffsets[2] = {boundVertexInfo.offset, 0};
-    commandBuffer.bindVertexBuffers(0, 2, vertexBuffers, vertexOffsets);
-    commandBuffer.bindIndexBuffer(
-        boundIndexBuffer, 0, vk::IndexType::eUint32);
-    const size_t count =
-        fixedCapacity ? dynamicIndexCounts[slot] : GetIndices().size();
-    if (count == 0) return;
-    commandBuffer.drawIndexed(
-        static_cast<uint32_t>(count),
-        instanceCount,
-        0,
-        0,
-        0);
+    VL::TerrainMeshDrawBindings result;
+    const auto& vertexInfo = dynamicVertices ? dynamicVertexBufferInfos[slot] : vertexBufferInfo;
+    result.vertexBuffers = {dynamicVertices ? dynamicVertexBuffers[slot] : vertexBuffer, instanceBuffer};
+    result.vertexOffsets = {vertexInfo.offset, 0};
+    result.patches = usePatchIndices && patchIndexBuffer != vk::Buffer{} && patchIndexCount != 0;
+    if (usePatchIndices && !result.patches)
+        return result;
+    result.indexBuffer = result.patches ? patchIndexBuffer :
+        (fixedCapacity ? dynamicIndexBuffers[slot] : indexBuffer);
+    result.indexCount = result.patches ? patchIndexCount :
+        static_cast<uint32_t>(fixedCapacity ? dynamicIndexCounts[slot] : GetIndices().size());
+    result.instanceCount = instanceCount;
+    return result;
+}
+
+void RenderableObject::Draw(
+    vk::CommandBuffer& commandBuffer, uint32_t frameSlot, bool usePatchIndices)
+{
+    const auto bindings = DescribeDrawBindings(frameSlot, usePatchIndices);
+    if (!bindings.indexCount) return;
+    commandBuffer.bindVertexBuffers(0, 2, bindings.vertexBuffers.data(), bindings.vertexOffsets.data());
+    commandBuffer.bindIndexBuffer(bindings.indexBuffer, bindings.indexOffset, bindings.indexType);
+    commandBuffer.drawIndexed(bindings.indexCount, bindings.instanceCount, bindings.firstIndex,
+        bindings.vertexOffset, bindings.firstInstance);
 }

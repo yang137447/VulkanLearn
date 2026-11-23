@@ -40,6 +40,7 @@ add_executable(vl_renderer_backend_tests
     terrain_feedback_readback_test.cpp
     terrain_layer_atlas_gpu_test.cpp
     gpu_pass_timings_test.cpp
+    gpuTimestampQueryBatchTests.cpp
     performance_snapshot_test.cpp
     cpu_frame_profiler_test.cpp
     shadow_caster_cull_test.cpp

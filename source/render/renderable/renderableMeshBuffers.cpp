@@ -448,6 +448,67 @@ void RenderableObject::DestroyIndexBuffer()
         indexBufferMemory = nullptr;
     }
 }
+
+void RenderableObject::CreatePatchIndexBuffer(
+    const std::vector<uint32_t>& sourcePatchIndices)
+{
+    patchIndexCount = 0;
+    if (sourcePatchIndices.empty())
+        return;
+
+    const vk::DeviceSize bufferSize =
+        static_cast<vk::DeviceSize>(
+            sourcePatchIndices.size() * sizeof(uint32_t));
+    vk::Buffer stagingBuffer;
+    vk::DeviceMemory stagingBufferMemory;
+    std::tie(stagingBuffer, stagingBufferMemory) =
+        rendererBackend->CreateBuffer(
+            bufferSize,
+            vk::BufferUsageFlagBits::eTransferSrc,
+            vk::MemoryPropertyFlagBits::eHostVisible |
+                vk::MemoryPropertyFlagBits::eHostCoherent,
+            "StagingBuffer: PatchIndex (" + name + ")");
+
+    void* data = rendererBackend->MapMemory(
+        stagingBufferMemory,
+        bufferSize);
+    std::memcpy(
+        data,
+        sourcePatchIndices.data(),
+        static_cast<size_t>(bufferSize));
+    rendererBackend->UnmapMemory(stagingBufferMemory);
+
+    std::tie(patchIndexBuffer, patchIndexMemory) =
+        rendererBackend->CreateBuffer(
+            bufferSize,
+            vk::BufferUsageFlagBits::eIndexBuffer |
+                vk::BufferUsageFlagBits::eTransferDst,
+            vk::MemoryPropertyFlagBits::eDeviceLocal,
+            "PatchIndexBuffer (" + name + ")");
+    rendererBackend->CopyBufferToBuffer(
+        stagingBuffer,
+        patchIndexBuffer,
+        bufferSize);
+    rendererBackend->DestroyBuffer(
+        stagingBuffer,
+        stagingBufferMemory);
+
+    patchIndexCount =
+        static_cast<uint32_t>(sourcePatchIndices.size());
+}
+
+void RenderableObject::DestroyPatchIndexBuffer()
+{
+    if (rendererBackend == nullptr || !patchIndexBuffer)
+        return;
+    rendererBackend->DestroyBuffer(
+        patchIndexBuffer,
+        patchIndexMemory);
+    patchIndexBuffer = nullptr;
+    patchIndexMemory = nullptr;
+    patchIndexCount = 0;
+}
+
 void RenderableObject::UpdateLocalBounds()
 {
     const auto& sourceVertices = GetVertices();

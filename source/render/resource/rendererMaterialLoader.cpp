@@ -1,6 +1,7 @@
 #include "render/resource/rendererMaterialLoader.h"
 
 #include <fstream>
+#include "core/tracingIfstream.h"
 #include <filesystem>
 #include <map>
 #include <stdexcept>
@@ -64,6 +65,9 @@ nlohmann::json LoadMaterialInstanceJson(
 {
     const std::string normalizedPath =
         MaterialAssetUtils::NormalizeAssetPath(materialInstancePath);
+    const auto runtime = loadContext.runtimeMaterialSources.find(normalizedPath);
+    if (runtime != loadContext.runtimeMaterialSources.end())
+        return runtime->second;
     if (loadContext.preparedMaterialSources)
         return loadContext.preparedMaterialSources->at(CommonFunction::Path(std::string(materialInstancePath)));
     if (loadContext.materialInstanceOverrideJson.has_value() &&
@@ -75,8 +79,9 @@ nlohmann::json LoadMaterialInstanceJson(
         loadContext.offlineWorldAssets->materialInstanceSources.count(normalizedPath))
         return loadContext.offlineWorldAssets->materialInstanceSources.at(normalizedPath);
 
-    std::ifstream materialInstanceFile(
-        CommonFunction::Path(std::string(materialInstancePath)));
+    RuntimeFileTrace::TracingIfstream materialInstanceFile(
+        CommonFunction::Path(std::string(materialInstancePath)),
+        std::ios::in, "RendererMaterialLoader.MI");
     if (!materialInstanceFile.is_open())
     {
         throw std::runtime_error(
@@ -391,7 +396,8 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
         materialInstanceResolveResult.materialPath,
         materialInstanceResolveResult.materialJson,
         rendererBackend.SupportsDualSourceBlend(),
-        loadContext.prerenderSkin);
+        loadContext.prerenderSkin,
+        rendererBackend.SupportsTessellation());
     if (!isOverriddenMaterialInstance && !loadContext.useFrozenMaterials &&
         cachedMaterialInstance != nullptr)
     {
@@ -558,7 +564,21 @@ std::shared_ptr<MaterialInstance> RendererMaterialLoader::LoadMaterialInstance(
 
     // Texture bindings are loaded through texture asset descriptors and cached
     // by their resolved source/semantic/create-desc tuple.
-    for(const auto& [name, value] : shaderTextures.items())
+    const auto prebound = loadContext.preboundMaterialTextures.find(materialInstanceKey);
+    if (prebound != loadContext.preboundMaterialTextures.end())
+    {
+        for (const auto& binding : prebound->second)
+        {
+            if (!binding.second)
+                throw std::runtime_error("Null V2 prebound terrain texture: " + binding.first);
+            materialInstance->SetTexture(binding.first, binding.second);
+        }
+        for (const auto& texture : shaderTextures.items())
+            if (!prebound->second.count(texture.key()))
+                throw std::runtime_error("V2 terrain texture absent from production owner: " +
+                    texture.key());
+    }
+    else for(const auto& [name, value] : shaderTextures.items())
     {
         const std::string& textureName = name;
         if (!value.is_string())

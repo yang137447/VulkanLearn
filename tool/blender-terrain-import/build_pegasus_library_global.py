@@ -382,10 +382,6 @@ def main() -> int:
         "textureResolution": args.texture_resolution,
         "paintResolution": args.paint_resolution,
         "materialUvScale": args.material_uv_scale,
-        # 4 km 多 tile 场景：显式启用 layer page table / atlas 的虚拟纹理路径。
-        # 不写这个字段时 M_terrain 默认 mode 0，16 块 tile 会共用 legacy 数组，
-        # terrainFeedback 产不出有效层反馈，VT 流式整条链不会启动。
-        "terrainLayerMode": 1.0,
         "invertNormalGreen": True,
         "flipVertical": False,
         "description": (

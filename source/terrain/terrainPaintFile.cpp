@@ -3,13 +3,21 @@
 #include <cmath>
 #include <cstring>
 #include <fstream>
+#include <iostream>
 #include <limits>
 #include <new>
 #include <system_error>
 #include <utility>
 #include <vector>
 
+#ifdef _WIN32
+#include <process.h>
+#else
+#include <unistd.h>
+#endif
+
 #include "shader/build/atomicFile.h"
+#include "terrain/terrainPaintSha256.h"
 
 namespace VL
 {
@@ -81,30 +89,90 @@ std::string PaintError(
     return "Terrain paint file " + path.string() + ": " + message;
 }
 
+uint64_t TransactionProcessId()
+{
+#ifdef _WIN32
+    return static_cast<uint64_t>(_getpid());
+#else
+    return static_cast<uint64_t>(getpid());
+#endif
+}
+
+std::filesystem::path TransactionPath(
+    const std::filesystem::path& target,
+    const char* suffix)
+{
+    std::filesystem::path path = target;
+    path += ".";
+    path += suffix;
+    path += ".";
+    path += std::to_string(TransactionProcessId());
+    return path;
+}
+
+bool WriteTransactionTemp(
+    const std::filesystem::path& path,
+    const std::vector<uint8_t>& bytes,
+    std::string& error)
+{
+    try
+    {
+        if (path.has_parent_path())
+            std::filesystem::create_directories(path.parent_path());
+        std::ofstream output(
+            path, std::ios::binary | std::ios::trunc);
+        if (!output.is_open())
+        {
+            error = "cannot open temporary file: " + path.string();
+            return false;
+        }
+        if (!bytes.empty())
+        {
+            output.write(
+                reinterpret_cast<const char*>(bytes.data()),
+                static_cast<std::streamsize>(bytes.size()));
+        }
+        output.flush();
+        output.close();
+        if (!output)
+        {
+            error = "cannot write temporary file: " + path.string();
+            return false;
+        }
+        return true;
+    }
+    catch (const std::exception& exception)
+    {
+        error =
+            "temporary file failure: " + path.string() + ": " +
+            exception.what();
+        return false;
+    }
+}
+
 bool ValidateShape(
     uint32_t width,
     uint32_t height,
     uint32_t layerCount,
-    const std::filesystem::path& path,
     std::string& error)
 {
     if (width != height)
     {
-        error = PaintError(path, "width and height must match (non-square paint maps are not supported)");
+        error = "width and height must match (non-square paint maps are not supported)";
         return false;
     }
     if (width < PaintMinDimension || width > PaintMaxDimension)
     {
-        error = PaintError(path,
+        error =
             "dimensions must be in [" + std::to_string(PaintMinDimension) + ", " +
-            std::to_string(PaintMaxDimension) + "]");
+            std::to_string(PaintMaxDimension) + "]";
         return false;
     }
     if (layerCount < PaintMinLayerCount || layerCount > PaintMaxLayerCount)
     {
-        error = PaintError(path,
+        error =
             "layerCount must be in [" + std::to_string(PaintMinLayerCount) + ", " +
-            std::to_string(PaintMaxLayerCount) + "]");
+            std::to_string(PaintMaxLayerCount) + "]";
         return false;
     }
     return true;
@@ -166,25 +234,28 @@ bool ResolveTerrainPaintPath(
     return true;
 }
 
-bool SaveTerrainLayerPaintFile(
-    const std::filesystem::path& path,
+bool BuildTerrainLayerPaintBytes(
     const TerrainLayerPaintData& paint,
+    std::vector<uint8_t>& out,
     std::string& error)
 {
+    out.clear();
     error.clear();
     if (paint.Empty())
     {
-        error = PaintError(path, "paint data is empty or its array sizes do not match its dimensions");
+        error =
+            "paint data is empty or its array sizes do not match its dimensions";
         return false;
     }
-    if (!ValidateShape(paint.width, paint.height, paint.layerCount, path, error))
+    if (!ValidateShape(
+            paint.width, paint.height, paint.layerCount, error))
         return false;
 
     size_t sampleCount = 0;
     if (!CheckedMultiply(static_cast<size_t>(paint.width), paint.height, sampleCount) ||
         !CheckedMultiply(sampleCount, paint.layerCount, sampleCount))
     {
-        error = PaintError(path, "paint sample count overflows addressable memory");
+        error = "paint sample count overflows addressable memory";
         return false;
     }
 
@@ -193,8 +264,8 @@ bool SaveTerrainLayerPaintFile(
         const float weight = paint.weights[index];
         if (!std::isfinite(weight) || weight < 0.0f || weight > 1.0f)
         {
-            error = PaintError(path,
-                "weight[" + std::to_string(index) + "] must be finite and in [0, 1]");
+            error =
+                "weight[" + std::to_string(index) + "] must be finite and in [0, 1]";
             return false;
         }
     }
@@ -206,28 +277,52 @@ bool SaveTerrainLayerPaintFile(
         !CheckedAdd(weightBytes, sampleCount, bodyBytes) ||
         !CheckedAdd(PaintHeaderBytes, bodyBytes, totalBytes))
     {
-        error = PaintError(path, "encoded file size overflows addressable memory");
+        error = "encoded file size overflows addressable memory";
         return false;
     }
     if (totalBytes > PaintMaxFileBytes)
     {
-        error = PaintError(path, "encoded file exceeds the 512 MiB paint budget");
+        error = "encoded file exceeds the 512 MiB paint budget";
         return false;
     }
 
     try
     {
-        std::vector<uint8_t> bytes;
-        bytes.reserve(totalBytes);
-        bytes.insert(bytes.end(), PaintMagic, PaintMagic + 4);
-        AppendU32Le(bytes, paint.width);
-        AppendU32Le(bytes, paint.height);
-        AppendU32Le(bytes, paint.layerCount);
-        AppendU32Le(bytes, 0); // flags
-        AppendU32Le(bytes, 0); // reserved
+        out.reserve(totalBytes);
+        out.insert(out.end(), PaintMagic, PaintMagic + 4);
+        AppendU32Le(out, paint.width);
+        AppendU32Le(out, paint.height);
+        AppendU32Le(out, paint.layerCount);
+        AppendU32Le(out, 0); // flags
+        AppendU32Le(out, 0); // reserved
         for (float weight : paint.weights)
-            AppendU32Le(bytes, FloatToBits(weight));
-        bytes.insert(bytes.end(), paint.opacity.begin(), paint.opacity.end());
+            AppendU32Le(out, FloatToBits(weight));
+        out.insert(out.end(), paint.opacity.begin(), paint.opacity.end());
+        return true;
+    }
+    catch (const std::exception&)
+    {
+        out.clear();
+        error = "allocation failed for the encoded paint snapshot";
+        return false;
+    }
+}
+
+bool SaveTerrainLayerPaintFile(
+    const std::filesystem::path& path,
+    const TerrainLayerPaintData& paint,
+    std::string& error)
+{
+    error.clear();
+    std::vector<uint8_t> bytes;
+    std::string buildError;
+    if (!BuildTerrainLayerPaintBytes(paint, bytes, buildError))
+    {
+        error = PaintError(path, buildError);
+        return false;
+    }
+    try
+    {
         WriteBinaryFileAtomically(path, bytes);
         return true;
     }
@@ -287,8 +382,11 @@ bool LoadTerrainLayerPaintFile(
         error = PaintError(path, "unsupported flags/reserved bits (v1 requires zero)");
         return false;
     }
-    if (!ValidateShape(width, height, layerCount, path, error))
+    if (!ValidateShape(width, height, layerCount, error))
+    {
+        error = PaintError(path, error);
         return false;
+    }
     if (layerCount != expectedLayerCount)
     {
         error = PaintError(path,
@@ -373,6 +471,210 @@ bool LoadTerrainLayerPaintFile(
     out.layerCount = layerCount;
     out.weights = std::move(weights);
     out.opacity = std::move(opacity);
+    return true;
+}
+
+bool SaveTerrainLayerPaintBundle(
+    const std::filesystem::path& paintPath,
+    const TerrainLayerPaintData& paint,
+    TerrainPaintManifest manifest,
+    std::string& error)
+{
+    error.clear();
+    std::vector<uint8_t> paintBytes;
+    if (!BuildTerrainLayerPaintBytes(paint, paintBytes, error))
+        return false;
+
+    // 形状以 paint 为准，调用方不能写出 runtime 必然拒绝的 manifest。
+    manifest.width = paint.width;
+    manifest.height = paint.height;
+    manifest.layerCount = paint.layerCount;
+    if (manifest.layerKeys.size() !=
+        static_cast<size_t>(manifest.layerCount))
+    {
+        error = PaintError(
+            paintPath,
+            "bundle layerKeys size " +
+                std::to_string(manifest.layerKeys.size()) +
+                " does not match paint layerCount " +
+                std::to_string(manifest.layerCount));
+        return false;
+    }
+
+    manifest.contentSha256 = TerrainPaintSha256Hex(paintBytes);
+    std::string manifestText;
+    std::string manifestError;
+    if (!BuildTerrainPaintManifestBytes(
+            manifest, manifestText, manifestError))
+    {
+        error =
+            "Terrain paint manifest " +
+            TerrainPaintManifestPath(paintPath).string() + ": " +
+            manifestError;
+        return false;
+    }
+    std::vector<uint8_t> manifestBytes(
+        manifestText.begin(), manifestText.end());
+
+    struct TransactionFile
+    {
+        std::filesystem::path target;
+        std::filesystem::path temporary;
+        std::filesystem::path rollback;
+        bool backedUp = false;
+        bool installed = false;
+    };
+
+    const std::filesystem::path manifestPath =
+        TerrainPaintManifestPath(paintPath);
+    std::vector<TransactionFile> files = {
+        TransactionFile{
+            paintPath,
+            TransactionPath(paintPath, "tmp"),
+            TransactionPath(paintPath, "rollback")},
+        TransactionFile{
+            manifestPath,
+            TransactionPath(manifestPath, "tmp"),
+            TransactionPath(manifestPath, "rollback")},
+    };
+
+    // 失败时按相反顺序撤销：删除已经替换的新目标，再把 rollback 改回原名。
+    // 这是两文件事务的“尽力回滚”，不读取旧文件内容，也不依赖通用 shader
+    // helper —— 后者只逐文件顺序替换，无法回滚前一个文件。
+    const auto failTransaction = [&](const std::string& step,
+                                     const std::string& detail) -> bool
+    {
+        std::string message = step + ": " + detail;
+        for (auto iterator = files.rbegin(); iterator != files.rend();
+             ++iterator)
+        {
+            if (iterator->installed)
+            {
+                std::error_code removeError;
+                std::filesystem::remove(
+                    iterator->target, removeError);
+                iterator->installed = false;
+            }
+            if (iterator->backedUp)
+            {
+                std::error_code restoreError;
+                std::filesystem::rename(
+                    iterator->rollback,
+                    iterator->target,
+                    restoreError);
+                if (restoreError)
+                {
+                    message +=
+                        "; restore " + iterator->target.string() +
+                        " failed: " + restoreError.message() +
+                        "; rollback retained at " +
+                        iterator->rollback.string();
+                }
+                else
+                {
+                    iterator->backedUp = false;
+                }
+            }
+            std::error_code removeError;
+            std::filesystem::remove(
+                iterator->temporary, removeError);
+        }
+        error = PaintError(paintPath, message);
+        return false;
+    };
+
+    std::string temporaryError;
+    if (!WriteTransactionTemp(
+            files[0].temporary, paintBytes, temporaryError))
+    {
+        return failTransaction(
+            "write temporary paint", temporaryError);
+    }
+    if (!WriteTransactionTemp(
+            files[1].temporary, manifestBytes, temporaryError))
+    {
+        return failTransaction(
+            "write temporary manifest", temporaryError);
+    }
+
+    for (TransactionFile& file : files)
+    {
+        std::error_code rollbackQueryError;
+        const std::filesystem::file_status rollbackStatus =
+            std::filesystem::status(
+                file.rollback, rollbackQueryError);
+        if (!rollbackQueryError &&
+            rollbackStatus.type() != std::filesystem::file_type::not_found)
+        {
+            return failTransaction(
+                "backup " + file.target.string(),
+                "rollback path already exists: " +
+                    file.rollback.string());
+        }
+        if (rollbackQueryError &&
+            rollbackQueryError != std::errc::no_such_file_or_directory)
+        {
+            return failTransaction(
+                "backup " + file.target.string(),
+                "cannot query rollback path: " +
+                    rollbackQueryError.message());
+        }
+
+        std::error_code backupError;
+        std::filesystem::rename(
+            file.target, file.rollback, backupError);
+        if (!backupError)
+        {
+            file.backedUp = true;
+            continue;
+        }
+        // 目标不存在是正常情况；其他错误必须在替换前失败。
+        if (backupError == std::errc::no_such_file_or_directory)
+            continue;
+        return failTransaction(
+            "backup " + file.target.string(),
+            backupError.message());
+    }
+
+    for (TransactionFile& file : files)
+    {
+        std::error_code installError;
+        std::filesystem::rename(
+            file.temporary, file.target, installError);
+        if (installError)
+        {
+            return failTransaction(
+                "install " + file.target.string(),
+                installError.message());
+        }
+        file.installed = true;
+    }
+
+    // 提交完成；rollback/temp 只是清理对象，失败不影响新 bundle 的有效性。
+    for (TransactionFile& file : files)
+    {
+        std::error_code ignored;
+        if (file.backedUp)
+        {
+            std::filesystem::remove(file.rollback, ignored);
+            if (!ignored)
+            {
+                file.backedUp = false;
+            }
+            else
+            {
+                // 新 bundle 已经提交，不能把保存判为失败；但必须保留状态并
+                // 告警，避免下一次同 PID 保存静默覆盖残留的旧文件。
+                std::cerr
+                    << "[Terrain] paint bundle committed but rollback "
+                       "cleanup failed: "
+                    << file.rollback.string() << ": "
+                    << ignored.message() << std::endl;
+            }
+        }
+        ignored.clear();
+        std::filesystem::remove(file.temporary, ignored);
+    }
     return true;
 }
 

@@ -51,6 +51,7 @@ enum class PlatformKey
     Q,
     W,
     E,
+    F,
     R,
     S,
     C,

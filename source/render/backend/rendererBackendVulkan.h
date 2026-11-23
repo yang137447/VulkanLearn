@@ -11,6 +11,7 @@
 #include <vector>
 
 #include "render/rhi/presentMode.h"
+#include "render/backend/frameAbandon.h"
 
 #include <vulkan/vulkan.hpp>
 
@@ -82,6 +83,7 @@ struct RendererFrameContext
     uint64_t completedEpoch = 0;
     vk::CommandBuffer commandBuffer;
     bool ready = false;
+    mutable AcquiredFrameDisposition disposition;
 };
 
 // Vulkan backend facade. It owns frame policy and delegates low-level
@@ -125,6 +127,8 @@ public:
     vk::Extent2D GetSwapchainExtent() const;
     vk::Format GetSwapchainImageFormat() const;
     const std::vector<vk::ImageView>& GetSwapchainImageViews() const;
+    std::shared_ptr<const void> CapturePresentTargetLifetime() const;
+    uint64_t GetPresentTargetGeneration() const;
     bool RecordSwapchainScreenshot(
         const RendererFrameContext& frameContext,
         const std::string& path,
@@ -133,8 +137,18 @@ public:
     float GetTimestampPeriodNanoseconds();
     uint32_t GetGraphicsTimestampValidBits();
     bool SupportsTimestampQueries();
+    vk::PhysicalDeviceLimits GetSelectedDeviceLimits() const;
     // 材质加载阶段只依赖 backend 能力接口，不直接穿透到 VulkanManager。
     bool SupportsDualSourceBlend() const;
+    // 地形近场细分：只有逻辑设备真正启用 tessellationShader 才能创建
+    // PATCH_LIST pipeline；缺失时材质走 CPU 网格回退。
+    bool SupportsTessellation() const;
+    // Wireframe 视图只替换 tessellation 材质的 surface pipeline；缺失时
+    // draw 端回退到普通 renderPipeline。
+    bool SupportsWireframe() const;
+    // Material 创建时没有 backend 实例；这里查询同一逻辑设备能力，
+    // 避免资源层绕过 backend 直接依赖 VulkanManager。
+    static bool SupportsWireframeCapability();
     // particle GPU culling 的 indirect-count 路径必须以此为准；false 时
     // 使用 CPU 固定参数的 indirect 绘制并保留相同语义。
     bool SupportsDrawIndirectCount() const;
@@ -150,6 +164,10 @@ public:
         vk::QueryPool queryPool,
         uint32_t firstQuery,
         std::array<uint64_t, 2>& timestamps);
+    // 只创建未绑定内存的临时对象，返回驱动要求并销毁；不分配 device memory。
+    vk::MemoryRequirements QueryBufferMemoryRequirements(
+        vk::DeviceSize size, vk::BufferUsageFlags usage);
+    vk::MemoryRequirements QueryImageMemoryRequirements(const vk::ImageCreateInfo& createInfo);
     std::pair<vk::Buffer, vk::DeviceMemory> CreateBuffer(
         vk::DeviceSize size,
         vk::BufferUsageFlags usage,
@@ -376,6 +394,8 @@ public:
     void DestroyFramebuffers(std::vector<RHIFramebufferHandle>& framebufferHandles);
     RendererFrameContext BeginFrame(uint32_t currentFrame);
     void SubmitFrame(const RendererFrameContext& frameContext, uint32_t currentFrame);
+    void DiscardFrameCommands(const RendererFrameContext& frameContext);
+    FrameAbortResult FrameAbandonAfterAcquire(const RendererFrameContext& frameContext, uint32_t currentFrame);
     // 粒子池跨帧连续，但 per-emitter/global buffer 仍按场景共享；有粒子模拟时
     // 等待上一提交的 frame fence，避免两个在飞帧同时改写同一段池。
     void WaitForPreviousFrameFence(uint32_t currentFrameIndex);
@@ -422,6 +442,8 @@ private:
     std::unique_ptr<RHIDeviceVulkan> rhiDevice;
     std::unique_ptr<RendererThumbnailImages> thumbnailImages;
     bool initialized = false;
+    // Initialize 从 RHI 读取一次，供没有 backend 实例的 Material 创建路径查询。
+    static bool wireframeCapabilityEnabled;
     std::vector<uint64_t> frameFenceEpochs;
     bool hasSubmittedFrame = false;
     uint32_t lastSubmittedFrameIndex = 0;
@@ -445,6 +467,8 @@ private:
     std::unordered_map<VkDescriptorPool, std::vector<RHIDescriptorSetHandle>> descriptorSetHandlesByPool;
     std::unordered_map<VkRenderPass, RHIRenderPassHandle> renderPassHandlesByRenderPass;
     std::unordered_map<VkFramebuffer, RHIFramebufferHandle> framebufferHandlesByFramebuffer;
+    // 等待 device idle 后释放失败/被丢弃的截图 staging，确保后续截图请求不被卡住。
+    void ReleasePendingScreenshotAfterIdle();
     struct PendingScreenshot
     {
         vk::Buffer readbackBuffer;
@@ -452,6 +476,11 @@ private:
         vk::Extent2D extent;
         vk::Format format = vk::Format::eUndefined;
         std::string path;
+        // copy 录进哪个 frame 槽、该槽的提交 fence，以及提交后的 epoch。
+        // epoch 为 0 = 尚未提交；Complete 只在非 0 时等待/读取。
+        uint32_t frameIndex = 0;
+        vk::Fence submitFence;
+        uint64_t submittedEpoch = 0;
     } pendingScreenshot;
 };
 

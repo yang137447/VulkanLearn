@@ -32,6 +32,8 @@ struct RenderDrawPacket
     bool terrainFeedbackEligible = false;
     // 编辑器拾取身份：地形 chunk 仍是 mesh，但选中必须回写 terrain|name。
     bool isTerrain = false;
+    std::string lodGroupId;
+    uint32_t lodLevel = 0;
     std::string windResponseProfileKey;
     // TressFX 分组预览值语义；渲染线程只写对象 UBO，不直接改 World。
     uint32_t tressfxPointsPerGuide = 0;

@@ -129,6 +129,16 @@ const std::vector<vk::ImageView>& RendererBackendVulkan::GetSwapchainImageViews(
     return rhiDevice->GetSwapchainImageViews(rhiDevice->GetPresentTarget());
 }
 
+std::shared_ptr<const void> RendererBackendVulkan::CapturePresentTargetLifetime() const
+{
+    return rhiDevice->CapturePresentTargetLifetime(rhiDevice->GetPresentTarget());
+}
+
+uint64_t RendererBackendVulkan::GetPresentTargetGeneration() const
+{
+    return rhiDevice->GetPresentTargetGeneration(rhiDevice->GetPresentTarget());
+}
+
 float RendererBackendVulkan::GetTimestampPeriodNanoseconds()
 {
     return rhiDevice->GetTimestampPeriodNanoseconds();
@@ -144,10 +154,20 @@ bool RendererBackendVulkan::SupportsTimestampQueries()
     return rhiDevice->SupportsTimestampQueries();
 }
 
+vk::PhysicalDeviceLimits RendererBackendVulkan::GetSelectedDeviceLimits() const
+{
+    return rhiDevice->GetPhysicalDevice().getProperties().limits;
+}
+
 bool RendererBackendVulkan::SupportsDualSourceBlend() const
 {
     // 材质加载只读取 backend 的能力快照，避免把 Vulkan 设备细节泄漏到资源层。
     return rhiDevice->IsDualSourceBlendEnabled();
+}
+
+bool RendererBackendVulkan::SupportsTessellation() const
+{
+    return rhiDevice->IsTessellationShaderEnabled();
 }
 
 bool RendererBackendVulkan::SupportsDrawIndirectCount() const

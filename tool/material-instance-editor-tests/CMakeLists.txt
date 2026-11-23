@@ -93,6 +93,8 @@ else()
     set(VL_RUNTIME_SLICE_COMMON_SOURCES
         "${VULKANLEARN_SOURCE_DIR}/source/material/validation/materialAssetValidator.cpp"
         "${VULKANLEARN_SOURCE_DIR}/source/shader/build/atomicFile.cpp"
+        "${VULKANLEARN_SOURCE_DIR}/source/core/runtimeFileTrace.cpp"
+        "${VULKANLEARN_SOURCE_DIR}/source/core/tracingIfstream.cpp"
         "${VULKANLEARN_SOURCE_DIR}/source/shader/build/contentHash.cpp"
         "${VULKANLEARN_SOURCE_DIR}/source/render/editorBridge/materialInstancePreviewTypes.cpp"
         "${VULKANLEARN_SOURCE_DIR}/source/render/editorBridge/materialInstancePreviewAdapter.cpp")
@@ -272,7 +274,10 @@ add_executable(particle_mesh_collision_tests
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetParseEmitterModules.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetValidateEmitterModules.cpp"
     "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetModuleSchema.cpp"
-    "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetLoader.cpp")
+    "${VULKANLEARN_SOURCE_DIR}/source/particles/particleAssetLoader.cpp"
+    # commonFunction.h 的路径/配置读取经 TracingIfstream/RuntimeFileTrace 记账，需要两者定义。
+    "${VULKANLEARN_SOURCE_DIR}/source/core/runtimeFileTrace.cpp"
+    "${VULKANLEARN_SOURCE_DIR}/source/core/tracingIfstream.cpp")
 
 target_include_directories(particle_mesh_collision_tests
     PRIVATE

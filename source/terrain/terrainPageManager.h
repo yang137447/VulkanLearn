@@ -11,6 +11,7 @@
 
 namespace VL
 {
+class TerrainCompositedPageSourceBatch;
 
 struct TerrainUploadBatch;
 
@@ -412,6 +413,7 @@ public:
     void AbortUploadBatch(const TerrainUploadBatch& batch);
 
 private:
+    friend class TerrainCompositedPageSourceBatch;
     bool RequestPageInternal(
         const std::string& placementId,
         uint32_t tileX,

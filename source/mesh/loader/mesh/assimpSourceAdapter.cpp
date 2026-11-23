@@ -1,4 +1,5 @@
 #include "assimpSourceAdapter.h"
+#include "tracingAssimpIO.h"
 
 #include <algorithm>
 #include <assimp/Importer.hpp>
@@ -68,6 +69,7 @@ ModelResource AssimpSourceAdapter::ReadSource(
     ValidateSource(sourcePath, modelDataPath);
 
     Assimp::Importer importer;
+    importer.SetIOHandler(new TracingAssimpIO());
     // Assimp 的 FBX fileScale 负责把厘米等源单位转换到米；显式启用 GlobalScale，避免厘米资产原样进入世界空间。
     unsigned int postProcessFlags = aiProcess_Triangulate | aiProcess_GlobalScale;
     if (importOptions.generateSmoothNormals)

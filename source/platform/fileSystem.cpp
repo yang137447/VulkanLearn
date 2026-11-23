@@ -1,6 +1,8 @@
 #include "platform/fileSystem.h"
+#include "core/runtimeFileTrace.h"
 
 #include <fstream>
+#include <cerrno>
 #include <stdexcept>
 
 namespace VL
@@ -17,6 +19,30 @@ std::filesystem::path NormalizePath(const std::filesystem::path& path)
     }
 
     return std::filesystem::absolute(path).lexically_normal();
+}
+
+std::filesystem::path NormalizeResolvedRuntimePath(const std::filesystem::path& path)
+{
+    try
+    {
+        const auto resolved = NormalizePath(path);
+        RuntimeFileTrace::Record(RuntimeFileTrace::Event::ResolveResult,
+            path, true, "FileSystem.ResolveRuntimePath", &resolved);
+        return resolved;
+    }
+    catch (const std::filesystem::filesystem_error& error)
+    {
+        RuntimeFileTrace::Record(RuntimeFileTrace::Event::ResolveResult,
+            path, false, "FileSystem.ResolveRuntimePath", nullptr, std::nullopt,
+            RuntimeFileTrace::Access::Read, error.code().value(), error.code().category().name());
+        throw;
+    }
+    catch (...)
+    {
+        RuntimeFileTrace::Record(RuntimeFileTrace::Event::ResolveResult,
+            path, false, "FileSystem.ResolveRuntimePath");
+        throw;
+    }
 }
 
 RuntimeResult<std::filesystem::path> FindProjectRoot(const std::filesystem::path& searchStart)
@@ -61,6 +87,7 @@ RuntimeResult<void> FileSystem::Initialize(const std::filesystem::path& searchSt
     }
 
     projectRoot = rootResult.Value();
+    RuntimeFileTrace::SetRoot(RuntimeFileTrace::RootScope::Project, projectRoot);
     initialized = true;
     return RuntimeResult<void>::Success();
 }
@@ -81,7 +108,13 @@ RuntimeResult<nlohmann::json> FileSystem::ReadJsonFile(const std::filesystem::pa
 {
     EnsureInitialized();
 
+    const int previousErrno = errno;
     std::ifstream file(absolutePath);
+    const auto openError = !file.is_open() && errno != 0 && errno != previousErrno ?
+        std::optional<int64_t>(errno) : std::nullopt;
+    RuntimeFileTrace::Record(RuntimeFileTrace::Event::StreamReadOpen,
+        absolutePath, file.is_open(), "FileSystem.ReadJsonFile", nullptr, std::nullopt,
+        RuntimeFileTrace::Access::Read, openError, openError ? "errno" : nullptr);
     if (!file.is_open())
     {
         return RuntimeResult<nlohmann::json>::Failure(MakeRuntimeError(
@@ -113,27 +146,50 @@ RuntimeResult<std::filesystem::path> FileSystem::ResolveRuntimePath(
     EnsureInitialized();
 
     const std::filesystem::path requestedPath(path);
-    if (requestedPath.is_absolute() && std::filesystem::exists(requestedPath))
+    const auto exists = [](const std::filesystem::path& candidate) {
+        bool found;
+        try
+        {
+            found = std::filesystem::exists(candidate);
+        }
+        catch (const std::filesystem::filesystem_error& error)
+        {
+            RuntimeFileTrace::Record(RuntimeFileTrace::Event::Resolve,
+                candidate, false, "FileSystem.ResolveRuntimePath", nullptr, std::nullopt,
+                RuntimeFileTrace::Access::Read, error.code().value(), error.code().category().name());
+            throw;
+        }
+        catch (...)
+        {
+            RuntimeFileTrace::Record(RuntimeFileTrace::Event::Resolve,
+                candidate, false, "FileSystem.ResolveRuntimePath");
+            throw;
+        }
+        RuntimeFileTrace::Record(RuntimeFileTrace::Event::Resolve,
+            candidate, found, "FileSystem.ResolveRuntimePath");
+        return found;
+    };
+    if (requestedPath.is_absolute() && exists(requestedPath))
     {
-        return RuntimeResult<std::filesystem::path>::Success(NormalizePath(requestedPath));
+        return RuntimeResult<std::filesystem::path>::Success(NormalizeResolvedRuntimePath(requestedPath));
     }
 
     const std::filesystem::path resourcePath = resourceRoot / requestedPath;
-    if (std::filesystem::exists(resourcePath))
+    if (exists(resourcePath))
     {
-        return RuntimeResult<std::filesystem::path>::Success(NormalizePath(resourcePath));
+        return RuntimeResult<std::filesystem::path>::Success(NormalizeResolvedRuntimePath(resourcePath));
     }
 
     const std::filesystem::path shaderSpvPath = projectRoot / "shader" / "spv" / requestedPath;
-    if (std::filesystem::exists(shaderSpvPath))
+    if (exists(shaderSpvPath))
     {
-        return RuntimeResult<std::filesystem::path>::Success(NormalizePath(shaderSpvPath));
+        return RuntimeResult<std::filesystem::path>::Success(NormalizeResolvedRuntimePath(shaderSpvPath));
     }
 
     const std::filesystem::path projectPath = projectRoot / requestedPath;
-    if (std::filesystem::exists(projectPath))
+    if (exists(projectPath))
     {
-        return RuntimeResult<std::filesystem::path>::Success(NormalizePath(projectPath));
+        return RuntimeResult<std::filesystem::path>::Success(NormalizeResolvedRuntimePath(projectPath));
     }
 
     return RuntimeResult<std::filesystem::path>::Failure(MakeRuntimeError(

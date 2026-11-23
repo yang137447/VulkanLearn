@@ -1,4 +1,5 @@
 #include "shader/build/shaderBuildManifest.h"
+#include "core/tracingIfstream.h"
 
 #include <algorithm>
 #include <fstream>
@@ -205,7 +206,8 @@ void ShaderBuildManifestStore::Load()
 
     try
     {
-        std::ifstream input(manifestPath);
+        RuntimeFileTrace::TracingIfstream input(
+            manifestPath, std::ios::in, "ShaderBuildManifestStore.Load");
         if (!input.is_open())
         {
             initialInvalidationReason = "manifest unreadable";

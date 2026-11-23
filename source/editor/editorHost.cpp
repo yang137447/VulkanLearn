@@ -4,6 +4,9 @@
 #include <chrono>
 #include <exception>
 #include <filesystem>
+#include <fstream>
+#include <limits>
+#include <iostream>
 #include <stdexcept>
 #include <utility>
 #include <vector>
@@ -19,6 +22,7 @@
 #include "editor/terrain/terrainEditApply.h"
 #include "editor/terrain/terrainEditSession.h"
 #include "editor/terrain/terrainPaintSession.h"
+#include "editor/terrain/terrainCompositedSculptApply.h"
 #include "editor/ui/editorUiShell.h"
 #include "editor/ui/materialInstanceEditorView.h"
 #include "engine/blueprintPreviewRequest.h"
@@ -38,12 +42,17 @@
 #include "render/frontend/scenePicking.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererTerrainLoader.h"
-#include "render/resource/terrainPageBakeGpu.h"
 #include "renderSystem.h"
 #include "script/scriptRuntime.h"
 #include "script/scriptSourceLocation.h"
-#include "terrain/terrainPageManager.h"
 #include "terrain/terrainPaintFile.h"
+#include "terrain/terrainPaintManifest.h"
+#include "render/resource/terrainCompositedService.h"
+#include "editor/terrain/terrainCompositedAuthorMonitor.h"
+#include "terrain/terrainCompositedDependencies.h"
+#include "terrain/terrainCompositedRefresh.h"
+#include "terrain/terrainCompositedVerifiedInputs.h"
+#include "terrain/terrainVertexUpdateQueue.h"
 #include "ui/uiEditorViewModelSections.h"
 #include "ui/uiSubsystem.h"
 #include "world/world.h"
@@ -208,6 +217,166 @@ void EditorHost::WaitForRenderIdle()
         init.waitForRenderThreadIdle();
 }
 
+void EditorHost::QueueTerrainCompositedRefresh(
+    World& world, TerrainCompositedService& service,
+    const TerrainBuildPlan& plan, const TerrainCompositedDirtyChange& change,
+    uint64_t sourceRevision)
+{
+    const auto key = std::make_pair(change.surfaceId, change.kind);
+    const uint64_t sessionEpoch = change.kind == TerrainCompositedDependencyChange::Paint ?
+        terrainPaintSessionEpoch : terrainEditSessionEpoch;
+    const auto pending = terrainPendingRefreshes.find(key);
+    if (pending != terrainPendingRefreshes.end() &&
+        pending->second->command.worldGeneration == world.GetGeneration() &&
+        pending->second->command.sourceRevision == sourceRevision &&
+        pending->second->sessionEpoch == sessionEpoch)
+        return;
+    if (terrainRefreshRevision == std::numeric_limits<uint64_t>::max())
+        throw std::overflow_error("Terrain editor refresh revision exhausted");
+    auto command = TerrainCompositedRefreshCommand::Freeze(
+        plan, change, world.GetGeneration(), ++terrainRefreshRevision, sourceRevision,
+        service.RefreshRevision(world.GetGeneration(), change.surfaceId));
+    const auto ticket = service.QueueRefresh(command);
+    if (ticket.id == 0 || ticket.worldGeneration != command.worldGeneration ||
+        ticket.editSeq != command.editSeq || ticket.surfaceId != change.surfaceId)
+        throw std::runtime_error("Terrain service returned an invalid refresh ticket");
+    terrainPendingRefreshes.insert_or_assign(key,
+        std::make_shared<Editor::TerrainCompositedRefreshReceipt>(
+            Editor::TerrainCompositedRefreshReceipt{std::move(command), ticket, sessionEpoch}));
+}
+
+std::vector<EditorHost::TerrainRefreshObservation> EditorHost::ObserveTerrainRefreshes(
+    uint64_t worldGeneration, const std::string& surfaceId) const
+{
+    std::vector<TerrainRefreshObservation> observations;
+    const auto streaming = RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming || !streaming->composited)
+        return observations;
+    for (const auto& entry : terrainPendingRefreshes)
+    {
+        const auto& pending = *entry.second;
+        if (pending.ticket.worldGeneration != worldGeneration ||
+            pending.ticket.surfaceId != surfaceId)
+            continue;
+        if (observations.size() == 64)
+            throw std::runtime_error("Terrain observation exceeds bounded receipt count");
+        CanonicalFieldHasher input("editor-s4-v2-immutable-input");
+        if (pending.command.inputs)
+        {
+            const auto& plan = *pending.command.inputs;
+            if (plan.layerPaint)
+            {
+                input.AddBytes("weights", plan.layerPaint->weights.data(),
+                    plan.layerPaint->weights.size() * sizeof(float));
+                input.AddBytes("opacity", plan.layerPaint->opacity.data(), plan.layerPaint->opacity.size());
+            }
+            if (plan.heightmap)
+                input.AddBytes("height", plan.heightmap->data.data(), plan.heightmap->data.size());
+        }
+        observations.push_back({streaming->composited->PollRefresh(pending.ticket),
+            pending.command.sourceRevision, pending.command.expectedRevision,
+            pending.attempts, pending.terminalFailure, input.Finalize()});
+    }
+    return observations;
+}
+
+void EditorHost::PollTerrainCompositedRefresh(World& world)
+{
+    const auto streaming = RendererResourceCache::GetInstance().GetTerrainStreaming();
+    if (!streaming || !streaming->composited)
+        return;
+    for (auto iterator = terrainPendingRefreshes.begin(); iterator != terrainPendingRefreshes.end();)
+    {
+        auto& pending = *iterator->second;
+        if (pending.command.worldGeneration != world.GetGeneration())
+        {
+            iterator = terrainPendingRefreshes.erase(iterator);
+            continue;
+        }
+        if (pending.terminalFailure)
+        {
+            ++iterator;
+            continue;
+        }
+        const auto status = streaming->composited->PollRefresh(pending.ticket);
+        pending.state = status.state;
+        if (!status.Terminal())
+        {
+            ++iterator;
+            continue;
+        }
+        if (status.Acknowledges(pending.ticket))
+        {
+            if (iterator->first.second == TerrainCompositedDependencyChange::Paint &&
+                terrainPaintSession && pending.Acknowledges(status, world.GetGeneration(),
+                    terrainPaintSessionEpoch, terrainPaintSession->Revision()) &&
+                terrainPaintSession->PlacementId() == pending.ticket.surfaceId)
+                terrainPaintSession->AcknowledgeCompositedDirty(pending.command.sourceRevision);
+            if (iterator->first.second == TerrainCompositedDependencyChange::Sculpt &&
+                terrainEditSession && pending.Acknowledges(status, world.GetGeneration(),
+                    terrainEditSessionEpoch, terrainEditSession->Revision()) &&
+                terrainEditSession->PlacementId() == pending.ticket.surfaceId)
+                terrainEditSession->AcknowledgeCompositedDirty(pending.command.sourceRevision);
+        }
+        else
+        {
+            if (!status.diagnostic.empty() && init.diagnostics)
+                init.diagnostics->ReportWarning(status.diagnostic, "TerrainVT");
+            if (pending.attempts < 3 &&
+                terrainRefreshRevision != std::numeric_limits<uint64_t>::max())
+            {
+                try
+                {
+                    auto retry = pending.command;
+                    const auto& placements = world.GetTerrainCollisionInstances();
+                    const auto placement = std::find_if(placements.begin(), placements.end(),
+                        [&pending](const TerrainCollisionInstance& candidate) {
+                            return candidate.placementId == pending.ticket.surfaceId;
+                        });
+                    if (placement == placements.end())
+                    {
+                        pending.terminalFailure = true;
+                        ++iterator;
+                        continue;
+                    }
+                    retry.inputs = std::make_shared<const TerrainBuildPlan>(placement->plan);
+                    retry.expectedRevision = streaming->composited->RefreshRevision(
+                        retry.worldGeneration, pending.ticket.surfaceId);
+                    retry.editSeq = ++terrainRefreshRevision;
+                    const auto ticket = streaming->composited->QueueRefresh(retry);
+                    if (!ticket.id || ticket.worldGeneration != retry.worldGeneration ||
+                        ticket.editSeq != retry.editSeq || ticket.surfaceId != pending.ticket.surfaceId)
+                        throw std::runtime_error("Terrain service returned an invalid retry ticket");
+                    pending.command = std::move(retry);
+                    pending.ticket = ticket;
+                    pending.state = TerrainCompositedRefreshState::Queued;
+                    ++pending.attempts;
+                }
+                catch (...)
+                {
+                    pending.terminalFailure = true;
+                    throw;
+                }
+            }
+            else
+                pending.terminalFailure = true;
+            ++iterator;
+            continue;
+        }
+        iterator = terrainPendingRefreshes.erase(iterator);
+    }
+}
+
+void EditorHost::MarkTerrainAuthorSaved(
+    const std::string& placementId, TerrainCompositedDependencyChange kind)
+{
+    if (!terrainAuthorMonitor)
+        return;
+    Editor::TerrainCompositedAuthorMonitor::SurfaceStatus status;
+    if (terrainAuthorMonitor->GetStatus(placementId, status))
+        terrainAuthorMonitor->MarkSaved(placementId, kind, status.editRevision, status.generation);
+}
+
 void EditorHost::ResetAuthoringSessions()
 {
     terrainEditSession.reset();
@@ -216,12 +385,16 @@ void EditorHost::ResetAuthoringSessions()
     terrainPaintSession.reset();
     terrainPaintSessionGeneration = 0;
     terrainPaintSessionPlacementId.clear();
+    terrainSculptApplies.clear();
+    terrainSculptResidencyRevisions.clear();
+    terrainPendingRefreshes.clear();
     terrainEditNeedsRebuild = false;
 }
 
 void EditorHost::BeginUiActionBatch()
 {
-    terrainEditNeedsRebuild = false;
+    terrainEditNeedsRebuild = terrainEditNeedsRebuild ||
+        (terrainEditSession && terrainEditSession->CompositedDirty().valid);
 }
 
 bool EditorHost::ApplyUiAction(
@@ -324,6 +497,7 @@ void EditorHost::EndUiActionBatch(World* world)
         terrainEditSession.reset();
         terrainEditSessionGeneration = 0;
         terrainEditSessionPlacementId.clear();
+        terrainEditNeedsRebuild = false;
         return;
     }
     if (init.rendererBackend == nullptr)
@@ -334,7 +508,8 @@ void EditorHost::EndUiActionBatch(World* world)
                 "Terrain");
         return;
     }
-    ApplyTerrainEditUpdate(*world);
+    if (ApplyTerrainEditUpdate(*world))
+        terrainEditNeedsRebuild = false;
 }
 
 bool EditorHost::ApplyTerrainEditAction(const UiAction& action, World* world)
@@ -375,10 +550,20 @@ bool EditorHost::ApplyTerrainEditAction(const UiAction& action, World* world)
         // 同一 drain 内从 A 切到 B 或结束 A 后立刻 Begin B 时，先把
         // A 的 dirty 预览/取消结果提交到 GPU，不能只保留 B 的新 session。
         if (terrainEditSession && init.rendererBackend != nullptr &&
-            terrainEditSessionGeneration == world->GetGeneration())
+            terrainEditSessionGeneration == world->GetGeneration() &&
+            terrainEditNeedsRebuild)
         {
             if (!ApplyTerrainEditUpdate(*world))
                 error = "Previous terrain sculpt update failed; retry after the renderer recovers.";
+            else
+            {
+                // 旧 session 的 CPU dirty 已经交给 GPU/刷新票据；切到新 session 后
+                // BuildUpdate 不再包含这些 chunk，若不在此清除，新 session 会被
+                // 误判为仍有未应用编辑（SaveHeightmap 随后对空 dirty 再 Apply 一次
+                // 并静默失败）。BeginUiActionBatch 也会因未 ack 的 composited dirty
+                // 重新置位该标记，因此成功路径必须在这里消费掉它。
+                terrainEditNeedsRebuild = false;
+            }
         }
         if (error.empty())
         {
@@ -391,6 +576,7 @@ bool EditorHost::ApplyTerrainEditAction(const UiAction& action, World* world)
             else
             {
                 terrainEditSession = std::move(candidate);
+                terrainEditSessionEpoch = ++terrainSessionEpoch;
                 terrainEditSessionGeneration = world->GetGeneration();
                 terrainEditSessionPlacementId = action.terrainBrush.placementId;
             }
@@ -451,7 +637,7 @@ bool EditorHost::ApplyTerrainEditAction(const UiAction& action, World* world)
                     const uint64_t revision = terrainEditSession->Revision();
                     terrainEditSession->CancelStroke();
                     // 未改过高度的空笔画 Cancel 不应支付一次全地形上传。
-                    terrainEditNeedsRebuild =
+                    terrainEditNeedsRebuild = terrainEditNeedsRebuild ||
                         terrainEditSession->Revision() != revision;
                 }
             }
@@ -471,11 +657,24 @@ bool EditorHost::ApplyTerrainEditAction(const UiAction& action, World* world)
             }
             else if (operation == TerrainBrushOperation::SaveHeightmap)
             {
+                if (terrainEditSession->IsStrokeActive())
+                    throw std::runtime_error("End the terrain sculpt stroke before saving");
+                if (terrainEditNeedsRebuild)
+                {
+                    if (!ApplyTerrainEditUpdate(*world))
+                        throw std::runtime_error("Apply pending terrain sculpt edits before saving");
+                    terrainEditNeedsRebuild = false;
+                }
                 const std::filesystem::path path =
                     std::filesystem::path(CommonFunction::GetResourcePath()) /
                     terrainEditSession->Desc().heightmapPath;
                 if (terrainEditSession->SaveHeightmap(path, error))
+                {
+                    terrainUnsavedHeight.erase(terrainEditSessionPlacementId);
+                    MarkTerrainAuthorSaved(terrainEditSessionPlacementId,
+                        TerrainCompositedDependencyChange::Sculpt);
                     scripts.SetFeedback("Heightmap saved: " + path.string());
+                }
             }
         }
         catch (const std::exception& exception)
@@ -533,6 +732,7 @@ bool EditorHost::ApplyTerrainPaintAction(const UiAction& action, World* world)
         else
         {
             terrainPaintSession = std::move(candidate);
+            terrainPaintSessionEpoch = ++terrainSessionEpoch;
             terrainPaintSessionGeneration = world->GetGeneration();
             terrainPaintSessionPlacementId = action.terrainPaint.placementId;
         }
@@ -624,9 +824,46 @@ bool EditorHost::ApplyTerrainPaintAction(const UiAction& action, World* world)
                                 path,
                                 pathError))
                             error = pathError;
-                        else if (SaveTerrainLayerPaintFile(path, *paint, error))
-                            scripts.SetFeedback(
-                                "Terrain paint saved: " + path.string());
+                        else
+                        {
+                            // 已存在的 sidecar 保留 tile 身份与 feather；编辑器只
+                            // 更新 paint 形状、层 key 和本次实际字节的哈希。
+                            TerrainPaintManifest manifest;
+                            manifest.version = 2;
+                            manifest.tileX = 0;
+                            manifest.tileY = 0;
+                            manifest.tileGrid = 1;
+                            manifest.featherTexels = 0.0f;
+                            std::string manifestError;
+                            if (TerrainPaintManifestExists(
+                                    path, manifestError))
+                            {
+                                if (!LoadTerrainPaintManifest(
+                                        path, manifest, manifestError))
+                                    error = manifestError;
+                            }
+                            else if (!manifestError.empty())
+                                error = manifestError;
+                            if (error.empty())
+                            {
+                                manifest.width = paint->width;
+                                manifest.height = paint->height;
+                                manifest.layerCount = paint->layerCount;
+                                manifest.layerKeys =
+                                    terrainPaintSession->LayerKeys();
+                                if (!SaveTerrainLayerPaintBundle(
+                                        path, *paint, manifest, manifestError))
+                                    error = manifestError;
+                                else
+                                {
+                                    terrainUnsavedPaint.erase(terrainPaintSessionPlacementId);
+                                    MarkTerrainAuthorSaved(terrainPaintSessionPlacementId,
+                                        TerrainCompositedDependencyChange::Paint);
+                                    scripts.SetFeedback(
+                                        "Terrain paint saved: " + path.string());
+                                }
+                            }
+                        }
                     }
                 }
             }
@@ -636,8 +873,15 @@ bool EditorHost::ApplyTerrainPaintAction(const UiAction& action, World* world)
             error = exception.what();
         }
     }
-    if (error.empty() && invalidate)
+    if (error.empty() && (invalidate ||
+        (terrainPaintSession && terrainPaintSession->CompositedDirty().valid)))
     {
+        if (invalidate)
+        {
+            terrainUnsavedPaint.insert(terrainPaintSessionPlacementId);
+            if (terrainAuthorMonitor)
+                terrainAuthorMonitor->MarkEdited(terrainPaintSessionPlacementId, TerrainCompositedDependencyChange::Paint);
+        }
         // 先更新 World 的 placement 快照：Play/Stop 或切换 Actor 会销毁
         // 会话，重建时必须从最新覆盖层继续，而不是回到加载期旧快照。
         if (!world->UpdateTerrainPlacementLayerPaint(
@@ -653,16 +897,23 @@ bool EditorHost::ApplyTerrainPaintAction(const UiAction& action, World* world)
                 if (!streaming)
                     throw std::runtime_error(
                         "Terrain paint requires layered terrain pages.");
-                WaitForRenderIdle();
-                streaming->pageManager.UpdateLayerPaint(
-                    terrainPaintSessionPlacementId,
-                    terrainPaintSession->PaintData());
-                streaming->pageManager.InvalidatePlacementPages(
-                    terrainPaintSessionPlacementId);
-                if (streaming->pageBake)
+                if (instance->plan.desc.compositedVT.enabled &&
+                    streaming->composited)
                 {
-                    streaming->pageBake->RefreshPlacement(
-                        terrainPaintSessionPlacementId);
+                    TerrainBuildPlan updatedPlan = instance->plan;
+                    updatedPlan.layerPaint = terrainPaintSession->PaintData();
+                    const auto dirty = terrainPaintSession->CompositedDirty();
+                    if (dirty.valid)
+                    {
+                        QueueTerrainCompositedRefresh(*world, *streaming->composited,
+                            updatedPlan, {terrainPaintSessionPlacementId,
+                                TerrainCompositedDependencyChange::Paint, dirty.rect}, dirty.revision);
+                    }
+                }
+                else
+                {
+                    throw std::runtime_error(
+                        "Terrain paint requires the composited refresh transaction service");
                 }
             }
             catch (const std::exception& exception)
@@ -683,9 +934,9 @@ bool EditorHost::ApplyTerrainPaintAction(const UiAction& action, World* world)
 
 bool EditorHost::ApplyTerrainEditUpdate(World& world)
 {
-    if (!terrainEditSession || init.rendererBackend == nullptr)
+    if (!terrainEditSession || init.rendererBackend == nullptr ||
+        terrainEditSessionGeneration != world.GetGeneration())
         return false;
-    WaitForRenderIdle();
     Editor::TerrainMeshUpdate update = terrainEditSession->BuildUpdate();
     // 加载期驻留窗口会跳过部分 (chunk, LOD)；CPU 编辑仍要对整张高度图
     // 生成 dirty，但 GPU 只能替换 World 里真实存在的对象。
@@ -697,36 +948,114 @@ bool EditorHost::ApplyTerrainEditUpdate(World& world)
             return found == meshObjects.end() || !found->second.isTerrain ||
                 found->second.terrainPlacementId != update.placementId;
         }), update.chunks.end());
-    if (update.chunks.empty() && !update.heightmap) return false;
-
-    // 分层地形的覆盖页权重由高度/坡度烘焙，几何与权重必须在同一次提交里
-    // 一起推进。必须在替换 GPU 网格前确认页管理器可用，否则宁可拒绝本次
-    // 提交，也不能留下“新几何 + 旧权重”的持久分叉。
-    const bool layered = !update.desc.layers.empty();
-    std::shared_ptr<TerrainStreamingState> streaming;
-    if (layered)
+    if (update.chunks.empty() && !update.compositedDirty.valid) return false;
+    if (update.chunks.empty() && update.compositedDirty.valid &&
+        update.desc.compositedVT.enabled)
     {
-        streaming = RendererResourceCache::GetInstance().GetTerrainStreaming();
-        const bool registered = streaming &&
-            std::any_of(
-                streaming->pageManager.Registrations().begin(),
-                streaming->pageManager.Registrations().end(),
-                [&update](const TerrainPageManager::Registration& registration)
-                {
-                    return registration.placementId == update.placementId;
-                });
-        if (!registered)
+        try
         {
-            const std::string message = streaming
-                ? "Terrain sculpt requires a placement registered with the "
-                    "layered terrain page manager: " + update.placementId
-                : "Terrain sculpt requires layered terrain streaming state.";
-            if (init.diagnostics != nullptr)
-                init.diagnostics->ReportWarning(message, "Terrain");
-            if (init.scripts != nullptr)
-                init.scripts->SetFeedback(message);
+            const auto streaming = RendererResourceCache::GetInstance().GetTerrainStreaming();
+            if (!streaming || !streaming->composited)
+                return false;
+            for (const auto& placement : world.GetTerrainCollisionInstances())
+                if (placement.placementId == update.placementId)
+                {
+                    auto plan = placement.plan;
+                    plan.heightmap = update.heightmap;
+                    QueueTerrainCompositedRefresh(world, *streaming->composited, plan,
+                        {update.placementId, TerrainCompositedDependencyChange::Sculpt,
+                            update.compositedDirty.rect}, update.sourceRevision);
+                    return true;
+                }
+        }
+        catch (const std::exception& error)
+        {
+            if (init.diagnostics)
+                init.diagnostics->ReportWarning(error.what(), "TerrainVT");
+        }
+        return false;
+    }
+    if (update.desc.compositedVT.enabled && TerrainCompositedService::IsAuthoringMode())
+    {
+        const auto streaming = RendererResourceCache::GetInstance().GetTerrainStreaming();
+        if (!streaming || !streaming->composited || !streaming->terrainVertices)
+            return false;
+        std::string error;
+        auto& sculpt = terrainSculptApplies[update.placementId];
+        const auto residency = streaming->terrainVertices->ResidencyRevision();
+        if (terrainSculptResidencyRevisions[update.placementId] != residency)
+            sculpt.reset();
+        if (!sculpt)
+        {
+            auto baseline = terrainEditSession->BuildUpdate(true);
+            baseline.chunks.erase(std::remove_if(baseline.chunks.begin(), baseline.chunks.end(),
+                [&meshObjects, &baseline](const Editor::TerrainChunkMeshUpdate& chunk) {
+                    const auto found = meshObjects.find(chunk.objectName);
+                    return found == meshObjects.end() || !found->second.isTerrain ||
+                        found->second.terrainPlacementId != baseline.placementId;
+                }), baseline.chunks.end());
+            const bool dynamic = std::all_of(baseline.chunks.begin(), baseline.chunks.end(),
+                [&streaming](const Editor::TerrainChunkMeshUpdate& chunk) {
+                    return streaming->terrainVertices->HasDynamicChunk(chunk.resourceKey);
+                });
+            auto candidate = std::make_shared<Editor::TerrainCompositedSculptApply>();
+            if (!candidate->Register(world.GetGeneration(), baseline, dynamic, error))
+            {
+                if (init.diagnostics)
+                    init.diagnostics->ReportWarning(error, "Terrain");
+                return false;
+            }
+            sculpt = std::move(candidate);
+            terrainSculptResidencyRevisions[update.placementId] = residency;
+        }
+        TerrainVertexUpdateQueue::Prepared prepared;
+        try
+        {
+            std::vector<TerrainVertexUpdateQueue::Update> vertices;
+            vertices.reserve(update.chunks.size());
+            for (const auto& chunk : update.chunks)
+                vertices.push_back({chunk.resourceKey,
+                    std::make_shared<const std::vector<Vertex>>(chunk.vertices)});
+            prepared = streaming->terrainVertices->Prepare(world.GetGeneration(), vertices);
+        }
+        catch (const std::exception& failure)
+        {
+            if (init.diagnostics)
+                init.diagnostics->ReportWarning(failure.what(), "Terrain");
             return false;
         }
+        TerrainEditApplyStats stats;
+        if (!ApplyCompositedTerrainSculptUpdate(world, *sculpt, update,
+                [this, &world, &streaming, &prepared](const TerrainBuildPlan& plan,
+                    const TerrainCompositedDirtyChange& change, uint64_t revision) {
+                    if (change.rect.minU < change.rect.maxU && change.rect.minV < change.rect.maxV)
+                        QueueTerrainCompositedRefresh(world, *streaming->composited,
+                            plan, change, revision);
+                    streaming->terrainVertices->Commit(std::move(prepared));
+                }, stats, error))
+        {
+            if (init.diagnostics)
+                init.diagnostics->ReportWarning(error, "Terrain");
+            return false;
+        }
+        terrainUnsavedHeight.insert(update.placementId);
+        if (terrainAuthorMonitor)
+            terrainAuthorMonitor->MarkEdited(update.placementId, TerrainCompositedDependencyChange::Sculpt);
+        terrainEditSession->ResetDirty();
+        return true;
+    }
+    WaitForRenderIdle();
+
+    const bool layered = !update.desc.layers.empty();
+    if (layered)
+    {
+        const std::string message =
+            "Layered terrain sculpt requires the composited authoring transaction service";
+        if (init.diagnostics)
+            init.diagnostics->ReportWarning(message, "Terrain");
+        if (init.scripts)
+            init.scripts->SetFeedback(message);
+        return false;
     }
 
     TerrainEditApplyStats stats;
@@ -740,32 +1069,6 @@ bool EditorHost::ApplyTerrainEditUpdate(World& world)
         if (init.scripts != nullptr)
             init.scripts->SetFeedback(message);
         return false;
-    }
-    if (layered)
-    {
-        try
-        {
-            // 与网格替换同处一个 render-thread-idle 边界：先换 plan 的高度图
-            // 快照，再失效驻留覆盖页，feedback 下一轮就会按新高度重新烘焙。
-            streaming->pageManager.UpdateHeightmap(
-                update.placementId, update.heightmap);
-            streaming->pageManager.InvalidatePlacementPages(update.placementId);
-            if (streaming->pageBake)
-                streaming->pageBake->RefreshPlacement(update.placementId);
-        }
-        catch (const std::exception& exception)
-        {
-            // 几何已经提交但权重尚未跟上；保留 dirty 让下一笔重试，
-            // 不能在这里 ResetDirty 把分叉固化成已同步状态。
-            const std::string message =
-                std::string("Terrain sculpt page update failed: ") +
-                exception.what();
-            if (init.diagnostics != nullptr)
-                init.diagnostics->ReportWarning(message, "Terrain");
-            if (init.scripts != nullptr)
-                init.scripts->SetFeedback(message);
-            return false;
-        }
     }
     terrainEditSession->ResetDirty();
     if ((stats.renderableObjects != 0 || stats.worldChunks != 0) &&
@@ -967,8 +1270,157 @@ bool EditorHost::ApplyPreviewAction(const UiAction& action, World* world)
     return true;
 }
 
-void EditorHost::Tick(float, World*)
+void EditorHost::Tick(float, World* world)
 {
+    if (world && world->GetGeneration() != terrainAuthorMonitorGeneration)
+    {
+        terrainAuthorMonitor = std::make_unique<Editor::TerrainCompositedAuthorMonitor>();
+        terrainAuthorMonitorGeneration = world->GetGeneration();
+        terrainUnsavedHeight.clear();
+        terrainUnsavedPaint.clear();
+        terrainPendingRefreshes.clear();
+    }
+    if (world && terrainAuthorMonitor)
+    {
+        const auto streaming = RendererResourceCache::GetInstance().GetTerrainStreaming();
+        const auto baselineBatchStarted = std::chrono::steady_clock::now();
+        std::shared_ptr<Editor::TerrainCompositedAuthorMonitor::BaselineLoadSession> baselineSession;
+        std::vector<std::shared_ptr<TerrainCompositedVerifiedInputs>> baselineOwners;
+        uint64_t baselineAttempted = 0;
+        uint64_t baselineLoaded = 0;
+        for (const auto& placement : world->GetTerrainCollisionInstances())
+        {
+            Editor::TerrainCompositedAuthorMonitor::SurfaceStatus existing;
+            if (!placement.plan.desc.compositedVT.enabled ||
+                terrainAuthorMonitor->GetStatus(placement.placementId, existing) ||
+                !streaming || !streaming->composited)
+                continue;
+            if (!baselineSession)
+                baselineSession =
+                    std::make_shared<Editor::TerrainCompositedAuthorMonitor::BaselineLoadSession>();
+            ++baselineAttempted;
+            const auto placementStarted = std::chrono::steady_clock::now();
+            double serviceElapsedMs = 0;
+            bool serviceCompleted = false;
+            bool loaded = false;
+            size_t capturedDependencies = 0;
+            std::string baselineError;
+            try
+            {
+                const auto baseline = streaming->composited->LoadAuthorBaseline(
+                    world->GetGeneration(), placement.placementId);
+                serviceElapsedMs = std::chrono::duration<double, std::milli>(
+                    std::chrono::steady_clock::now() - placementStarted).count();
+                serviceCompleted = true;
+                capturedDependencies = baseline.dependencies.size();
+                if (!baseline.verificationOwner)
+                    throw std::runtime_error("Terrain author baseline has no terrain verification owner");
+                if (std::find(baselineOwners.begin(), baselineOwners.end(), baseline.verificationOwner) ==
+                    baselineOwners.end())
+                    baselineOwners.push_back(baseline.verificationOwner);
+                if (baseline.worldGeneration != world->GetGeneration() ||
+                    baseline.surfaceId != placement.placementId)
+                    throw std::runtime_error("Terrain author baseline belongs to another World or placement");
+                std::string error;
+                if (!terrainAuthorMonitor->LoadBaseline(baseline,
+                        {CommonFunction::GetResourcePath(), CommonFunction::GetProjectPath()},
+                        baselineSession, error))
+                    throw std::runtime_error(error);
+                loaded = true;
+                ++baselineLoaded;
+            }
+            catch (const std::exception& error)
+            {
+                baselineError = error.what();
+                if (init.diagnostics)
+                    init.diagnostics->ReportWarning(error.what(), "TerrainVT");
+            }
+            const auto placementEnded = std::chrono::steady_clock::now();
+            std::cout << "[RVT_EDITOR_BASELINE_PLACEMENT] " << nlohmann::json{
+                {"worldGeneration", world->GetGeneration()}, {"surface", placement.placementId},
+                {"beginMonotonicMs", std::chrono::duration<double, std::milli>(
+                    placementStarted.time_since_epoch()).count()},
+                {"endMonotonicMs", std::chrono::duration<double, std::milli>(
+                    placementEnded.time_since_epoch()).count()},
+                {"elapsedMs", std::chrono::duration<double, std::milli>(
+                    placementEnded - placementStarted).count()},
+                {"serviceCompleted", serviceCompleted},
+                {"serviceElapsedMs", serviceCompleted ? nlohmann::json(serviceElapsedMs) : nlohmann::json(nullptr)},
+                {"capturedDependencyCount", capturedDependencies}, {"loaded", loaded},
+                {"error", baselineError}}.dump() << std::endl;
+        }
+        if (baselineSession)
+        {
+            // 全部 Service/Monitor 初始化调用结束才关闭；Poll 另有防漏关闭，不跨作者编辑复用。
+            baselineSession->Close();
+            const auto metrics = baselineSession->Stats();
+            nlohmann::json sharedMetrics = nlohmann::json::array();
+            for (const auto& owner : baselineOwners)
+            {
+                owner->Close();
+                const auto statistics = owner->Statistics();
+                sharedMetrics.push_back({
+                    {"ownerHandle", static_cast<uint64_t>(reinterpret_cast<uintptr_t>(owner.get()))},
+                    {"beginNanoseconds", statistics.beginNanoseconds},
+                    {"endNanoseconds", statistics.endNanoseconds},
+                    {"requests", statistics.requests}, {"requestedBytes", statistics.requestedBytes},
+                    {"readCalls", statistics.readCalls}, {"actualReadBytes", statistics.actualReadBytes},
+                    {"validatedBytes", statistics.validatedBytes}, {"hits", statistics.hits},
+                    {"failures", statistics.failures}, {"retainedBytes", statistics.retainedBytes},
+                    {"closed", statistics.closed}});
+            }
+            const auto ended = std::chrono::steady_clock::now();
+            std::cout << "[RVT_EDITOR_BASELINE_INITIALIZATION] " << nlohmann::json{
+                {"worldGeneration", world->GetGeneration()}, {"attemptedSurfaces", baselineAttempted},
+                {"loadedSurfaces", baselineLoaded},
+                {"beginMonotonicMs", std::chrono::duration<double, std::milli>(
+                    baselineBatchStarted.time_since_epoch()).count()},
+                {"endMonotonicMs", std::chrono::duration<double, std::milli>(
+                    ended.time_since_epoch()).count()},
+                {"elapsedMs", std::chrono::duration<double, std::milli>(
+                    ended - baselineBatchStarted).count()},
+                {"monitorObjectRequests", metrics.objectRequests},
+                {"monitorObjectReads", metrics.objectReads}, {"monitorReadBytes", metrics.readBytes},
+                {"monitorCacheHits", metrics.cacheHits}, {"sharedOwnerCount", baselineOwners.size()},
+                {"sharedOwnerStatistics", std::move(sharedMetrics)}}.dump() << std::endl;
+        }
+        try
+        {
+            PollTerrainCompositedRefresh(*world);
+            if (terrainPaintSession && terrainPaintSessionGeneration == world->GetGeneration() &&
+                terrainPaintSession->CompositedDirty().valid && streaming && streaming->composited)
+            {
+                for (const auto& placement : world->GetTerrainCollisionInstances())
+                    if (placement.placementId == terrainPaintSessionPlacementId)
+                    {
+                        auto plan = placement.plan;
+                        plan.layerPaint = terrainPaintSession->PaintData();
+                        const auto dirty = terrainPaintSession->CompositedDirty();
+                        QueueTerrainCompositedRefresh(*world, *streaming->composited, plan,
+                            {placement.placementId, TerrainCompositedDependencyChange::Paint, dirty.rect},
+                            dirty.revision);
+                        break;
+                    }
+            }
+        }
+        catch (const std::exception& error)
+        {
+            if (init.diagnostics)
+                init.diagnostics->ReportWarning(error.what(), "TerrainVT");
+        }
+    }
+    if (terrainAuthorMonitor)
+    {
+        for (const auto& status : terrainAuthorMonitor->Poll(
+                 Editor::TerrainCompositedAuthorMonitor::Clock::now()))
+        {
+            if (status.externalChange && init.scripts)
+                init.scripts->SetFeedback(
+                    "Terrain source changed: " + status.surfaceId +
+                    (status.conflict ? "; unsaved edits conflict. Save or discard before reload/Cook." :
+                        "; reload and Cook to refresh the derived cache."));
+        }
+    }
     if (init.ui == nullptr)
         return;
     // 先在 GT 稳定帧边界处理 editor/preview，再生成 UI 与 World snapshot。

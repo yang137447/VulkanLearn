@@ -7,6 +7,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <map>
 #include <optional>
 #include <string>
@@ -53,11 +54,19 @@ public:
     {
         pollInterval = interval;
         lastScanTime = {};
+        backgroundScan = false;
+        ResetPendingScan();
     }
     void SetTestScanSuspended(bool suspended)
     {
         testScanSuspended = suspended;
+        backgroundScan = false;
+        ResetPendingScan();
     }
+
+    // 生产入口在 Initialize 后开启：目录遍历在后台线程执行，GT 只做比对。
+    // 默认关闭以保留测试/运行时校验需要的“调用即扫描”同步语义。
+    void SetBackgroundScanEnabled(bool enabled) { backgroundScan = enabled; }
 
     // Source-of-truth filter. Returns true for hand-written shader sources and
     // M_ material definitions, and false for generated includes, temporary
@@ -86,6 +95,8 @@ private:
         std::map<std::string, TrackedSource>& scannedSources) const;
     std::string HashSourceOrDefer(
         const std::filesystem::path& path) const;
+    // 切换回同步语义前丢弃 in-flight 后台扫描，避免恢复后消费挂起前的旧结果。
+    void ResetPendingScan();
 
     std::filesystem::path glslRoot;
     std::chrono::milliseconds pollInterval{250};
@@ -96,6 +107,10 @@ private:
     size_t scanCount = 0;
     mutable size_t hashCount = 0;
     bool testScanSuspended = false;
+    // Windows 下逐文件 stat 220 个 shader 约 100ms，同步执行会形成每
+    // 250ms 一次的可见卡顿；生产路径改为后台扫描。
+    bool backgroundScan = false;
+    std::future<std::map<std::string, TrackedSource>> pendingScan;
     bool initialized = false;
     bool baselineSeeded = false;
 };

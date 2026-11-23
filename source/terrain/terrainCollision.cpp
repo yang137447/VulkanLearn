@@ -1,7 +1,5 @@
 #include "terrain/terrainCollision.h"
 
-#include <algorithm>
-#include <cmath>
 #include <stdexcept>
 #include <vector>
 
@@ -21,8 +19,6 @@
 #include <Jolt/Physics/PhysicsSystem.h>
 
 #include "physics/joltRegistration.h"
-#include "terrain/terrainAssetTypes.h"
-#include "terrain/terrainHeightmap.h"
 
 namespace VL
 {
@@ -34,37 +30,8 @@ constexpr float CmToMeter = 0.01f;
 constexpr JPH::ObjectLayer StaticLayer = 0;
 constexpr JPH::ObjectLayer MovingLayer = 1;
 
-// HeightFieldShape 把样本数向上取整到 blockSize 的倍数；我们提前对齐，
-// 保证 heightfield 覆盖的世界范围与渲染地形完全一致，不产生额外一圈样本。
-constexpr uint32_t HeightFieldBlockSize = 2;
-constexpr uint32_t MinSampleCount = 4;
-constexpr uint32_t MaxSampleCount = 4096;
-
-bool IsFiniteVector(const Eigen::Vector3f& value)
+void ValidateSettings(const TerrainCollisionSettings& settings)
 {
-    return std::isfinite(value.x()) && std::isfinite(value.y()) && std::isfinite(value.z());
-}
-
-void ValidateInputs(
-    const TerrainBuildPlan& plan,
-    const TerrainCollisionPlacement& placement,
-    const TerrainCollisionSettings& settings)
-{
-    if (!plan.heightmap)
-        throw std::invalid_argument("Terrain collision requires a decoded heightmap");
-    const TerrainAssetDesc& desc = plan.desc;
-    if (plan.heightmap->width < 2 || plan.heightmap->height < 2)
-        throw std::invalid_argument("Terrain collision requires at least a 2x2 heightmap");
-    if (!std::isfinite(desc.size.x()) || !std::isfinite(desc.size.y()) ||
-        desc.size.x() <= 0.0f || desc.size.y() <= 0.0f)
-        throw std::invalid_argument("Terrain collision requires positive finite size");
-    if (!std::isfinite(desc.heightScale) || !std::isfinite(desc.heightOffset))
-        throw std::invalid_argument("Terrain collision requires finite heightScale/heightOffset");
-    if (!IsFiniteVector(placement.position) || !IsFiniteVector(placement.rotation))
-        throw std::invalid_argument("Terrain collision requires finite position/rotation");
-    if (!IsFiniteVector(placement.scale) ||
-        placement.scale.x() <= 0.0f || placement.scale.y() <= 0.0f || placement.scale.z() <= 0.0f)
-        throw std::invalid_argument("Terrain collision requires positive finite scale");
     if (settings.bitsPerSample < 1 || settings.bitsPerSample > 16)
         throw std::invalid_argument("Terrain collision bitsPerSample must be in [1, 16]");
     if (settings.objectLayerCount == 0 || settings.objectLayer >= settings.objectLayerCount)
@@ -72,61 +39,24 @@ void ValidateInputs(
             "Terrain collision objectLayer must be inside the registered layer count");
 }
 
-uint32_t ResolveSampleCount(
-    const TerrainBuildPlan& plan,
-    const TerrainCollisionSettings& settings)
+void ValidateProxy(const TerrainCollisionProxy& proxy)
 {
-    uint32_t requested = settings.sampleCount;
-    if (requested == 0)
-    {
-        // 与渲染网格同分辨率：gridResolution 个 quad 需要 gridResolution+1 个顶点。
-        requested = plan.desc.gridResolution + 1;
-    }
-    if (requested < MinSampleCount)
-        throw std::invalid_argument("Terrain collision sampleCount must be at least 4");
-    if (requested > MaxSampleCount)
-        throw std::invalid_argument("Terrain collision sampleCount must not exceed 4096");
-    const uint32_t remainder = requested % HeightFieldBlockSize;
-    if (remainder != 0)
-    {
-        if (requested > MaxSampleCount - (HeightFieldBlockSize - remainder))
-            throw std::invalid_argument("Terrain collision sampleCount must not exceed 4096");
-        requested += HeightFieldBlockSize - remainder;
-    }
-    return requested;
+    if (!proxy.IsValid())
+        throw std::invalid_argument("Terrain collision proxy is invalid");
 }
 
 JPH::ShapeRefC BuildHeightFieldShape(
-    const TerrainBuildPlan& plan,
-    const TerrainCollisionPlacement& placement,
-    const TerrainCollisionSettings& settings,
-    uint32_t sampleCount)
+    const TerrainCollisionProxy& proxy,
+    const TerrainCollisionSettings& settings)
 {
-    const TerrainAssetDesc& desc = plan.desc;
-    const float inverseCountMinusOne = 1.0f / static_cast<float>(sampleCount - 1);
-    const TerrainHeightmap::MeshUvTransform heightUvTransform =
-        TerrainHeightmap::MeshUvTransformFor(desc, *plan.heightmap);
-    std::vector<float> samples(static_cast<size_t>(sampleCount) * sampleCount);
-    for (uint32_t y = 0; y < sampleCount; ++y)
-    {
-        const float v = static_cast<float>(y) * inverseCountMinusOne;
-        for (uint32_t x = 0; x < sampleCount; ++x)
-        {
-            const float u = static_cast<float>(x) * inverseCountMinusOne;
-            const Eigen::Vector2f heightUv = heightUvTransform.Apply(u, v);
-            // 与渲染网格同一采样口径：u 对应 +X、v 对应 +Z，world Y 由模型矩阵的
-            // scale.y 缩放，因此样本先乘 placement.scale.y 再换算成米。
-            const float heightCm = TerrainHeightmap::SampleHeightCm(
-                desc, *plan.heightmap, heightUv.x(), heightUv.y());
-            const float heightMeters = heightCm * placement.scale.y() * CmToMeter;
-            if (!std::isfinite(heightMeters))
-                throw std::invalid_argument("Terrain collision heightmap contains non-finite samples");
-            samples[static_cast<size_t>(y) * sampleCount + x] = heightMeters;
-        }
-    }
+    const uint32_t sampleCount = proxy.sampleCount;
+    std::vector<float> samples(proxy.heightCm.size());
+    for (size_t index = 0; index < proxy.heightCm.size(); ++index)
+        samples[index] = proxy.heightCm[index] * CmToMeter;
 
-    const float extentX = desc.size.x() * placement.scale.x();
-    const float extentZ = desc.size.y() * placement.scale.z();
+    const float inverseCountMinusOne = 1.0f / static_cast<float>(sampleCount - 1);
+    const float extentX = proxy.sizeXCm;
+    const float extentZ = proxy.sizeZCm;
     // HeightFieldShape 的局部表面是 offset + scale * (x, sample, y)，x/y 是样本索引。
     // 用 offset/scale 把索引映射回地形局部空间 [-size/2, +size/2]，保持 Y 为米。
     const JPH::Vec3 offset(
@@ -141,7 +71,7 @@ JPH::ShapeRefC BuildHeightFieldShape(
     JPH::HeightFieldShapeSettings shapeSettings(
         samples.data(), offset, scale, sampleCount);
     shapeSettings.mBitsPerSample = settings.bitsPerSample;
-    shapeSettings.mBlockSize = HeightFieldBlockSize;
+    shapeSettings.mBlockSize = TerrainCollisionHeightFieldBlockSize;
     const JPH::ShapeSettings::ShapeResult result = shapeSettings.Create();
     if (result.HasError())
         throw std::runtime_error(
@@ -250,18 +180,29 @@ TerrainCollisionBody CreateTerrainCollisionBody(
     const TerrainCollisionPlacement& placement,
     const TerrainCollisionSettings& settings)
 {
-    ValidateInputs(plan, placement, settings);
+    const std::shared_ptr<const TerrainCollisionProxy> proxy =
+        BuildTerrainCollisionProxy(
+            plan, placement, settings.sampleCount);
+    return CreateTerrainCollisionBody(world, *proxy, settings);
+}
+
+TerrainCollisionBody CreateTerrainCollisionBody(
+    JPH::PhysicsSystem& world,
+    const TerrainCollisionProxy& proxy,
+    const TerrainCollisionSettings& settings)
+{
+    ValidateProxy(proxy);
+    ValidateSettings(settings);
     Physics::EnsureJoltRegistered();
 
-    const uint32_t sampleCount = ResolveSampleCount(plan, settings);
-    const JPH::ShapeRefC shape = BuildHeightFieldShape(plan, placement, settings, sampleCount);
+    const JPH::ShapeRefC shape = BuildHeightFieldShape(proxy, settings);
 
     const JPH::RVec3 position(
-        placement.position.x() * CmToMeter,
-        placement.position.y() * CmToMeter,
-        placement.position.z() * CmToMeter);
+        proxy.placement.position.x() * CmToMeter,
+        proxy.placement.position.y() * CmToMeter,
+        proxy.placement.position.z() * CmToMeter);
     JPH::BodyCreationSettings bodySettings(
-        shape, position, PlacementRotation(placement.rotation),
+        shape, position, PlacementRotation(proxy.placement.rotation),
         JPH::EMotionType::Static, static_cast<JPH::ObjectLayer>(settings.objectLayer));
     // 静态地形不参与睡眠/唤醒；摩擦取 1.0 让角色/刚体在坡面上不无限滑动。
     bodySettings.mAllowSleeping = false;
@@ -270,7 +211,9 @@ TerrainCollisionBody CreateTerrainCollisionBody(
     // 组 0 且对所有子组开放，才能被任意 collisionLayer/Mask 的脚本查询命中。
     // 不设置会得到 Jolt 的 cInvalidGroup，GroupFilter 的位移运算可能出现未定义行为。
     bodySettings.mCollisionGroup = JPH::CollisionGroup(
-        nullptr, 0, JPH::CollisionGroup::cInvalidSubGroup);
+        settings.groupFilter,
+        settings.collisionGroup,
+        JPH::CollisionGroup::cInvalidSubGroup);
 
     const JPH::BodyID id = world.GetBodyInterface().CreateAndAddBody(
         bodySettings, JPH::EActivation::DontActivate);
@@ -280,7 +223,7 @@ TerrainCollisionBody CreateTerrainCollisionBody(
     auto impl = std::make_unique<TerrainCollisionBody::Impl>();
     impl->world = &world;
     impl->id = id;
-    impl->sampleCount = sampleCount;
+    impl->sampleCount = proxy.sampleCount;
     {
         const JPH::AABox bounds = BodyWorldBounds(world, id);
         impl->boundsMinCm = Eigen::Vector3f(

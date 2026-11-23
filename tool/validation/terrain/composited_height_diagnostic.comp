@@ -1,0 +1,64 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "materialFunction/terrainHeightAtlas.glsl"
+#include "composited_height_source_reference.glsl"
+
+layout(local_size_x=8,local_size_y=8) in;
+layout(std430,set=0,binding=1) buffer Output { uint words[]; } result;
+layout(set=0,binding=12) uniform sampler2DArray sourceHeight;
+layout(set=0,binding=17) uniform sampler2DArray atlasHeight;
+layout(set=0,binding=18) uniform sampler2D layerMap;
+const uint Texels=136u*136u;
+
+float BilinearAtlas(ivec2 base,vec2 weights)
+{
+    return mix(
+        mix(texelFetch(atlasHeight,ivec3(base,0),0).r,
+            texelFetch(atlasHeight,ivec3(base+ivec2(1,0),0),0).r,weights.x),
+        mix(texelFetch(atlasHeight,ivec3(base+ivec2(0,1),0),0).r,
+            texelFetch(atlasHeight,ivec3(base+ivec2(1,1),0),0).r,weights.x),weights.y);
+}
+
+void main()
+{
+    uvec2 pixel=gl_GlobalInvocationID.xy;
+    if(any(greaterThanEqual(pixel,uvec2(136))))return;
+    vec2 uv=(vec2(pixel)-4.0)/64.0;
+    if(pixel.y<16u)uv=vec2(0.5+(float(pixel.x)-67.5)/65536.0,0.5);
+    else if(pixel.y<32u)uv=vec2((float(pixel.x)-67.5)/65536.0,1.0);
+    else if(pixel.y<64u)
+        uv=vec2((float(pixel.x)-67.5)/65536.0,
+            (float(pixel.y)-47.5)/65536.0);
+    else if(pixel.y>=80u&&pixel.y<96u)
+        uv=vec2((float(pixel.x)-67.5)/65536.0,0.0);
+    else if(pixel.y>=96u)
+        uv=vec2(float(pixel.x*977u+pixel.y*313u)/65536.0-1.0,
+            float(pixel.y*733u+pixel.x*137u)/65536.0-1.0);
+    int slice=int(pixel.x%uint(textureSize(sourceHeight,2).z));
+    const uint globals[7]=uint[7](13u,207u,31u,79u,101u,153u,231u);
+    uint globalLayer=globals[slice];
+    vec4 mapping=texelFetch(layerMap,ivec2(int(globalLayer),0),0);
+    vec2 sourcePosition=fract(uv)*mapping.zw;
+    uvec2 page=uvec2(floor(sourcePosition/128.0));
+    uint physicalPage=uint(mapping.x)+page.y*uint(mapping.y)+page.x;
+    ivec2 atlasExtent=textureSize(atlasHeight,0).xy;
+    uint columns=uint(atlasExtent.x)/136u;
+    ivec2 pageOrigin=ivec2(physicalPage%columns,physicalPage/columns)*136;
+    vec2 localPosition=sourcePosition-vec2(page)*128.0;
+    vec2 atlasUv=(vec2(pageOrigin)+4.0+localPosition)/vec2(atlasExtent);
+    vec2 sourceTexel=sourcePosition-0.5;
+    vec2 weights=fract(sourceTexel);
+    ivec2 sourceBase=ivec2(floor(sourceTexel));
+    ivec2 atlasBase=pageOrigin+4+sourceBase-ivec2(page)*128;
+    uint index=pixel.y*136u+pixel.x;
+    result.words[index]=floatBitsToUint(SampleTerrainHeightAtlas(atlasHeight,layerMap,globalLayer,uv));
+    result.words[Texels+index]=floatBitsToUint(textureLod(sourceHeight,vec3(uv,float(slice)),2.0).r);
+    result.words[2u*Texels+index]=floatBitsToUint(BilinearAtlas(atlasBase,weights));
+    result.words[3u*Texels+index]=floatBitsToUint(TestSourceBilinear(sourceHeight,uv,slice,2));
+    result.words[4u*Texels+index]=floatBitsToUint(uv.x);
+    result.words[5u*Texels+index]=floatBitsToUint(uv.y);
+    result.words[6u*Texels+index]=floatBitsToUint(atlasUv.x);
+    result.words[7u*Texels+index]=floatBitsToUint(atlasUv.y);
+    result.words[8u*Texels+index]=floatBitsToUint(
+        SampleTerrainHeightAtlas(atlasHeight,layerMap,0u,uv));
+}

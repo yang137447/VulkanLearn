@@ -3,41 +3,26 @@
 #include <algorithm>
 #include <exception>
 #include <iostream>
+#include <stdexcept>
 #include <utility>
 
+#include "material.h"
+#include "materialInstance.h"
+#include "material/materialAssetUtils.h"
 #include "render/backend/rendererBackendVulkan.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/rendererResourceCache.h"
+#include "render/resource/rendererTerrainLoader.h"
+#include "render/resource/terrainCompositedService.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "renderableObject.h"
 #include "terrain/terrainAssetTypes.h"
 #include "terrain/terrainCollisionTypes.h"
+#include "terrain/terrainVertexUpdateQueue.h"
 #include "world/world.h"
 
 namespace VL
 {
-namespace
-{
-
-uint32_t ChunksPerSide(const TerrainAssetDesc& desc)
-{
-    if (desc.chunkQuads == 0 || desc.gridResolution % desc.chunkQuads != 0)
-        return 0;
-    return desc.gridResolution / desc.chunkQuads;
-}
-
-} // namespace
-
-TerrainChunkStreamer::TerrainChunkStreamer()
-{
-    worker = std::thread([this]() { WorkerMain(); });
-}
-
-TerrainChunkStreamer::~TerrainChunkStreamer()
-{
-    StopWorker();
-}
-
 void TerrainChunkStreamer::Update(
     World& world,
     RendererBackendVulkan& backend,
@@ -100,7 +85,6 @@ void TerrainChunkStreamer::Update(
             {
                 continue;
             }
-            placement.building.insert(candidate.id);
             RequestBuild(placementIndex, candidate.id);
             ++requested;
             ++inFlight;
@@ -118,7 +102,11 @@ void TerrainChunkStreamer::Update(
         if (result.placementIndex >= placements.size())
             continue;
         Placement& placement = placements[result.placementIndex];
-        placement.building.erase(result.id);
+        if (!FinishBuild(placement, result))
+        {
+            ++stats.staleBuilds;
+            continue;
+        }
         if (!result.error.empty() || result.chunks.size() != 1)
         {
             ++stats.failedBuilds;
@@ -196,138 +184,6 @@ void TerrainChunkStreamer::Update(
     }
 }
 
-void TerrainChunkStreamer::RebuildPlacements(World& world)
-{
-    placements.clear();
-    for (const TerrainCollisionInstance& instance :
-         world.GetTerrainCollisionInstances())
-    {
-        if (instance.plan.desc.lodLevels <= 1 || !instance.plan.heightmap)
-            continue;
-        const uint32_t chunksPerSide = ChunksPerSide(instance.plan.desc);
-        if (chunksPerSide == 0)
-            continue;
-
-        Placement placement;
-        placement.plan = instance.plan;
-        placement.placementId = instance.placementId.empty()
-            ? TerrainPlacementIdentity(instance.plan)
-            : instance.placementId;
-        placement.chunksPerSide = chunksPerSide;
-        placement.lodLevelCount = std::max(1u, instance.plan.desc.lodLevels);
-        placement.lodDistancesCm =
-            TerrainLodDistancesCm(instance.plan.desc);
-        placement.residencyDistancesCm =
-            TerrainChunkResidencyDistancesCm(instance.plan.desc);
-        placement.chunkBounds =
-            TerrainMeshBuilder::ComputeChunkBounds(placement.plan);
-
-        for (const auto& [name, object] : world.GetMeshObjects())
-        {
-            if (!object.isTerrain ||
-                object.terrainPlacementId != placement.placementId)
-            {
-                continue;
-            }
-            std::string groupPlacement;
-            uint32_t chunkX = 0;
-            uint32_t chunkZ = 0;
-            if (!ParseTerrainChunkLodGroupId(
-                    object.lodGroupId,
-                    groupPlacement,
-                    chunkX,
-                    chunkZ))
-            {
-                continue;
-            }
-            if (groupPlacement != placement.placementId)
-                continue;
-            placement.resident.insert(
-                TerrainChunkId{chunkX, chunkZ, object.lodLevel});
-        }
-        placements.push_back(std::move(placement));
-    }
-    std::cout << "[TerrainStreaming] world=" << worldGeneration
-              << " placements=" << placements.size() << std::endl;
-}
-
-bool TerrainChunkStreamer::RefreshPlacement(
-    World& world, Placement& placement)
-{
-    const TerrainCollisionInstance* current = nullptr;
-    for (const TerrainCollisionInstance& instance :
-         world.GetTerrainCollisionInstances())
-    {
-        const std::string currentId = instance.placementId.empty()
-            ? TerrainPlacementIdentity(instance.plan)
-            : instance.placementId;
-        if (currentId == placement.placementId)
-        {
-            current = &instance;
-            break;
-        }
-    }
-    if (current == nullptr)
-        return false;
-    if (placement.plan.heightmap != current->plan.heightmap)
-    {
-        placement.plan = current->plan;
-        placement.chunkBounds =
-            TerrainMeshBuilder::ComputeChunkBounds(placement.plan);
-    }
-
-    const WorldMeshObject* object =
-        FindTemplate(world, placement.placementId);
-    if (object == nullptr)
-        return false;
-    placement.sceneObjectIdentity = object->sceneObjectIdentity;
-    placement.model = object->model;
-    return true;
-}
-
-const WorldMeshObject* TerrainChunkStreamer::FindTemplate(
-    const World& world, const std::string& placementId) const
-{
-    const WorldMeshObject* best = nullptr;
-    for (const auto& [name, object] : world.GetMeshObjects())
-    {
-        if (!object.isTerrain ||
-            object.terrainPlacementId != placementId)
-        {
-            continue;
-        }
-        if (best == nullptr || object.lodLevel < best->lodLevel)
-            best = &object;
-    }
-    return best;
-}
-
-void TerrainChunkStreamer::RequestBuild(
-    size_t placementIndex, const TerrainChunkId& id)
-{
-    BuildRequest request;
-    request.epoch = epoch;
-    request.placementIndex = placementIndex;
-    request.id = id;
-    request.plan = placements[placementIndex].plan;
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        requests.push_back(std::move(request));
-    }
-    wake.notify_one();
-}
-
-void TerrainChunkStreamer::PollCompletedBuilds()
-{
-    std::vector<BuildResult> completedNow;
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        completedNow.swap(completed);
-    }
-    for (BuildResult& result : completedNow)
-        readyUploads.push_back(std::move(result));
-}
-
 bool TerrainChunkStreamer::UploadChunk(
     World& world,
     RendererBackendVulkan& backend,
@@ -360,20 +216,41 @@ bool TerrainChunkStreamer::UploadChunk(
         result.id.lodLevel);
     const std::shared_ptr<RenderableObject> cached =
         cache.GetRenderableObject(resourceKey);
-    if (cached == nullptr)
-    {
-        cache.BindRenderableObject(
-            resourceKey,
-            std::make_shared<RenderableObject>(
-                chunk.vertices,
-                chunk.indices,
-                backend,
-                resourceKey));
-    }
+    const bool dynamic = UsesDynamicVertices(
+        placement.plan, TerrainCompositedService::IsAuthoringMode());
+    const auto streaming = cache.GetTerrainStreaming();
+    if (dynamic && (!streaming || !streaming->terrainVertices))
+        throw std::runtime_error("Dynamic terrain streaming requires a vertex update queue");
 
     WorldMeshObject object = *source;
     object.debugName = objectName;
     object.sceneObjectIdentity = placement.sceneObjectIdentity;
+    // 流式上传按目标 LOD 重新解析材质身份。LOD0 用 detail MI，LOD>0 用基础
+    // MI；不能沿用 LOD0 模板的材质，否则粗 LOD 也会进入 PATCH_LIST 管线。
+    const std::string materialInstancePath =
+        TerrainMaterialInstancePathForLod(
+            placement.plan.desc,
+            result.id.lodLevel);
+    const std::string materialInstanceKey =
+        MaterialAssetUtils::NormalizeAssetPath(materialInstancePath);
+    const std::shared_ptr<MaterialInstance> materialInstance =
+        cache.GetMaterialInstance(materialInstanceKey);
+    if (!materialInstance)
+    {
+        throw std::runtime_error(
+            "Terrain streamed chunk material instance is not loaded: " +
+            materialInstanceKey);
+    }
+    const std::shared_ptr<Material> baseMaterial =
+        materialInstance->GetBaseMaterial().lock();
+    if (!baseMaterial)
+    {
+        throw std::runtime_error(
+            "Terrain streamed chunk material instance has no base material: " +
+            materialInstanceKey);
+    }
+    object.materialInstanceKey = materialInstance->GetName();
+    object.materialKey = baseMaterial->GetMaterialKey();
     object.meshKey = resourceKey;
     object.localBoundsMin = chunk.boundsMin;
     object.localBoundsMax = chunk.boundsMax;
@@ -395,7 +272,32 @@ bool TerrainChunkStreamer::UploadChunk(
     object.isTerrain = true;
     object.terrainAssetPath = placement.plan.desc.assetPath;
     object.terrainPlacementId = placement.placementId;
-    world.AddMeshObject(objectName, std::move(object));
+    std::shared_ptr<RenderableObject> replacement;
+    if (!cached || dynamic)
+        replacement = std::make_shared<RenderableObject>(
+            chunk.vertices, chunk.indices, backend, resourceKey, dynamic, chunk.patchIndices);
+    if (replacement)
+    {
+        if (streaming && streaming->terrainVertices)
+            streaming->terrainVertices->UnregisterDynamicChunk(resourceKey);
+        cache.BindRenderableObject(resourceKey, replacement);
+        if (cached)
+            ResourceRetireQueue::GetInstance().RetireShared(
+                resourceKey, world.GetGeneration(),
+                ResourceRetireQueue::GetInstance().GetLastSubmittedEpoch(), cached);
+    }
+    if (dynamic)
+        streaming->terrainVertices->RegisterDynamicChunk(resourceKey);
+    try
+    {
+        world.AddMeshObject(objectName, std::move(object));
+    }
+    catch (...)
+    {
+        if (dynamic)
+            streaming->terrainVertices->UnregisterDynamicChunk(resourceKey);
+        throw;
+    }
     return true;
 }
 
@@ -411,10 +313,12 @@ void TerrainChunkStreamer::RemoveChunk(
         id.chunkZ,
         id.lodLevel,
         true);
-    world.RemoveMeshObject(objectName);
-
     const std::string resourceKey = TerrainChunkResourceKey(
         placement.plan, id.chunkX, id.chunkZ, id.lodLevel);
+    const auto streaming = cache.GetTerrainStreaming();
+    if (streaming && streaming->terrainVertices)
+        streaming->terrainVertices->UnregisterDynamicChunk(resourceKey);
+    world.RemoveMeshObject(objectName);
     std::shared_ptr<RenderableObject> object =
         cache.TakeRenderableObject(resourceKey);
     if (object != nullptr)
@@ -435,79 +339,6 @@ void TerrainChunkStreamer::RemoveChunk(
             ResourceRetireQueue::GetInstance().GetLastSubmittedEpoch(),
             std::move(objectResource));
     }
-}
-
-void TerrainChunkStreamer::WorkerMain()
-{
-    for (;;)
-    {
-        BuildRequest request;
-        {
-            std::unique_lock<std::mutex> lock(mutex);
-            wake.wait(lock, [this]() {
-                return stopping || !requests.empty();
-            });
-            if (stopping && requests.empty())
-                return;
-            request = std::move(requests.front());
-            requests.pop_front();
-        }
-
-        BuildResult result;
-        result.epoch = request.epoch;
-        result.placementIndex = request.placementIndex;
-        result.id = request.id;
-        try
-        {
-            const uint32_t chunksPerSide =
-                ChunksPerSide(request.plan.desc);
-            const size_t maskIndex =
-                static_cast<size_t>(request.id.chunkZ) * chunksPerSide +
-                request.id.chunkX;
-            TerrainChunkBuildFilter filter;
-            filter.chunkMask.assign(
-                static_cast<size_t>(chunksPerSide) * chunksPerSide, 0);
-            if (chunksPerSide == 0 ||
-                maskIndex >= filter.chunkMask.size())
-            {
-                result.error = "requested terrain chunk is out of range";
-            }
-            else
-            {
-                filter.chunkMask[maskIndex] = 1;
-                result.chunks = TerrainMeshBuilder::BuildChunks(
-                    request.plan, request.id.lodLevel, &filter);
-            }
-        }
-        catch (const std::exception& exception)
-        {
-            result.error = exception.what();
-        }
-        catch (...)
-        {
-            result.error = "unknown terrain chunk build failure";
-        }
-
-        {
-            std::lock_guard<std::mutex> lock(mutex);
-            completed.push_back(std::move(result));
-        }
-    }
-}
-
-void TerrainChunkStreamer::StopWorker()
-{
-    {
-        std::lock_guard<std::mutex> lock(mutex);
-        if (stopping)
-            return;
-        stopping = true;
-        requests.clear();
-        completed.clear();
-    }
-    wake.notify_all();
-    if (worker.joinable())
-        worker.join();
 }
 
 } // namespace VL

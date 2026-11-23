@@ -27,10 +27,21 @@ struct GraphicsShaderVariantArtifact
     std::string fragmentSpvPath;
     std::string vertexDebugPath;
     std::string fragmentDebugPath;
+    // 地形近场细分：只有同时编译出 runtime tesc/tese 时才置 true。
+    // debug 角色是可选的，缺失时对应路径/SPIR-V 保持为空。
+    bool hasTessellation = false;
+    std::string tessControlSpvPath;
+    std::string tessEvaluationSpvPath;
+    std::string tessControlDebugPath;
+    std::string tessEvaluationDebugPath;
     std::vector<uint32_t> vertexSpirv;
     std::vector<uint32_t> fragmentSpirv;
+    std::vector<uint32_t> tessControlSpirv;
+    std::vector<uint32_t> tessEvaluationSpirv;
     std::vector<uint32_t> vertexDebugSpirv;
     std::vector<uint32_t> fragmentDebugSpirv;
+    std::vector<uint32_t> tessControlDebugSpirv;
+    std::vector<uint32_t> tessEvaluationDebugSpirv;
     std::vector<ShaderBinding> shaderBindings;
     VL::ShaderAbiSignature abiSignature;
 };

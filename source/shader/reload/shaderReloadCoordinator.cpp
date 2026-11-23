@@ -16,6 +16,7 @@
 #include "pipeline/computePipeline.h"
 #include "pipeline/graphicsPipelineLayoutDesc.h"
 #include "pipeline/pipelineFactory.h"
+#include "render/backend/rendererBackendVulkan.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/shadow/materialShadowPipelineBuilder.h"
@@ -881,6 +882,11 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
             Renderpass& surfacePass =
                 ResolveCurrentPass(
                     candidate.plan.recipe.surface);
+            const GraphicsPipelineLayoutDesc surfaceLayout =
+                BuildMaterialSurfacePipelineLayout(
+                    surfacePass,
+                    candidate.plan.descriptorSchema,
+                    candidate.surfaceArtifact.shaderBindings);
             pending.commit.surfacePipeline =
                 pipelineFactory.CreateGraphicsPipelineCandidate(
                     graphicsCandidateState,
@@ -889,11 +895,30 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
                     candidate.surfaceArtifact,
                     candidate.plan.recipe.surface.cullMode,
                     candidate.plan.recipe.surface.blendMode,
-                    BuildMaterialSurfacePipelineLayout(
-                        surfacePass,
-                        candidate.plan.descriptorSchema,
-                        candidate.surfaceArtifact.shaderBindings));
+                    surfaceLayout);
             ++statistics.pipelinesCreated;
+
+            // Wireframe 是同一个 surface artifact 的 eLine 变体。热重载必须
+            // 一起重建；新 artifact 失去 tessellation 时保持为空，绘制端会
+            // 回退到普通 surface pipeline。
+            if (RendererBackendVulkan::SupportsWireframeCapability() &&
+                candidate.surfaceArtifact.hasTessellation &&
+                !surfacePass.pipelineContractKey.isShadowPass)
+            {
+                PassPipelineContractKey wireframeContract =
+                    surfacePass.pipelineContractKey;
+                wireframeContract.wireframe = true;
+                pending.commit.wireframePipeline =
+                    pipelineFactory.CreateGraphicsPipelineCandidate(
+                        graphicsCandidateState,
+                        &surfacePass.renderPass,
+                        wireframeContract,
+                        candidate.surfaceArtifact,
+                        candidate.plan.recipe.surface.cullMode,
+                        candidate.plan.recipe.surface.blendMode,
+                        surfaceLayout);
+                ++statistics.pipelinesCreated;
+            }
         }
 
         if (candidate.replaceShadow)
@@ -992,7 +1017,9 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
             ComputeDescriptorReplacement descriptors =
                 participant->PrepareReplacementDescriptors(
                     candidate.candidateArtifact,
-                    replacement);
+                    replacement,
+                    candidate.buildArtifact,
+                    candidate.plan.request);
             pendingComputeCommits.push_back({
                 &candidate,
                 candidate.candidateArtifact,
@@ -1084,7 +1111,7 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
             pending.material->ValidatePipelineReloadCommit(
                 pending.commit);
             maximumRetiredPipelineCount +=
-                pending.commit.replaceSurface ? 1u : 0u;
+                pending.commit.replaceSurface ? 2u : 0u;
             maximumRetiredPipelineCount +=
                 pending.commit.replaceShadow ? 1u : 0u;
             maximumRetiredPipelineCount +=
@@ -1122,6 +1149,20 @@ ShaderReloadCoordinator::CommitGraphicsCandidates(
                         lastUsedEpoch,
                         std::static_pointer_cast<void>(
                             oldPipeline)});
+                }
+                const std::shared_ptr<PipelineBase>& oldWireframePipeline =
+                    pending.material->GetWireframeRenderPipeline();
+                if (oldWireframePipeline &&
+                    preparedRetiredPipelines.insert(
+                        oldWireframePipeline.get()).second)
+                {
+                    retirementResources.push_back({
+                        "ShaderReload:SurfaceWireframe:" +
+                            pending.material->GetMaterialKey(),
+                        currentWorldGeneration,
+                        lastUsedEpoch,
+                        std::static_pointer_cast<void>(
+                            oldWireframePipeline)});
                 }
             }
             if (pending.commit.replaceShadow)

@@ -1,3 +1,9 @@
+// 文件职责：实现 ShaderCompiler 的公开构建请求与编译入口，把逻辑变体或材质
+// 装配结果转换为阶段源码、输出角色和依赖输入；不解析 GLSL 语义、不创建管线。
+// File responsibility: Implements ShaderCompiler's public build-request and compile
+// entry points, converting logical variants or composed materials into stages, output
+// roles, and source inputs; it neither parses GLSL semantics nor creates pipelines.
+
 #include "shaderCompiler.h"
 
 #include <algorithm>
@@ -319,6 +325,32 @@ ShaderCompiler::CreateMaterialGraphicsBuildRequest(
             NormalizeAbsolutePath(source.fragmentVirtualPath),
             source.fragmentSource,
             shaderc_fragment_shader}};
+    const bool hasTessellationStages =
+        !source.tessControlSource.empty() ||
+        !source.tessEvaluationSource.empty();
+    if (hasTessellationStages)
+    {
+        if (source.tessControlSource.empty() ||
+            source.tessEvaluationSource.empty() ||
+            source.tessControlVirtualPath.empty() ||
+            source.tessEvaluationVirtualPath.empty())
+        {
+            throw std::runtime_error(
+                "Material tessellation requires both control and evaluation sources");
+        }
+        request.stages.push_back({
+            "tessControl",
+            NormalizeSourceIdentity(source.tessControlVirtualPath),
+            NormalizeAbsolutePath(source.tessControlVirtualPath),
+            source.tessControlSource,
+            shaderc_tess_control_shader});
+        request.stages.push_back({
+            "tessEvaluation",
+            NormalizeSourceIdentity(source.tessEvaluationVirtualPath),
+            NormalizeAbsolutePath(source.tessEvaluationVirtualPath),
+            source.tessEvaluationSource,
+            shaderc_tess_evaluation_shader});
+    }
     const std::filesystem::path materialSourcePath =
         glslRoot / materialRequest.source.materialSourcePath;
     if (!std::filesystem::is_regular_file(materialSourcePath))
@@ -348,6 +380,21 @@ ShaderCompiler::CreateMaterialGraphicsBuildRequest(
         {RuntimeFragmentRole, outputRoot.string() + ".frag.spv"},
         {DebugVertexRole, outputRoot.string() + ".vert.debug"},
         {DebugFragmentRole, outputRoot.string() + ".frag.debug"}};
+    if (hasTessellationStages)
+    {
+        request.outputPaths.emplace(
+            RuntimeTessControlRole,
+            outputRoot.string() + ".tesc.spv");
+        request.outputPaths.emplace(
+            RuntimeTessEvaluationRole,
+            outputRoot.string() + ".tese.spv");
+        request.outputPaths.emplace(
+            DebugTessControlRole,
+            outputRoot.string() + ".tesc.debug");
+        request.outputPaths.emplace(
+            DebugTessEvaluationRole,
+            outputRoot.string() + ".tese.debug");
+    }
     return request;
 }
 

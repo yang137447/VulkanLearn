@@ -83,7 +83,8 @@ public:
 };
 
 // RML 工作区的 GT 展示适配器；消费冻结快照，仅提交命令，不调用文档服务或 renderer。
-class MaterialInstanceAssetEditorPanel final : public Rml::EventListener
+class MaterialInstanceAssetEditorPanel final : public Rml::EventListener,
+    public ITerrainMaterialEditSink
 {
 public:
     using ContextMenuKind = Panel::ContextMenuKind;
@@ -95,6 +96,14 @@ public:
     void Detach();
     void SetSceneSelectionSink(IMaterialInstanceSceneSelectionSink* sink);
     void SetRuntimeActionSink(IEditorRuntimeActionSink* sink);
+    // Game/PIE/RMB-look 捕获期间编辑器视口快捷键让位给游戏输入。
+    void SetGameFocusCaptured(bool captured) { gameFocusCaptured = captured; }
+    // UE 的 F：聚焦选中 Actor；文本输入获得焦点时不消费该键。
+    bool FrameSelectedActor();
+    bool QueueMaterialFloat(
+        const std::string& materialInstancePath,
+        const std::string& parameter,
+        float value) override;
     void SetJsonAssetRequestSink(IEditorJsonAssetRequestSink* sink) { jsonAssetRequestSink = sink; }
     // 测试可注入假 provider；为空时层库使用进程内的 CPU 预览缓存。
     void SetTerrainLayerPreviewProvider(VL::Editor::ITerrainLayerPreviewProvider* provider)
@@ -273,6 +282,8 @@ private:
     void SynchronizeSculptBrushPresetId();
     void SynchronizePaintBrushPresetId();
     void RefreshTerrainBrushUi();
+    void RefreshTerrainMaterialPanel();
+    void RefreshTerrainLayerDetails();
     void RefreshTerrainSurfacePanel(const EditorSceneActorSnapshot* actor);
     void RefreshTerrainLayerLibrary();
     void RefreshTerrainLayerHoverPreview(const Rml::Vector2f& screenPoint,
@@ -290,6 +301,12 @@ private:
     float ActiveTerrainBrushRadiusCm() const;
     float TerrainBrushRadiusUv() const;
     const EditorSceneActorSnapshot* SelectedTerrainActor() const;
+    const EditorSceneActorSnapshot* TerrainMaterialActor() const;
+    // 材质预览 World 没有地形 actor；打开材质期间沿用进入预览前的路径。
+    std::string TerrainMaterialPath() const;
+    // LOD0 的 detail MI 独立于基础 MI，细分/置换参数只存在于这里。
+    std::string TerrainDetailMaterialPath() const;
+    std::string TerrainAssetPath() const;
     void SynchronizeTerrainBrushSelection();
     const EditorSceneActorSnapshot* BlueprintPreviewActor() const;
     const EditorSceneCameraActor* BlueprintPreviewCamera() const;
@@ -350,6 +367,10 @@ private:
     bool terrainLayerListView = false;
     std::string terrainLayerSearch;
     uint32_t terrainPaintLayer = 0;
+    bool terrainLayerDetailsOpen = false;
+    uint32_t terrainLayerDetailsLayer = 0;
+    std::string terrainLayerSelectionSignature;
+    bool gameFocusCaptured = false;
     VL::Editor::TerrainLayerPreviewCache terrainLayerPreviewCache;
     VL::Editor::ITerrainLayerPreviewProvider* terrainLayerPreviewProvider = nullptr;
     std::string terrainLayerHoverImageSource;
@@ -545,6 +566,10 @@ private:
     bool requestedPreviewMaterial = false;
     bool requestedPreviewBlueprint = false;
     bool requestedPreviewParticle = false;
+    mutable std::string terrainMaterialPathCache;
+    mutable std::string terrainDetailMaterialPathCache;
+    mutable std::string terrainAssetPathCache;
+    std::string terrainDocumentRequestPath;
     uint64_t appliedMaterialPreviewGeneration = 0;
     // 毛发视口状态：catalog/snapshot 判定出的 tressfx 路径、skinning 守卫、
     // 以及预览世界内的累计旋转。都不持久化，切 tab/返回关卡即失效。

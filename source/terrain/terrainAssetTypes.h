@@ -211,6 +211,16 @@ struct TerrainLayerPaintData
     bool HasPaint(uint32_t layer, float u, float v) const;
 };
 
+// 生产 TR 必须显式启用并指定 packagePath；默认 disabled 用于识别未初始化的内部配置。
+// 资产预检不要求包已存在，实际渲染前必须先 Cook。
+struct TerrainCompositedVTDesc
+{
+    bool enabled = false;
+    std::string packagePath;
+    std::string productionSourcePath;
+    Eigen::Vector2i virtualResolution = Eigen::Vector2i(1024, 1024);
+};
+
 // TR_*.json 解析后的几何/材质描述。size、heightScale、heightOffset 的单位都是 cm，
 // 与世界单位一致；heightmap 是资源根相对路径，不套材质纹理的 V 翻转。
 struct TerrainAssetDesc
@@ -234,6 +244,10 @@ struct TerrainAssetDesc
     Eigen::Vector2i pageOrigin = Eigen::Vector2i(0, 0);
     uint32_t pageTilesPerSide = 8;
     std::string materialInstancePath;
+    // 可选：仅 LOD0 使用的细分材质实例（资源根相对路径）。为空时所有 LOD
+    // 继续使用 materialInstancePath，保持旧资产行为。LOD>0 永远使用基础 MI，
+    // 避免粗 LOD 进入 tessellation PATCH_LIST 管线。
+    std::string detailMaterialInstancePath;
     std::vector<TerrainLayerDesc> layers;
     // CPU 几何 LOD：1 表示只有 LOD0（旧资产默认），最多 4 级。
     uint32_t lodLevels = 1;
@@ -245,7 +259,19 @@ struct TerrainAssetDesc
     // 最粗一级永远驻留，不进入该表。为空时由 TerrainChunkResidencyDistancesCm
     // 从 lodDistances 推导（×1.1 覆盖滞回带上沿）。
     std::vector<float> chunkResidencyDistancesCm;
+    TerrainCompositedVTDesc compositedVT;
 };
+
+// 按 LOD 选择材质实例路径：只有 LOD0 且作者显式设置 detail 时使用细分 MI。
+// 流式替换与加载器必须共用这一规则，防止 LOD1/2 被 LOD0 模板带成细分材质。
+inline const std::string& TerrainMaterialInstancePathForLod(
+    const TerrainAssetDesc& desc,
+    uint32_t lodLevel)
+{
+    if (lodLevel == 0 && !desc.detailMaterialInstancePath.empty())
+        return desc.detailMaterialInstancePath;
+    return desc.materialInstancePath;
+}
 
 // 距离→阈值推导。renderer 用它在加载期把阈值写进每个 chunk 的 LOD 组，
 // WorldSnapshotBuilder 每帧按相机到 chunk AABB 的距离选择级；返回值不参与

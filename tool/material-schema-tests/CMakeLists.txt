@@ -7,6 +7,9 @@ add_executable(material_schema_tests
     ${PROJECT_SOURCE_DIR}/source/material/materialDescriptorSchema.cpp
     ${PROJECT_SOURCE_DIR}/source/material/loader/materialInstanceResolver.cpp
     ${PROJECT_SOURCE_DIR}/source/material/validation/materialAssetValidator.cpp
+    # commonFunction.h 的路径/配置读取经 TracingIfstream/RuntimeFileTrace 记账，需要两者定义。
+    ${PROJECT_SOURCE_DIR}/source/core/runtimeFileTrace.cpp
+    ${PROJECT_SOURCE_DIR}/source/core/tracingIfstream.cpp
 )
 
 target_include_directories(material_schema_tests

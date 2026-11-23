@@ -40,6 +40,29 @@ TEST(LaunchOptions, GpuStatsIsOffByDefault)
     EXPECT_FALSE(options.perfJsonlPath.has_value());
 }
 
+TEST(LaunchOptions, AutoplayIsOffByDefaultAndOnlyOptsInExplicitly)
+{
+    EXPECT_FALSE(Parse({"main.exe"}).autoplay);
+    const auto options = Parse({"main_game.exe", "--autoplay", "--no-dev-ui"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_TRUE(options.autoplay);
+    EXPECT_FALSE(options.perfJsonlPath.has_value());
+}
+
+TEST(LaunchOptions, TerrainVtCookIsExplicitAndKeepsSceneOverride)
+{
+    EXPECT_FALSE(Parse({"main_editor.exe"}).terrainVtCook);
+    const auto options = Parse({
+        "main_editor.exe", "--terrain-vt-cook", "--initial-scene",
+        "Generated/Validation/TerrainCompositedVT/SC_composited_vt_2x2.json",
+        "--exit-after-frames", "2"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_TRUE(options.terrainVtCook);
+    EXPECT_EQ(options.exitAfterFrames, 2);
+    EXPECT_EQ(options.initialSceneOverride,
+        "Generated/Validation/TerrainCompositedVT/SC_composited_vt_2x2.json");
+}
+
 TEST(LaunchOptions, PerfJsonlRequiresAPath)
 {
     const LaunchOptions missing = Parse({"main.exe", "--perf-jsonl"});
@@ -96,6 +119,33 @@ TEST(LaunchOptions, PrerenderSkinFlagSelectsThePreSkinnedVariant)
     EXPECT_TRUE(options.prerenderSkin);
     EXPECT_TRUE(options.gpuStats);
     EXPECT_EQ(options.frameLimitHz, 60);
+}
+
+TEST(LaunchOptions, VulkanValidationKeepsTheCompileTimeDefault)
+{
+    const LaunchOptions options = Parse({"main.exe"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_FALSE(options.vulkanValidation.has_value());
+}
+
+TEST(LaunchOptions, ValidationFlagsOverrideTheCompileTimeDefault)
+{
+    const LaunchOptions enabled = Parse({"main.exe", "--validation"});
+    EXPECT_TRUE(enabled.errorMessage.empty()) << enabled.errorMessage;
+    ASSERT_TRUE(enabled.vulkanValidation.has_value());
+    EXPECT_TRUE(*enabled.vulkanValidation);
+
+    const LaunchOptions disabled = Parse({"main.exe", "--no-validation"});
+    EXPECT_TRUE(disabled.errorMessage.empty()) << disabled.errorMessage;
+    ASSERT_TRUE(disabled.vulkanValidation.has_value());
+    EXPECT_FALSE(*disabled.vulkanValidation);
+
+    const LaunchOptions combined =
+        Parse({"main.exe", "--no-validation", "--gpu-stats"});
+    EXPECT_TRUE(combined.errorMessage.empty()) << combined.errorMessage;
+    ASSERT_TRUE(combined.vulkanValidation.has_value());
+    EXPECT_FALSE(*combined.vulkanValidation);
+    EXPECT_TRUE(combined.gpuStats);
 }
 
 TEST(LaunchOptions, NoPrerenderSkinFlagFallsBackToPerPassSkinning)

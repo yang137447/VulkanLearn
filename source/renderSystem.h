@@ -58,7 +58,6 @@
 #include "render/postprocess/postProcessControls.h"
 #include "render/terrain/terrainFeedbackRuntime.h"
 #include "terrain/terrainFeedback.h"
-#include "terrain/terrainLayerFeedback.h"
 #include "render/shadow/shadowCasterCull.h"
 #include "ui/uiOverlayRendererVulkan.h"
 #include "ui/uiRenderSnapshotQueue.h"
@@ -80,6 +79,7 @@ struct OfflineWorldAssets;
 struct TerrainStreamingState;
 class RendererBackendVulkan;
 class ShaderReloadCoordinator;
+class TerrainCompositedService;
 class MaterialInstancePreviewSession;
 class OfflineMaterialInstancePreviewSession;
 }
@@ -207,18 +207,11 @@ public:
     void ReportTerrainFeedbackStatistics() const;
     // P3 控制台：打印驻留/预算/淘汰/上传统计（渲染线程发布的快照）。
     void ReportTerrainStatistics() const;
-    void ReportTerrainLayerStatistics() const;
     // 运行时几何 LOD：读取最近一帧 WorldSnapshotBuilder 的组状态。
     void ReportTerrainLodStatistics() const;
     void ReportTerrainChunkStatistics() const;
     // 预算命令由 GT 写 atomic，渲染线程帧首消费；不直接跨线程改 page manager。
     void RequestTerrainResidentCapacity(uint32_t capacity);
-    // L4a 层页预算与对照预取命令：同样只排队，渲染线程帧首消费。
-    void RequestTerrainLayerResidentCapacity(uint32_t capacity);
-    void RequestTerrainLayerPreload();
-    // L4e：调试用强制目标 mip（-1 = 自动，0..6 = 覆盖）。只影响 mode 1；
-    // 写入 streaming state 的 atomic，渲染线程帧首应用到 M_terrain/feedback。
-    void RequestTerrainLayerForceMip(int forceMip);
     // 控制台 `terrain parity [tileX tileZ]`：渲染线程空闲时对同一页分别做
     // CPU 与 GPU 烘焙并逐 texel 比较。调试入口，会同步等待一次 GPU。
     void RequestTerrainPageBakeParity(int tileX, int tileZ);
@@ -429,11 +422,9 @@ public:
     void SetActiveWorld(std::shared_ptr<const VL::World> world);
     void SetPipelineFactory(PipelineFactory* factory) { pipelineFactory = factory; }
     void SetShaderReloadCoordinator(
-        VL::ShaderReloadCoordinator* coordinator)
-    {
-        shaderReloadCoordinator = coordinator;
-    }
+        VL::ShaderReloadCoordinator* coordinator);
 private:
+    void UpdateTerrainProducerReloadRegistration();
     friend class VL::MaterialInstancePreviewSession;
     friend class VL::OfflineMaterialInstancePreviewSession;
 
@@ -613,6 +604,10 @@ private:
     void RecordEnvironmentIbl(
         vk::CommandBuffer commandBuffer,
         uint32_t swapchainImageIndex);
+    // 帧命令成功提交 / 被丢弃时更新环境与粒子 GPU 计时器：
+    // 只有提交后的完整 query 批次才允许下一次读回，丢弃帧必须作废。
+    void SubmitFrameGpuQueries();
+    void AbandonFrameGpuQueries();
     // 在 renderPassOrdered 之前推进所有 GPU backend 的 TressFX guide 位置。
     void RecordHairSimulation(
         vk::CommandBuffer commandBuffer,
@@ -629,13 +624,6 @@ private:
         const std::shared_ptr<VL::TerrainStreamingState>& streaming,
         uint64_t completedEpoch,
         uint32_t frameIndex);
-    // L4e：把 console 的强制 mip 写进已登记的 M_terrain 实例；只在值或
-    // 实例集合变化时写，避免每帧改材质 UBO。
-    void ApplyTerrainLayerForceMip(
-        const std::shared_ptr<VL::TerrainStreamingState>& streaming);
-    // L4e：用相机本帧位移更新“前向移动”标志，驱动细一级 mip 预取。
-    void UpdateTerrainCameraPrefetch(
-        const std::shared_ptr<VL::TerrainStreamingState>& streaming);
     void PrepareTerrainFeedbackPass(uint8_t frameTag);
     void PublishTerrainStreamingStats(
         const std::shared_ptr<VL::TerrainStreamingState>& streaming,
@@ -724,6 +712,7 @@ private:
     VL::AutoExposureReloadParticipant exposureHistogramReloadParticipant{0};
     VL::AutoExposureReloadParticipant exposureAdaptReloadParticipant{1};
     VL::ShaderReloadCoordinator* shaderReloadCoordinator = nullptr;
+    std::weak_ptr<VL::TerrainCompositedService> registeredTerrainProducerService;
     VL::ProceduralSkyCubeGenerator proceduralSkyCubeGenerator;
     VL::EnvironmentIblBaker environmentIblBaker;
     VL::SkyShGenerateReloadParticipant skyShReloadParticipant{

@@ -143,10 +143,6 @@ class ManifestSpec:
     page_origin: tuple[int, int] | None
     page_tiles_per_side: int | None
     layers: tuple[LayerInput, ...]
-    # MI 的 u_terrainLayerMode；None 表示不覆盖（沿用材质默认 0 = legacy 数组路径）。
-    # 多 tile 的 4 km 场景需要显式设 1 才能启用 layer page table / atlas 流式。
-    # 带默认值，所以必须排在所有无默认字段之后。
-    terrain_layer_mode: float | None = None
 
 
 @dataclass
@@ -1028,14 +1024,8 @@ def _load_manifest(path: Path, texture_resolution_override: int | None,
         "materialUvScale")
     if material_uv_scale <= 0.0:
         _fail("materialUvScale must be positive")
-    # 可选：显式选择地形的层 VT 路径（0 = legacy 数组，1 = page table/atlas）。
-    # 不写则沿用 M_terrain 的材质默认值，避免无谓覆盖。
-    raw_layer_mode = _first(top, "terrainlayermode", "terrain_layer_mode")
-    terrain_layer_mode: float | None = None
-    if raw_layer_mode is not None:
-        terrain_layer_mode = _require_number(raw_layer_mode, "terrainLayerMode")
-        if terrain_layer_mode not in (0.0, 1.0):
-            _fail("terrainLayerMode must be 0 or 1")
+    if "terrainlayermode" in top or "terrain_layer_mode" in top:
+        _fail("terrainLayerMode was removed; remove this option and Cook the generated composited terrain scene")
     description = _first(top, "description", default="")
     scene_description = _first(top, "scenedescription", "scene_description", default="")
     if not isinstance(description, str) or not isinstance(scene_description, str):
@@ -1107,7 +1097,6 @@ def _load_manifest(path: Path, texture_resolution_override: int | None,
         flip_vertical=flip_vertical,
         invert_normal_green=invert_normal_green,
         material_uv_scale=_clean_float(material_uv_scale),
-        terrain_layer_mode=terrain_layer_mode,
         description=description.strip(),
         scene_description=scene_description.strip(),
         environment=environment,
@@ -1606,15 +1595,7 @@ def _convert(
 
     mi_path = _guard_output(
         output_root, output_root / f"MI_terrain_{spec.asset_name}.json")
-    # `terrainLayerMode` 是 manifest 级开关（默认不写，沿用材质默认值 0）：
-    #   0 = mode 0，M_terrain 直接按 globalId 采 sampler2DArray（legacy 快路径）
-    #   1 = mode 1，走 layer page table + atlas 的虚拟纹理路径，
-    #       由 terrainFeedback pass 驱动页驻留（4 km 多 tile 场景必须用它，
-    #       否则 16 块 tile 全部走 mode 0，VT 流式链路不会启动）
-    # self-test 断言"不要冗余覆盖"针对的是默认 0 的情况，这里显式区分。
     mi_parameters = {"u_uvScale": spec.material_uv_scale}
-    if spec.terrain_layer_mode is not None:
-        mi_parameters["u_terrainLayerMode"] = float(spec.terrain_layer_mode)
     # 逐层权重数组可用时优先走它（连续权重，不做 top-4 ID 量化）。
     layers_use_weight_maps = bool(spec.layers) and all(
         layer.weightmap is not None for layer in spec.layers)
@@ -1644,9 +1625,28 @@ def _convert(
 
     tr_path = _guard_output(
         output_root, output_root / f"TR_terrain_{spec.asset_name}.json")
+    virtual_resolution = 128
+    target_texels = max(spec.size_x_cm, spec.size_z_cm) / 12.5
+    while virtual_resolution < min(target_texels, 8192):
+        virtual_resolution *= 2
+    composited_configuration = {
+        "enabled": True,
+        "virtualResolution": [virtual_resolution, virtual_resolution],
+        "packagePath": _asset_path(
+            resource_root, output_root / "Cooked" / f"{spec.asset_name}.manifest.json"),
+        "productionSourcePath": _asset_path(resource_root, output_root / "world.author.json"),
+    }
+    recipe_path = _guard_output(output_root, output_root / "world.author.json")
+    if _write_json_atomic(recipe_path, {
+            "kind": "terrain-rvt-world-author", "version": 1,
+            "surfaces": ["terrain|Landscape_00"], "adjacency": []}):
+        changed_files += 1
+    else:
+        unchanged_files += 1
     tr_json: dict[str, Any] = {
         "name": f"TR_terrain_{spec.asset_name}",
         "type": "terrain",
+        "compositedVT": composited_configuration,
         "description": spec.description or (
             "由导入清单中的高度图、绘制权重与层纹理生成的地形资产，"
             "用于验证 VulkanLearn 分层地形、纹理数组与 VLP1 权重快照；"
@@ -1692,7 +1692,7 @@ def _convert(
         "worldUnit": "cm",
         "objects": [
             {
-                "name": "Landscape",
+                "name": "Landscape_00",
                 "type": "terrain",
                 "terrainPath": _asset_path(resource_root, tr_path),
                 "position": [
@@ -1777,6 +1777,18 @@ def _convert(
         "paint": paint_summary,
         "filesChanged": changed_files,
         "filesUnchanged": unchanged_files,
+        "compositedVT": composited_configuration,
+        "renderReady": False,
+        "requiredCookIdentity": {
+            "generatorVersion": 3,
+            "filterRule": "mip0-center-coarse-area-local-normal-rvt-adjacency-padding-v3",
+            "encoding": "gpu-rvt-adjacency-area4-rgba8-v3",
+        },
+        "nextStep": "Cook the generated scene before 3D loading; asset-page heightmap preview remains available.",
+        "cookCommand": [
+            "build-vt-release/bin/main_editor.exe", "--terrain-vt-cook",
+            "--initial-scene", _asset_path(resource_root, scene_path),
+            "--exit-after-frames", "2"],
     }
     if verbose:
         print(json.dumps(summary, ensure_ascii=False, indent=2))
@@ -1789,6 +1801,8 @@ def _convert(
         print(f"Paint: {paint_summary}")
         print(
             f"Files changed: {changed_files}, unchanged: {unchanged_files}")
+        print(summary["nextStep"])
+        print("Cook command: " + " ".join(summary["cookCommand"]))
     return summary
 
 
@@ -1829,6 +1843,26 @@ def _self_test_verify(
     mi = json.loads(mi_path.read_text(encoding="utf-8"))
     if tr.get("type") != "terrain" or len(tr.get("layers", [])) != 3:
         _fail("self-test TR type/layer count is wrong")
+    composited = tr.get("compositedVT", {})
+    if (composited.get("enabled") is not True or
+            not composited.get("packagePath", "").endswith("/Cooked/kitedemo.manifest.json") or
+            not composited.get("productionSourcePath", "").endswith("/world.author.json") or
+            set(composited) != {"enabled", "packagePath", "productionSourcePath", "virtualResolution"}):
+        _fail("self-test TR must use explicit World V2 author configuration")
+    recipe = json.loads((resource_root / composited["productionSourcePath"]).read_text(encoding="utf-8"))
+    if recipe != {"kind": "terrain-rvt-world-author", "version": 1,
+                  "surfaces": ["terrain|Landscape_00"], "adjacency": []}:
+        _fail("self-test standalone World author recipe differs from placement")
+    resolution = composited["virtualResolution"]
+    if resolution[0] != resolution[1] or resolution[0] < 128 or resolution[0] > 8192:
+        _fail("self-test composited resolution is invalid")
+    if summary.get("renderReady") is not False or "--terrain-vt-cook" not in summary["cookCommand"]:
+        _fail("self-test uncooked assets must explicitly require Cook")
+    if summary.get("requiredCookIdentity") != {
+            "generatorVersion": 3,
+            "filterRule": "mip0-center-coarse-area-local-normal-rvt-adjacency-padding-v3",
+            "encoding": "gpu-rvt-adjacency-area4-rgba8-v3"}:
+        _fail("self-test author output must require gen3 padding Cook identity")
     if not tr.get("description"):
         _fail("self-test TR description is empty")
     if tr["gridResolution"] % tr["chunkQuads"] != 0:
@@ -1872,7 +1906,7 @@ def _self_test_verify(
     if mi.get("material") != "shader/glsl/M_terrain.json":
         _fail("self-test MI does not target M_terrain")
     if "u_terrainLayerMode" in mi.get("parameters", {}):
-        _fail("self-test MI redundantly overrides the material-default u_terrainLayerMode")
+        _fail("self-test MI must not emit removed u_terrainLayerMode")
     if not {"layerAlbedo", "layerNormal", "layerPbr"} <= set(mi.get("textures", {})):
         _fail("self-test MI does not bind the three layer arrays")
 
@@ -2050,6 +2084,9 @@ def _run_self_test(verbose: bool) -> None:
             _fail("self-test invertNormalGreen=false override was ignored")
 
         invalid_cases = [
+            ("removed_layer_mode_zero", {"terrainLayerMode": 0}),
+            ("removed_layer_mode_one", {"terrainLayerMode": 1}),
+            ("removed_layer_mode_null", {"terrainLayerMode": None}),
             (
                 "grid_not_divisible",
                 {

@@ -11,6 +11,14 @@
 - 启动参数 `--no-prerender-skin`（`source/engine/launchOptions.*`）：预蒙皮默认开启，用该关闭项回落到逐 pass 蒙皮；开启时每帧在
   `hairSimulation` 之后、pass 循环之前录制 `SkinDeformPass`，并在 GPU 表中新增
   `skinnedDeform` 一行。
+- 启动参数 `--validation` / `--no-validation`（`source/engine/launchOptions.*`）：覆盖编译期
+  `VULKANLEARN_ENABLE_VULKAN_VALIDATION` 的默认值。`VulkanManager` 在创建 instance 前按该值
+  决定是否启用 `VK_LAYER_KHRONOS_validation`；层未安装时降级为关闭并打印一行
+  `[Vulkan] Validation layer requested but ... is not installed`。同一个二进制因此既能用
+  `--no-validation` 做帧率验收，也能在排查 VUID 时用 `--validation` 复现。校验层会显著
+  改变帧率，因此帧率结论必须注明它的开关状态。`VK_EXT_debug_utils` 与校验层解耦：
+  Debug 构建即使 `--no-validation` 也会在扩展可用时启用它，不可用时调用
+  `VulkanDebug::Disable()`，不会调用未启用扩展的命令。
 - 控制台命令 `gpustats`（`source/debugConsoleProcessCommand.cpp`）：把 `RuntimeCommandType::PrintGpuPassStats`
   排入 `CommandBus`，由 `RuntimeCommandExecutor` 在当前 GT tick 调用
   `RenderSystem::PrintGpuPassStats()`。它立即打印最近一次读回的窗口；没有可用样本时打印一行
@@ -24,6 +32,27 @@
 - 启动脚本可复现：`--console-command gpustats --console-command-delay <frames>`。
 
 ## 时间戳写入位置
+
+`VL_GPU_TIMING_RAW=1` 环境变量使每次 fence 后成功读回的帧输出一条
+`[GPU_RAW]` JSON，保留逐帧的 pass 毫秒与 null；该通道不经过 120 帧平均。
+它依赖 `--gpu-stats`、`--perf-jsonl` 或控制台命令启用 query 采集。
+`[BAKE_GPU_RAW]` 由同步 `BakePageSync` 输出，独立测量生产区间和 GPU 到 host
+readback buffer 的 copy；前者包括 output 初始化、compute 及其 barrier，
+后者不是 runtime buffer 到 atlas image 的复制。两者均使用 GPU timestamp，
+不以 CPU 提交或 fence 等待耗时代替 GPU 时间。
+
+合成地形服务在主帧中的调用以 `terrainCompositedProductionAndCopy` 包围，
+包含该次调用录制的输入刷新、预览生产和页面上传；Game V1 稳态只有页上传。
+`geometry` 是包含基础地形采样与 TES 的完整绘制阶段，也包含其他 geometry
+对象，不能解释为独立 TES、独立材质采样或只属于地形的成本。
+`terrainQualityAfterFeedback` 独立包围原 `terrainFeedback` 计时结束后的
+`RecordAfterFeedback` 调用，包含实际 capture 的 buffer 初始化、winner/depth
+采样布局转换、QualityCompute 页表 resolve、query 与 readback copy，进入同一
+GPU pass 表和逐帧 instrumented sum。未录制 capture 的调用也保留这个区间，
+如实记录空区间的 timestamp 成本，不通过移除该行排除必要质量工作的成本。
+原 feedback 的七张 MRT 绘制成本仍归 `terrainFeedback`，不重复计入此行。
+`lightCulling`、`particleSoftDepth` 与 `volumetricFog` 的专用录制分支
+在返回 pass 循环前闭合 timestamp，后续 pass 因而继续得到有效查询。
 
 `RenderSystem::RecordAndSubmitCurrentRenderScene()` 在非 offline 路径中：
 
@@ -261,6 +290,27 @@ Performance 页的 CPU 表只消费这份快照：标题与表头把 CPU 阶段�
 ```text
 [GPU] frame avg over 120: hairSimulation 0.18 ms | shadowCascade0 0.42 ms | ... | total 12.30 ms
 ```
+
+另有一个独立的 120 帧计数器，按自己的窗口向 `Info` 日志打印一张 **CPU 录制**表（`PassCpuRecordTimings`，
+`source/render/frame/renderFrameRecorder.cpp`）：
+
+```text
+pass CPU record (avg ms/frame): geometry 0.34 terrainFeedback 0.13 deferredLighting 0.03 ...
+```
+
+它按 RenderGraph pass 顺序统计 `PassRuntime::RecordPass()`（含 pass 前的图屏障与 pass 内的
+draw/descriptor 准备）在渲染线程上的 CPU 时间，只保留耗时最高的 8 项。这张表刻意独立于
+GPU timestamp 表：GPU 近空闲（< 1 ms）时，帧时间可能完全由这里的 CPU 录制决定。
+
+## 卡顿帧日志（`VL_HITCH_LOG`）
+
+设置环境变量 `VL_HITCH_LOG=1` 后，GT 会把**单帧**耗时 ≥ 20 ms 的帧打成一行
+`[Hitch] frame <总耗时> ms (pre-tick <x>, clock dt <y>): <各阶段单帧耗时>`，每秒最多 5 条。
+它不依赖 `--gpu-stats`：timestamp 采集会串行化 GPU，本身就会改变被测帧。
+
+`pre-tick` 是 `TickEngineFrame` 入口到 `RuntimeClock::TickDeltaSeconds()` 之间的时间
+（控制台、运行时命令、shader 热重载轮询等），不属于任何 `CpuFrameStage`；`clock dt`
+是 FPS 工具消费的同一份帧间隔。`VL_HITCH_LOG=0` 或空值视为关闭。
 
 ## 阴影 caster 剔除诊断
 

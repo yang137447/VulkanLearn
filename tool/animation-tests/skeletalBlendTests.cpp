@@ -509,6 +509,70 @@ TEST(SkeletalBlend, FootPlacementLockTypeSelectsBallOrAnkleAnchorAndResetsHistor
     EXPECT_LT(player.FootPlacement().feet[0].targetError, 0.1f);
 }
 
+TEST(SkeletalBlend, FootPlacementAllowsModeratePenetrationRecovery)
+{
+    SkeletalPlayback player(MakeLegAsset());
+    player.Play("legs", true, 1, true);
+    player.SetFootPlacementEnabled(true);
+    EXPECT_FLOAT_EQ(player.FootPlacementMaxPenetrationCm(), 28.0f);
+    FootPlaneProbe plane;
+    Eigen::Matrix4f component = Eigen::Matrix4f::Identity();
+    // 鞋底比地面低 20 cm：旧 10 cm 对称阈值会拒绝锁足，新的负间隙恢复
+    // 必须把脚重新锁到地面上。
+    component(1, 3) = -20.0f;
+    TickFeet(player, plane, component);
+    TickFeet(player, plane, component);
+    const auto& foot = player.FootPlacement().feet[0];
+    ASSERT_TRUE(foot.planted) << player.FootPlacement().reason;
+    EXPECT_NEAR(foot.postSole.y(), 0.0f, 0.5f);
+    EXPECT_NEAR(foot.anchor.y(), 0.0f, 0.1f);
+    EXPECT_LT(foot.targetError, 0.1f);
+}
+
+TEST(SkeletalBlend, FootPlacementRejectsPenetrationBeyondConfiguredBudget)
+{
+    SkeletalPlayback player(MakeLegAsset());
+    player.Play("legs", true, 1, true);
+    player.SetFootPlacementEnabled(true);
+    player.SetFootPlacementMaxPenetrationCm(28.0f);
+    FootPlaneProbe plane;
+    Eigen::Matrix4f component = Eigen::Matrix4f::Identity();
+    component(1, 3) = -35.0f;
+    for (int step = 0; step < 3; ++step)
+        TickFeet(player, plane, component);
+    EXPECT_FALSE(player.FootPlacement().feet[0].planted);
+
+    // 回到 20 cm 穿透后，第一帧仍有高速度；第二帧低速时恢复锁足。
+    component(1, 3) = -20.0f;
+    TickFeet(player, plane, component);
+    TickFeet(player, plane, component);
+    ASSERT_TRUE(player.FootPlacement().feet[0].planted)
+        << player.FootPlacement().reason;
+    EXPECT_NEAR(player.FootPlacement().feet[0].postSole.y(), 0.0f, 0.5f);
+}
+
+TEST(SkeletalBlend, FootPlacementKeepsPlantedFootOnGroundWhilePedestalSinks)
+{
+    SkeletalPlayback player(MakeLegAsset());
+    player.Play("legs", true, 1, true);
+    player.SetFootPlacementEnabled(true);
+    FootPlaneProbe plane;
+    Eigen::Matrix4f component = Eigen::Matrix4f::Identity();
+    TickFeet(player, plane, component);
+    TickFeet(player, plane, component);
+    ASSERT_TRUE(player.FootPlacement().feet[0].planted);
+
+    // 视觉地表抬高 15 cm 时，胶囊仍按宏高度下沉；锁足 anchor 不动，
+    // IK 必须把鞋底留在视觉地面上，而不是跟着身体穿进地表。
+    component(1, 3) = -15.0f;
+    for (int step = 0; step < 3; ++step)
+        TickFeet(player, plane, component);
+    const auto& foot = player.FootPlacement().feet[0];
+    ASSERT_TRUE(foot.planted);
+    EXPECT_NEAR(foot.postSole.y(), 0.0f, 0.5f);
+    EXPECT_LT(foot.targetError, 0.5f);
+}
+
 TEST(SkeletalBlend, FootPlacementAlignsBoundReferenceUpToSlopeWithoutMovingActor)
 {
     SkeletalPlayback player(MakeLegAsset());

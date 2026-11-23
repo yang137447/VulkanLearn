@@ -99,8 +99,8 @@ std::string TerrainLayerCardMarkup(const TerrainLayerDesc& layer, const std::str
     const std::string& spherePath, size_t index, bool selected, bool listView)
 {
     const std::string name = layer.name.empty() ? "Unnamed Layer" : layer.name;
-    const std::string meta = TerrainLayerSourceLabel(layer.sourceSet) +
-        " &#183; uvScale " + TerrainNumber(layer.uvScale);
+    // 卡片只保留身份信息；uvScale/uvRotation 在双击滑出的细节面板里配置。
+    const std::string meta = "Layer " + std::to_string(index);
     std::string classes = "terrain-layer-card ";
     classes += listView ? "terrain-layer-list-card" : "terrain-layer-grid-card";
     if (selected) classes += " selected";

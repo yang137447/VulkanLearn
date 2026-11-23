@@ -73,6 +73,13 @@ std::string ValueText(const Json& value)
     return value.dump();
 }
 
+std::string NumberText(float value)
+{
+    std::ostringstream stream;
+    stream << value;
+    return stream.str();
+}
+
 std::vector<Json> CapabilityFields(const Json& capabilities, bool layer)
 {
     std::vector<Json> fields;
@@ -123,6 +130,12 @@ void TerrainAssetEditorController::SetCommandSink(IEditorCommandSink* value)
     sink = value;
 }
 
+void TerrainAssetEditorController::SetMaterialEditSink(
+    ITerrainMaterialEditSink* value)
+{
+    materialEditSink = value;
+}
+
 bool TerrainAssetEditorController::Attach(Rml::ElementDocument& candidate, std::string& error)
 {
     if (candidate.GetElementById("terrain-asset-editor") == nullptr)
@@ -139,6 +152,11 @@ void TerrainAssetEditorController::Detach()
 {
     document = nullptr;
     current = nullptr;
+    currentMaterialPath.clear();
+    currentMaterialRevision = 0;
+    currentMaterialOpen = false;
+    currentMaterialHasTiling = false;
+    currentMaterialTiling = 0.0f;
     currentDocument = Json::object();
     currentCapabilities = Json::object();
     currentPath.clear();
@@ -201,6 +219,56 @@ std::string TerrainAssetEditorController::FieldsMarkup(
     return markup;
 }
 
+std::string TerrainAssetEditorController::MaterialMarkup(
+    const EditorAssetDocumentResultPayload& payload,
+    const MaterialInstanceDocumentSnapshot* materialDocument) const
+{
+    const std::string materialPath = payload.document.value(
+        "materialInstancePath", std::string());
+    std::string markup =
+        "<div class=\"terrain-layer-title\">Terrain Material</div>";
+    if (materialPath.empty())
+    {
+        return markup +
+            "<p class=\"terrain-empty\">No material instance assigned.</p>";
+    }
+
+    const EditorParameterSnapshot* tiling = nullptr;
+    if (materialDocument != nullptr &&
+        materialDocument->assetPath == materialPath)
+    {
+        for (const EditorParameterSnapshot& parameter :
+             materialDocument->parameters)
+        {
+            if (parameter.name == "u_uvScale")
+            {
+                tiling = &parameter;
+                break;
+            }
+        }
+    }
+
+    markup += "<div class=\"terrain-field-row\"><label>Material</label>" +
+        std::string("<span class=\"terrain-field-unit\">") +
+        Text(materialPath) + "</span></div>";
+    if (tiling != nullptr)
+    {
+        markup += "<div class=\"terrain-field-row\"><label>Global UV Tiling</label>" +
+            std::string("<input type=\"text\" id=\"terrain-material-u_uvScale\"") +
+            " data-action=\"terrain-material-parameter\" data-parameter=\"u_uvScale\"" +
+            " value=\"" + Text(NumberText(tiling->effectiveValue.values[0])) +
+            "\"/></div>";
+    }
+    else
+    {
+        markup += "<p class=\"terrain-empty\">Open the shared material instance "
+            "to edit global tiling and the detail/macro controls.</p>";
+    }
+    markup += "<button id=\"terrain-material-open\" "
+        "data-action=\"terrain-material-open\">Open Terrain Material</button>";
+    return markup;
+}
+
 std::string TerrainAssetEditorController::LayerMarkup(
     const EditorAssetDocumentResultPayload& payload) const
 {
@@ -240,7 +308,8 @@ std::string TerrainAssetEditorController::StatusText(
 
 void TerrainAssetEditorController::Build(
     const EditorAssetDocumentResultPayload* payload,
-    bool loading)
+    bool loading,
+    const MaterialInstanceDocumentSnapshot* materialDocument)
 {
     if (document == nullptr) return;
     current = payload;
@@ -252,6 +321,11 @@ void TerrainAssetEditorController::Build(
         currentDocument = Json::object();
         currentCapabilities = Json::object();
         currentPath.clear();
+        currentMaterialPath.clear();
+        currentMaterialRevision = 0;
+        currentMaterialOpen = false;
+        currentMaterialHasTiling = false;
+        currentMaterialTiling = 0.0f;
         if (renderedIdentity != "empty")
         {
             renderedIdentity = "empty";
@@ -272,20 +346,52 @@ void TerrainAssetEditorController::Build(
     currentCapabilities = payload->capabilities;
     currentPath = payload->assetPath;
     currentRevision = payload->documentRevision;
+    currentMaterialPath = payload->document.value(
+        "materialInstancePath", std::string());
+    currentMaterialOpen = materialDocument != nullptr &&
+        materialDocument->assetPath == currentMaterialPath;
+    currentMaterialRevision = currentMaterialOpen
+        ? materialDocument->revision : 0;
+    currentMaterialHasTiling = false;
+    currentMaterialTiling = 0.0f;
+    if (materialDocument != nullptr &&
+        materialDocument->assetPath == currentMaterialPath)
+    {
+        for (const EditorParameterSnapshot& parameter :
+             materialDocument->parameters)
+        {
+            if (parameter.name == "u_uvScale")
+            {
+                currentMaterialHasTiling = true;
+                currentMaterialTiling = parameter.effectiveValue.values[0];
+                break;
+            }
+        }
+    }
     const std::string identity = payload->assetPath + "|" +
         std::to_string(payload->documentRevision) + "|" +
-        (payload->dirty ? "dirty" : "clean") + "|" + localError;
+        (payload->dirty ? "dirty" : "clean") + "|" +
+        currentMaterialPath + "|" +
+        std::to_string(currentMaterialRevision) + "|" +
+        (currentMaterialHasTiling ? NumberText(currentMaterialTiling) : "-") +
+        "|" + localError;
     if (identity != renderedIdentity)
     {
         const std::string markup =
             "<div class=\"terrain-asset-header\"><h3>" +
             Text(payload->document.value("name", std::string("Terrain"))) + "</h3>" +
             "<span>TR asset</span></div>" +
+            "<p class=\"notice\">Composited VT and resident tiling height are required. "
+            "Import terrain assets with tool/terrain-ue-import/build_vulkanlearn_assets.py, "
+            "then Cook the generated scene with main_editor --terrain-vt-cook before loading it in 3D. "
+            "This asset page previews the authored heightmap; it does not Cook or render an uncooked terrain.</p>" +
             (payload->heightmapPreviewPath.empty()
                 ? "<p class=\"terrain-empty\">Heightmap preview unavailable (missing, EXR, or unsupported format).</p>"
                 : "<div class=\"terrain-heightmap-preview\"><img src=\"" +
                     Text(payload->heightmapPreviewPath) + "\" alt=\"Heightmap preview\"/></div>") +
             "<div id=\"terrain-asset-fields\">" + FieldsMarkup(*payload) + "</div>" +
+            "<div id=\"terrain-material\">" +
+            MaterialMarkup(*payload, materialDocument) + "</div>" +
             "<div class=\"terrain-layer-title\">Layers</div>" +
             "<div id=\"terrain-layer-list\">" + LayerMarkup(*payload) + "</div>" +
             "<button id=\"terrain-layer-add\" data-action=\"terrain-layer-add\">Add Layer</button>" +
@@ -402,6 +508,43 @@ bool TerrainAssetEditorController::SubmitChange(Rml::Element& element, bool laye
     return true;
 }
 
+bool TerrainAssetEditorController::SubmitMaterialTiling(Rml::Element& element)
+{
+    if (current == nullptr) return true;
+    if (!currentMaterialOpen || materialEditSink == nullptr)
+    {
+        localError =
+            "Open the terrain material before editing global tiling.";
+        return true;
+    }
+    const std::string parameter =
+        element.GetAttribute<std::string>("data-parameter", "");
+    if (parameter != "u_uvScale")
+    {
+        localError = "Unsupported terrain material parameter: " + parameter;
+        return true;
+    }
+    try
+    {
+        const double value = ParseNumber(ControlText(element), parameter.c_str());
+        if (value <= 0.0)
+            throw std::invalid_argument("Global UV tiling must be positive.");
+        if (!materialEditSink->QueueMaterialFloat(
+                currentMaterialPath, parameter, static_cast<float>(value)))
+        {
+            localError = "The terrain material changed before the edit was queued.";
+            return true;
+        }
+    }
+    catch (const std::exception& error)
+    {
+        localError = error.what();
+        return true;
+    }
+    localError.clear();
+    return true;
+}
+
 bool TerrainAssetEditorController::SubmitLayerTable(const nlohmann::json& layers)
 {
     if (current == nullptr || sink == nullptr) return true;
@@ -427,6 +570,16 @@ bool TerrainAssetEditorController::HandleClick(
     const std::string& action)
 {
     if (current == nullptr || sink == nullptr) return false;
+    if (action == "terrain-material-open")
+    {
+        if (currentMaterialPath.empty()) return true;
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::OpenMaterialInstanceAsset;
+        command.payload = OpenMaterialInstanceAssetPayload{
+            currentMaterialPath, std::nullopt};
+        sink->Submit(std::move(command));
+        return true;
+    }
     if (action == "terrain-layer-add")
     {
         Json layers = CurrentLayers();
@@ -466,6 +619,8 @@ bool TerrainAssetEditorController::HandleChange(
     Rml::Element& element,
     const std::string& action)
 {
+    if (action == "terrain-material-parameter")
+        return SubmitMaterialTiling(element);
     if (action != "terrain-asset-field") return false;
     return SubmitChange(element, element.HasAttribute("data-layer-scope"));
 }

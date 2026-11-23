@@ -2,11 +2,15 @@
 
 #include <array>
 #include <cmath>
+#include <chrono>
+#include <cstdlib>
+#include <iomanip>
 #include <iostream>
 #include <sstream>
 
 #include "core/logStore.h"
 #include "render/backend/rendererBackendVulkan.h"
+#include "render/backend/frameTimingEvidence.h"
 
 namespace VL
 {
@@ -190,7 +194,15 @@ void GpuPassTimer::PrepareFrame(uint32_t frameSlot)
     EnsureQueryPool(frameSlot);
 }
 
-void GpuPassTimer::BeginFrame(vk::CommandBuffer commandBuffer, uint32_t frameSlot)
+bool GpuPassTimer::WantsFrameQueries(uint32_t frameSlot) const
+{
+    return initialized && backend && supported && frameSlot < frameSlots.size() &&
+        (loggingEnabled || collectionRequested.load(std::memory_order_acquire));
+}
+
+void GpuPassTimer::BeginFrame(
+    vk::CommandBuffer commandBuffer, uint32_t frameSlot,
+    const RenderFrameIdentity& identity, uint64_t completedEpoch)
 {
     frameActive = false;
     passOpen = false;
@@ -218,9 +230,10 @@ void GpuPassTimer::BeginFrame(vk::CommandBuffer commandBuffer, uint32_t frameSlo
 
     EnsureQueryPool(frameSlot);
     // 上上次使用该槽位的提交已经由 backend BeginFrame 等待过 fence，结果可无阻塞读取。
-    CollectSlotResults(frameSlot);
+    CollectSlotResults(frameSlot, completedEpoch);
 
     FrameSlot& slot = frameSlots[frameSlot];
+    slot.identity.Begin(identity);
     // 在命令缓冲里重置该槽位的查询范围：上一批命令已随 fence 完成，不会与在飞工作重叠。
     commandBuffer.resetQueryPool(
         slot.queryPool,
@@ -246,10 +259,29 @@ void GpuPassTimer::EndFrame()
     }
 
     slot.pendingCount = slot.currentCount;
-    slot.pendingValid = slot.pendingCount > 0;
+    slot.pendingValid = false;
+    slot.identity.End(slot.pendingCount > 0);
     slot.currentNames.swap(slot.pendingNames);
     slot.currentCount = 0;
     frameActive = false;
+}
+
+void GpuPassTimer::FrameSubmitted() noexcept
+{
+    if (activeSlot < frameSlots.size() && frameSlots[activeSlot].identity.Submitted())
+        frameSlots[activeSlot].pendingValid = frameSlots[activeSlot].pendingCount > 0;
+}
+
+void GpuPassTimer::AbortFrame() noexcept
+{
+    if (activeSlot < frameSlots.size())
+    {
+        frameSlots[activeSlot].identity.Abort();
+        if (frameActive)
+            frameSlots[activeSlot].currentCount = 0;
+    }
+    frameActive = false;
+    passOpen = false;
 }
 
 bool GpuPassTimer::BeginPass(
@@ -332,13 +364,15 @@ void GpuPassTimer::EnsureQueryPool(uint32_t frameSlot)
     slot.pendingValid = false;
 }
 
-void GpuPassTimer::CollectSlotResults(uint32_t frameSlot)
+void GpuPassTimer::CollectSlotResults(uint32_t frameSlot, uint64_t completedEpoch)
 {
     FrameSlot& slot = frameSlots[frameSlot];
-    if (!slot.pendingValid || slot.pendingCount == 0)
+    if (!slot.pendingValid || slot.pendingCount == 0 || !slot.identity.Pending())
     {
         return;
     }
+    if (!slot.identity.Completed(completedEpoch))
+        throw std::logic_error("GPU timing batch has no matching completed frame fence epoch");
 
     frameDurations.assign(slot.pendingCount, std::nullopt);
     for (uint32_t i = 0; i < slot.pendingCount; ++i)
@@ -360,8 +394,38 @@ void GpuPassTimer::CollectSlotResults(uint32_t frameSlot)
     }
 
     timingRing.Configure(slot.pendingNames);
+    const auto readbackNs = std::chrono::duration_cast<std::chrono::nanoseconds>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+    if (FrameTimingEvidenceRequested())
+        RuntimeEvidence::Record("GPU_RAW", GpuFrameTimingPayload(*slot.identity.Pending(), frameSlot,
+            collectedFrameCount, completedEpoch, readbackNs, slot.pendingNames, frameDurations, slot.pendingCount));
+    static const bool rawTimingEnabled = std::getenv("VL_GPU_TIMING_RAW") != nullptr;
+    if (rawTimingEnabled)
+    {
+        std::ostringstream raw;
+        raw << "[GPU_RAW] {";
+        WriteRawFrameIdentity(raw, *slot.identity.Pending());
+        raw << ",\"readbackSequence\":" << collectedFrameCount
+            << ",\"readbackMonotonicNs\":" << readbackNs
+            << ",\"fenceCompletedEpoch\":" << completedEpoch
+            << ",\"slot\":" << frameSlot << ",\"passes\":[";
+        for (uint32_t index = 0; index < slot.pendingCount; ++index)
+        {
+            if (index != 0)
+                raw << ',';
+            raw << "{\"name\":" << std::quoted(slot.pendingNames[index]) << ",\"ms\":";
+            if (frameDurations[index])
+                raw << std::setprecision(12) << *frameDurations[index];
+            else
+                raw << "null";
+            raw << '}';
+        }
+        raw << "]}";
+        std::cout << raw.str() << '\n';
+    }
     timingRing.AddFrame(frameDurations);
     slot.pendingValid = false;
+    slot.identity.Consumed();
     ++collectedFrameCount;
     ++framesSinceLog;
     PublishSnapshot();

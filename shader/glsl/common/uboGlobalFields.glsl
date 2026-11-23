@@ -40,5 +40,8 @@ vec4 fogParams1;
 vec4 fogParams2;
 // 保留：后续再加时间/风扰动时使用。
 vec4 fogParams3;
+// xy = 场景逻辑渲染宽高（像素），zw = 1/宽、1/高。
+// 地形 TCS 用屏幕空间边长决定细分因子，远处不会按世界距离继续过采样。
+vec4 viewportParams;
 
 #endif

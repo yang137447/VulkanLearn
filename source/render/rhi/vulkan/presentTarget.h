@@ -1,6 +1,7 @@
 #pragma once
 
 #include <cstdint>
+#include <memory>
 #include <optional>
 #include <vector>
 
@@ -10,6 +11,26 @@ struct SDL_Window;
 
 namespace VL
 {
+struct PresentSwapchainResources
+{
+    explicit PresentSwapchainResources(vk::Device device);
+    ~PresentSwapchainResources();
+    PresentSwapchainResources(const PresentSwapchainResources&) = delete;
+    PresentSwapchainResources& operator=(const PresentSwapchainResources&) = delete;
+    static std::shared_ptr<PresentSwapchainResources> Create(
+        vk::Device device, vk::SwapchainCreateInfoKHR createInfo,
+        std::shared_ptr<const PresentSwapchainResources> oldOwner = {});
+
+    vk::Device device;
+    vk::SwapchainKHR swapchain;
+    std::vector<vk::ImageView> imageViews;
+
+private:
+    friend void ReleasePresentSwapchainsForDevice(vk::Device device);
+    void ReleaseNativeResources();
+};
+
+void ReleasePresentSwapchainsForDevice(vk::Device device);
 
 // 一个"呈现目标"= 一个窗口那套与呈现相关的 Vulkan 状态。
 //
@@ -24,8 +45,8 @@ namespace VL
 //   - 而 `imageAcquiredSemaphores` / `taskFinishedFences` 按 `MAX_FRAMES_IN_FLIGHT` 分配，
 //     是帧级、跨目标可共享，因此留在 `VulkanManager`。
 //
-// 本类型只描述状态，不持有设备：创建/销毁需要 `vk::Device` 与物理设备，由 `VulkanManager`
-// 传入，避免这里再出现第二个设备来源。
+// 目标状态借用唯一设备；swapchainOwner 叶包负责 views/swapchain 的延迟销毁，
+// 设备仍由 VulkanManager 创建和销毁。
 struct PresentTarget
 {
     SDL_Window* window = nullptr;
@@ -54,6 +75,13 @@ struct PresentTarget
 
     // 呈现队列族可能与其他目标不同：每个 surface 各自解析（当前只对目标 0 解析过）。
     std::optional<uint32_t> presentQueueFamilyIndex;
+    std::shared_ptr<PresentSwapchainResources> swapchainOwner;
+    uint64_t swapchainGeneration = 0;
+
+    void PublishSwapchain(std::shared_ptr<PresentSwapchainResources> owner,
+        std::vector<vk::Image> swapchainImages);
+    std::shared_ptr<PresentSwapchainResources> DetachSwapchainForReplacement();
+    void DetachSwapchain();
 };
 
 } // namespace VL

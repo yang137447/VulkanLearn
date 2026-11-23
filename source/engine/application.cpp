@@ -1,11 +1,13 @@
 #include "engine/application.h"
 
+#include "core/runtimeEvidence.h"
 #include "engine/diagnosticsSubsystem.h"
 #include "engine/editorHost.h"
 #include "engine/engineLoop.h"
 #include "engine/launchOptions.h"
 #include "engine/runtimeConfig.h"
 #include "platform/platformApplication.h"
+#include "render/resource/terrainCompositedService.h"
 
 #include <filesystem>
 #include <iostream>
@@ -35,7 +37,7 @@ void PrepareExportedGameDirectory()
 namespace VL
 {
 
-int RunApplication(
+static int RunApplicationBody(
     int argc,
     char** argv,
     std::function<std::unique_ptr<IEditorHost>()> createEditorHost)
@@ -47,6 +49,7 @@ int RunApplication(
         return 1;
     }
     const LaunchOptions launchOptions = ParseLaunchOptions(argc, argv);
+    TerrainCompositedService::SetCookMode(launchOptions.terrainVtCook);
     if (launchOptions.showHelp)
     {
         PrintLaunchUsage();
@@ -67,6 +70,9 @@ int RunApplication(
         diagnostics.ReportRuntimeError("Runtime config load failed", configResult.Error());
         return 1;
     }
+    // 启动参数只覆盖本进程的脚本自动 Play，不写回 config。
+    if (launchOptions.autoplay)
+        runtimeConfig.OverrideScriptAutoPlay(true);
 
     PlatformApplicationDesc platformDesc;
     platformDesc.windowWidth = static_cast<int>(runtimeConfig.GetWindowSize().x());
@@ -83,6 +89,15 @@ int RunApplication(
 
     EngineLoop engineLoop;
     std::unique_ptr<IEditorHost> editorHost = createEditorHost ? createEditorHost() : nullptr;
+    TerrainCompositedService::SetAuthoringMode(
+        editorHost && editorHost->IsEditorFlavor());
+    if (launchOptions.terrainVtCook &&
+        (!editorHost || !editorHost->IsEditorFlavor()))
+    {
+        std::cerr << "--terrain-vt-cook requires main_editor." << std::endl;
+        platformApplication.Shutdown();
+        return 1;
+    }
     auto initResult = engineLoop.Init(
         platformApplication,
         runtimeConfig,
@@ -101,6 +116,15 @@ int RunApplication(
     engineLoop.Shutdown();
     platformApplication.Shutdown();
     return engineLoop.GetExitCode();
+}
+
+int RunApplication(
+    int argc,
+    char** argv,
+    std::function<std::unique_ptr<IEditorHost>()> createEditorHost)
+{
+    RuntimeEvidence::ApplicationScope evidence;
+    return evidence.Finish(RunApplicationBody(argc, argv, std::move(createEditorHost)));
 }
 
 } // namespace VL

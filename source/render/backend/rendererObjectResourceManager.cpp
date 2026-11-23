@@ -14,6 +14,7 @@
 #include "render/shadow/materialShadowCasterPolicy.h"
 #include "render/skinning/skinDeformLayout.h"
 #include "shaderReflect.h"
+#include "texture.h"
 
 namespace VL
 {
@@ -123,6 +124,9 @@ void UpdateObjectDescriptorSets(
     MaterialInstance& materialInstance,
     RendererObjectGpuResources& resources)
 {
+    resources.materialTextureReferences.resize(rendererBackend.GetSwapchainImageCount());
+    resources.materialTextureVersions.resize(rendererBackend.GetSwapchainImageCount(), 0);
+    resources.materialTextureOwners.resize(rendererBackend.GetSwapchainImageCount(), nullptr);
     const uint32_t swapChainImageCount = rendererBackend.GetSwapchainImageCount();
     resources.writeDescriptorSets.resize(swapChainImageCount);
     std::shared_ptr<Material> baseMaterial = materialInstance.GetBaseMaterial().lock();
@@ -262,6 +266,9 @@ void UpdateObjectDescriptorSets(
                 update.source = binding.set == GlobalSetIndex
                     ? RendererDescriptorUpdateSource::GlobalTexture
                     : RendererDescriptorUpdateSource::MaterialTexture;
+                if (binding.set == MaterialSetIndex)
+                    resources.materialTextureReferences[i][binding.binding] =
+                        materialInstance.GetTexture(binding.name);
             }
             else
             {
@@ -284,6 +291,8 @@ void UpdateObjectDescriptorSets(
         {
             rendererBackend.UpdateDescriptorSets(resources.writeDescriptorSets[i]);
         }
+        resources.materialTextureVersions[i] = materialInstance.GetTextureBindingVersion();
+        resources.materialTextureOwners[i] = &materialInstance;
     }
 }
 
@@ -459,6 +468,9 @@ void DestroyObjectDescriptorSets(
     resources.descriptorSetHandles.clear();
     resources.descriptorSets.clear();
     resources.writeDescriptorSets.clear();
+    resources.materialTextureReferences.clear();
+    resources.materialTextureVersions.clear();
+    resources.materialTextureOwners.clear();
 }
 
 void DestroyShadowDescriptorSets(
@@ -480,6 +492,68 @@ void DestroyShadowDescriptorSets(
 }
 
 } // namespace
+
+void RendererObjectResourceManager::RefreshMaterialTexturesForImage(
+    RendererBackendVulkan& rendererBackend,
+    MaterialInstance& materialInstance,
+    uint32_t swapchainImageIndex,
+    RendererObjectGpuResources& resources) const
+{
+    if (!resources.initialized || swapchainImageIndex >= resources.descriptorSets.size() ||
+        resources.descriptorSets[swapchainImageIndex].size() <= MaterialSetIndex ||
+        !resources.descriptorSets[swapchainImageIndex][MaterialSetIndex])
+        return;
+    resources.materialTextureReferences.resize(resources.descriptorSets.size());
+    resources.materialTextureVersions.resize(resources.descriptorSets.size(), 0);
+    resources.materialTextureOwners.resize(resources.descriptorSets.size(), nullptr);
+    const auto version = materialInstance.GetTextureBindingVersion();
+    if (resources.materialTextureOwners[swapchainImageIndex] == &materialInstance &&
+        resources.materialTextureVersions[swapchainImageIndex] == version)
+        return;
+    auto& retained = resources.materialTextureReferences[swapchainImageIndex];
+    const auto material = materialInstance.GetBaseMaterial().lock();
+    if (!material)
+        throw std::runtime_error("Material texture refresh requires a live base material");
+    std::vector<vk::WriteDescriptorSet> writes;
+    std::map<uint32_t, std::shared_ptr<Texture>> replacements;
+    for (const auto& binding : material->GetActiveShaderBindings())
+    {
+        if (binding.set != MaterialSetIndex ||
+            binding.type != vk::DescriptorType::eCombinedImageSampler)
+            continue;
+        const auto texture = materialInstance.GetTexture(binding.name);
+        if (!texture)
+            throw std::runtime_error("Material texture refresh is missing " + binding.name);
+        const auto existing = retained.find(binding.binding);
+        if (existing != retained.end() && existing->second == texture)
+            continue;
+        replacements[binding.binding] = texture;
+        vk::WriteDescriptorSet write;
+        write.setDstSet(resources.descriptorSets[swapchainImageIndex][MaterialSetIndex])
+            .setDstBinding(binding.binding)
+            .setDescriptorType(binding.type)
+            .setDescriptorCount(1)
+            .setImageInfo(texture->GetDescriptorInfo());
+        writes.push_back(write);
+    }
+    if (writes.empty())
+    {
+        resources.materialTextureVersions[swapchainImageIndex] = version;
+        resources.materialTextureOwners[swapchainImageIndex] = &materialInstance;
+        return;
+    }
+    rendererBackend.UpdateDescriptorSets(writes);
+    for (const auto& replacement : replacements)
+    {
+        retained[replacement.first] = replacement.second;
+        for (auto& cached : resources.writeDescriptorSets[swapchainImageIndex])
+            if (cached.dstSet == resources.descriptorSets[swapchainImageIndex][MaterialSetIndex] &&
+                cached.dstBinding == replacement.first)
+                cached.setImageInfo(replacement.second->GetDescriptorInfo());
+    }
+    resources.materialTextureVersions[swapchainImageIndex] = version;
+    resources.materialTextureOwners[swapchainImageIndex] = &materialInstance;
+}
 
 void RendererObjectResourceManager::InitializeObjectResources(
     RendererBackendVulkan& rendererBackend,

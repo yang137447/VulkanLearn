@@ -389,6 +389,28 @@
 - 相关：`tool/blender-terrain-import/build_pegasus_tiled.py` 的
   `if args.river:` 分支
 
+### [terrain-loading-gate-must-not-follow-view-quality] RVT 加载闸门不能绑定逐视角画质证据
+
+- 适用场景：任何把 `TerrainCompositedQualityReady` / `TerrainQualityValidation::Ready`
+  当作交互期 UI/输入开关的地方（`terrainLoadingGate`、`RecordLoading` 黑帧）
+- 失败表现：第三人称跑图时转动视角或走过几米，画面周期性黑一下并闪出
+  “Loading terrain...”，同时 WASD/鼠标被短暂禁用；快速转身时接近连续闪烁
+- 根因：`TerrainQualityValidation::Begin` 把“视角离开已验证域（>15° 或 >5.12 m）”
+  当作新到达，直接 `Invalidate`（poseId++、`ready=false`）。加载闸门与黑帧都读
+  这个逐视角 `Ready`，所以每次转动都会重新进入 Loading，直到下一次质量快照
+  通过（约 1–2 s）
+- 规避动作：区分“到达收敛”与“逐视角证据”。`ArrivalConverged` 只在 World 换代、
+  资源身份变化或显式 `pose_arrived`（loadscene/相机传送）时撤销，一次达标后保持；
+  视角漂移走 `Relocate` 只清逐视角 `ready`。闸门与黑帧用
+  `TerrainCompositedArrivalReady`，证据/诊断继续用 `TerrainCompositedQualityReady`
+- 证据：2026-11-23 本机 `RVT_QUALITY_STATE` 在相机指令后 `interactive=false`
+  持续约 2 s（poseId 递增）；修复后新增 `terrain_quality_readiness_tests` 5 项覆盖
+  转身保持到达、显式到达/换代撤销、失败快照不达标，`main_game` 默认场景仍 exit 0
+- owner / status / last_verified：仓库维护者 / 已确认 / 2026-11-23
+- 相关：`source/render/frame/terrainCompositedQualityValidation.cpp`、
+  `source/engine/frame/terrainLoadingGate.h`、
+  `documents/contracts/terrain-composited-vt.md`
+
 ## 维护规则
 
 - 规则失效时删除或标注迁移去向，不保留误导性旧结论。

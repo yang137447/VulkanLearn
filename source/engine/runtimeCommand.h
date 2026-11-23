@@ -12,6 +12,7 @@
 #include "hair/tressfxLiveParams.h"
 #include "hair/tressfxGroupPaint.h"
 #include "world/actorProperty.h"
+#include "terrain/terrainFaultInjection.h"
 
 namespace VL
 {
@@ -24,6 +25,7 @@ enum class RuntimeCommandType
     RunShaderReloadTest,
     RunShaderComputeReloadTest,
     RunWorldGraphTransactionTest,
+    RequestTerrainRvtFault,
     // stringValue=相对资源根的文件名，intValue=每个 emitter 的最大明细粒子数。
     DumpParticles,
     // 打印上一帧粒子发射器/绘制/排序预算；不改变渲染状态。
@@ -117,7 +119,7 @@ enum class RuntimeCommandType
     ReportShaderCacheStatistics,
     ReportTerrainFeedbackStatistics,
     ReportTerrainStatistics,
-    ReportTerrainLayerStatistics,
+    ReportTerrainCompositedStatistics,
     ReportTerrainLodStatistics,
     // 几何 chunk 驻留/显存基线：加载期创建的级与 chunk 数、顶点/索引字节、
     // 当前帧实际出图数。只读诊断，不改渲染状态。
@@ -127,11 +129,6 @@ enum class RuntimeCommandType
     // 比较；intValue = tileX * 32 + tileZ，渲染线程帧边界同步执行一次。
     RunTerrainPageBakeParity,
     SetTerrainResidentCapacity,
-    // L4a：层页预算与对照全量预取；都只排队到渲染线程帧首执行。
-    SetTerrainLayerResidentCapacity,
-    RequestTerrainLayerPreload,
-    // L4e：强制目标 mip（-1 = 自动），只影响 mode 1，用于复现缺页回退。
-    SetTerrainLayerForceMip,
     // 打印最近一次读回的逐 pass GPU 计时表；未开启采集时同时启动采集。
     PrintGpuPassStats,
     // 打印与 Performance 页同源的单行 JSON；未开启采集时同时启动采集。
@@ -196,6 +193,7 @@ struct MeshPlacementRequest
 struct RuntimeCommand
 {
     RuntimeCommandType type = RuntimeCommandType::SetDebugViewMode;
+    TerrainFaultRequest terrainFaultRequest;
     BloomParameter bloomParameter = BloomParameter::Strength;
     RuntimeShaderReloadScope shaderReloadScope =
         RuntimeShaderReloadScope::Changed;

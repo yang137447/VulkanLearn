@@ -79,6 +79,26 @@ find_package(Threads REQUIRED)
 if(VULKANLEARN_DEPS_MODE STREQUAL "prebuilt")
     include(cmake/VulkanLearnDeps.cmake)
     vl_deps_configure_prebuilt()
+elseif(WIN32 AND CMAKE_CXX_COMPILER_ID STREQUAL "GNU")
+    # source 模式同样把编译器自带的 MinGW 运行时三件套放到 exe 旁边，不依赖 PATH。
+    # 否则 Windows 会按 PATH 加载别处的同名 DLL（如 Git for Windows 的 ucrt64/bin），
+    # libstdc++ ABI 不一致时进程在静态析构 std::mutex::unlock 处 abort（system_error EINVAL）。
+    get_filename_component(vl_compiler_bin "${CMAKE_CXX_COMPILER}" DIRECTORY)
+    set(vl_runtime_copy_commands)
+    foreach(runtime_dll libstdc++-6.dll libgcc_s_seh-1.dll libwinpthread-1.dll)
+        if(EXISTS "${vl_compiler_bin}/${runtime_dll}")
+            list(APPEND vl_runtime_copy_commands
+                COMMAND "${CMAKE_COMMAND}" -E copy_if_different
+                    "${vl_compiler_bin}/${runtime_dll}" "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}")
+        endif()
+    endforeach()
+    if(vl_runtime_copy_commands)
+        add_custom_target(vl_mingw_runtime_dlls ALL
+            COMMAND "${CMAKE_COMMAND}" -E make_directory "${CMAKE_RUNTIME_OUTPUT_DIRECTORY}"
+            ${vl_runtime_copy_commands}
+            COMMENT "Deploying MinGW runtime DLLs"
+            VERBATIM)
+    endif()
 endif()
 
 if(NOT "Jolt" IN_LIST VULKANLEARN_DEPS_SKIP)
@@ -133,13 +153,15 @@ if(VULKANLEARN_BUILD_TESTS)
     function(vulkanlearn_add_gtest target)
         cmake_parse_arguments(VL_GTEST "" "WORKING_DIRECTORY" "" ${ARGN})
         target_link_libraries(${target} PRIVATE GTest::gtest_main)
-        if(VL_GTEST_WORKING_DIRECTORY)
-            gtest_discover_tests(${target}
-                WORKING_DIRECTORY "${VL_GTEST_WORKING_DIRECTORY}"
-                DISCOVERY_TIMEOUT 30)
-        else()
-            gtest_discover_tests(${target} DISCOVERY_TIMEOUT 30)
+        # 默认在源码根运行：-fmacro-prefix-map 把 __FILE__ 改写为 "./tool/..." 相对路径，
+        # 依赖 __FILE__ 或 "./shader"、"config/" 定位仓库文件的测试只有在根目录才解析正确；
+        # ctest 默认工作目录是 build 子目录，会让这些测试找错文件。
+        if(NOT VL_GTEST_WORKING_DIRECTORY)
+            set(VL_GTEST_WORKING_DIRECTORY "${PROJECT_SOURCE_DIR}")
         endif()
+        gtest_discover_tests(${target}
+            WORKING_DIRECTORY "${VL_GTEST_WORKING_DIRECTORY}"
+            DISCOVERY_TIMEOUT 30)
     endfunction()
 
     add_subdirectory(tool/shader-build-core-tests)
@@ -170,6 +192,12 @@ if(VULKANLEARN_BUILD_TESTS)
     if(VULKANLEARN_BUILD_ANIMATION_TOOLS)
         add_subdirectory(tool/animation-tests)
     endif()
+endif()
+
+option(VULKANLEARN_BUILD_TERRAIN_CAPTURE_VALIDATION
+    "Build the explicit terrain native capture validation executable." OFF)
+if(VULKANLEARN_BUILD_TERRAIN_CAPTURE_VALIDATION)
+    include(tool/validation/terrain/native-capture/capture-targets.cmake)
 endif()
 
 option(VULKANLEARN_BUILD_SPEEDTREE_WIND_VALIDATION

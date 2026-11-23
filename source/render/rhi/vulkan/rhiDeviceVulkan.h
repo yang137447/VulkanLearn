@@ -103,6 +103,9 @@ public:
     // Initialize 不在此列：它是引导入口，负责创建设备与目标 0。
     void RecreateSwapchain(VL::PresentTarget& target, int width, int height);
     void WaitForFence(vk::Fence fence);
+    // 有界等待：只用于“已知提交”的 fence（例如截图回读）。超时返回 false，
+    // 不修改 fence，也不隐式退回 device-wide WaitIdle；调用方决定安全失败路径。
+    bool WaitForFence(vk::Fence fence, uint64_t timeoutNanoseconds);
     void ResetFence(vk::Fence fence);
     SwapchainFrameResult AcquireNextSwapchainImage(
         VL::PresentTarget& target,
@@ -125,6 +128,8 @@ public:
     vk::Format GetSwapchainImageFormat(const VL::PresentTarget& target) const;
     const std::vector<vk::ImageView>& GetSwapchainImageViews(const VL::PresentTarget& target) const;
     const std::vector<vk::Image>& GetSwapchainImages(const VL::PresentTarget& target) const;
+    std::shared_ptr<const void> CapturePresentTargetLifetime(const VL::PresentTarget& target) const;
+    uint64_t GetPresentTargetGeneration(const VL::PresentTarget& target) const;
 
     RHIBufferHandle CreateBuffer(
         vk::DeviceSize size,
@@ -351,6 +356,8 @@ public:
         std::array<uint64_t, 2>& timestamps);
     // 向上暴露逻辑设备已启用的双源混合能力，供材质 variant 与 pipeline 同步降级。
     bool IsDualSourceBlendEnabled() const;
+    bool IsTessellationShaderEnabled() const;
+    bool IsFillModeNonSolidEnabled() const;
     bool IsDrawIndirectCountEnabled() const;
     vk::QueryPool CreateTimestampQueryPool(
         uint32_t queryCount,

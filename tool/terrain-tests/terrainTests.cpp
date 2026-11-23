@@ -1,4 +1,5 @@
 #include <algorithm>
+#include <array>
 #include <chrono>
 #include <cmath>
 #include <cstring>
@@ -8,6 +9,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <regex>
 #include <set>
 #include <stdexcept>
 #include <string>
@@ -16,6 +18,7 @@
 #include <gtest/gtest.h>
 #include <nlohmann/json.hpp>
 
+#include "commonFunction.h"
 #include "materialInstance.h"
 #include "resource/image/hostImage.h"
 #include "resource/image/textureIO.h"
@@ -168,6 +171,7 @@ nlohmann::json BuildTerrainJson()
     return {
         {"name", "TR_terrain_tests"},
         {"type", "terrain"},
+        {"compositedVT", {{"enabled", true}, {"packagePath", "Generated/Validation/TerrainTests/Cooked/manifest.json"}}},
         {"heightmapPath", "Generated/Validation/TerrainTests/heightmap.png"},
         {"size", {1000.0, 1000.0}},
         {"heightScale", 100.0},
@@ -461,6 +465,305 @@ TEST(TerrainMeshBuilder, Lod0KeepsLegacyVertexAndIndexLayout)
         Eigen::Vector2f(0.0f, 0.25f)));
     // 没有任何顶点被额外边界几何拉到地表以下。
     EXPECT_FLOAT_EQ(first.boundsMin.y(), 0.0f);
+}
+
+TEST(TerrainMeshBuilder, Lod0BuildsQuadPatchIndices)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x + y) * 0.1f;
+        }));
+    plan.desc.gridResolution = 4;
+    plan.desc.chunkQuads = 4;
+    plan.desc.lodLevels = 2;
+
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 0);
+    ASSERT_EQ(chunks.size(), 1u);
+    const VL::TerrainMeshChunk& chunk = chunks.front();
+    const uint32_t quadCount = plan.desc.chunkQuads;
+    const uint32_t vertexStride = quadCount + 1;
+    ASSERT_EQ(
+        chunk.patchIndices.size(),
+        static_cast<size_t>(quadCount) * quadCount * 4);
+    EXPECT_EQ(chunk.patchIndices.size() % 4, 0u);
+    for (uint32_t index : chunk.patchIndices)
+        EXPECT_LT(index, chunk.vertices.size());
+
+    // 每个 quad 的控制点按 TES 的周长顺序提交：
+    // (x,z)、(x+1,z)、(x+1,z+1)、(x,z+1)。逐项检查所有 quad，
+    // 确保中间行也不会错位。
+    for (uint32_t localZ = 0; localZ < quadCount; ++localZ)
+    {
+        for (uint32_t localX = 0; localX < quadCount; ++localX)
+        {
+            const size_t base =
+                (static_cast<size_t>(localZ) * quadCount + localX) * 4;
+            const uint32_t a = localZ * vertexStride + localX;
+            const uint32_t expected[4] = {
+                a,
+                a + 1,
+                a + vertexStride + 1,
+                a + vertexStride};
+            for (uint32_t corner = 0; corner < 4; ++corner)
+            {
+                EXPECT_EQ(
+                    chunk.patchIndices[base + corner],
+                    expected[corner]);
+            }
+            EXPECT_TRUE(chunk.vertices[expected[0]].texCoord.isApprox(
+                Eigen::Vector2f(
+                    static_cast<float>(localX) / quadCount,
+                    static_cast<float>(localZ) / quadCount)));
+            EXPECT_TRUE(chunk.vertices[expected[2]].texCoord.isApprox(
+                Eigen::Vector2f(
+                    static_cast<float>(localX + 1) / quadCount,
+                    static_cast<float>(localZ + 1) / quadCount)));
+            EXPECT_TRUE(chunk.vertices[expected[3]].texCoord.isApprox(
+                Eigen::Vector2f(
+                    static_cast<float>(localX) / quadCount,
+                    static_cast<float>(localZ + 1) / quadCount)));
+        }
+    }
+
+    // 首尾 quad 显式钉住：首 quad 从左上角 (0,0) 开始，末 quad 落在
+    // 最后一行/列的 2x2 角点上。
+    EXPECT_EQ(chunk.patchIndices[0], 0u);
+    EXPECT_EQ(chunk.patchIndices[1], 1u);
+    EXPECT_EQ(chunk.patchIndices[2], 6u);
+    EXPECT_EQ(chunk.patchIndices[3], 5u);
+    const size_t lastQuad = chunk.patchIndices.size() - 4;
+    EXPECT_EQ(chunk.patchIndices[lastQuad + 0], 18u);
+    EXPECT_EQ(chunk.patchIndices[lastQuad + 1], 19u);
+    EXPECT_EQ(chunk.patchIndices[lastQuad + 2], 24u);
+    EXPECT_EQ(chunk.patchIndices[lastQuad + 3], 23u);
+}
+
+TEST(TerrainMeshBuilder, TessellationOuterFactorsMatchReversedSharedEdges)
+{
+    const auto shaderPath =
+        std::filesystem::path(__FILE__).parent_path().parent_path().parent_path() /
+        "shader/glsl/engine/passTemplate/base.tesc.glsl";
+    std::ifstream shaderStream(shaderPath);
+    ASSERT_TRUE(shaderStream.is_open()) << shaderPath;
+    const std::string shader(
+        (std::istreambuf_iterator<char>(shaderStream)),
+        std::istreambuf_iterator<char>());
+    std::map<std::string, std::array<int, 2>> declaredEdges;
+    const std::regex declaration(
+        R"(const\s+float\s+(edge[0-3][0-3])\s*=\s*TerrainTessFactorForEdge\(p([0-3]),\s*p([0-3])\))");
+    for (auto match = std::sregex_iterator(shader.begin(), shader.end(), declaration);
+         match != std::sregex_iterator(); ++match)
+        declaredEdges[(*match)[1].str()] = {
+            std::stoi((*match)[2].str()), std::stoi((*match)[3].str())};
+    ASSERT_EQ(declaredEdges.size(), 4u);
+    std::array<std::array<int, 2>, 4> selectedEdges{};
+    std::set<int> assignedOuterEdges;
+    const std::regex assignment(
+        R"(gl_TessLevelOuter\[([0-3])\]\s*=\s*(edge[0-3][0-3])\s*;)");
+    for (auto match = std::sregex_iterator(shader.begin(), shader.end(), assignment);
+         match != std::sregex_iterator(); ++match)
+    {
+        const int outer = std::stoi((*match)[1].str());
+        ASSERT_TRUE(assignedOuterEdges.insert(outer).second);
+        ASSERT_EQ(declaredEdges.count((*match)[2].str()), 1u);
+        selectedEdges[outer] = declaredEdges.at((*match)[2].str());
+    }
+    ASSERT_EQ(assignedOuterEdges.size(), 4u);
+
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(5, 5, [](uint32_t column, uint32_t row) {
+            return 0.02f * static_cast<float>(
+                column * column + row * row + column * row);
+        }));
+    const auto chunks = VL::TerrainMeshBuilder::BuildChunks(plan, 0);
+    ASSERT_EQ(chunks.size(), 4u);
+    using Patch = std::array<Eigen::Vector3f, 4>;
+    std::vector<Patch> patches;
+    for (const auto& chunk : chunks)
+        for (size_t offset = 0; offset < chunk.patchIndices.size(); offset += 4)
+        {
+            Patch patch;
+            for (size_t corner = 0; corner < patch.size(); ++corner)
+                patch[corner] = chunk.vertices.at(
+                    chunk.patchIndices.at(offset + corner)).position;
+            patches.push_back(patch);
+        }
+    ASSERT_EQ(patches.size(), 16u);
+    const std::array<std::array<int, 2>, 4> domainEdges{
+        {{3, 0}, {0, 1}, {1, 2}, {2, 3}}};
+    const auto factor = [](const Eigen::Vector3f& start,
+                           const Eigen::Vector3f& end) {
+        const auto project = [](const Eigen::Vector3f& position) {
+            const float depth = position.z() + 1500.0f;
+            return Eigen::Vector2f(
+                position.x() / depth * 640.0f,
+                (position.y() - 800.0f) / depth * 360.0f);
+        };
+        return std::clamp((project(end) - project(start)).norm() / 16.0f,
+            1.0f, 8.0f);
+    };
+    const auto evaluate = [](const Patch& patch, float horizontal, float vertical) {
+        return Eigen::Vector3f(
+            patch[0] * ((1.0f - horizontal) * (1.0f - vertical)) +
+            patch[1] * (horizontal * (1.0f - vertical)) +
+            patch[2] * (horizontal * vertical) +
+            patch[3] * ((1.0f - horizontal) * vertical));
+    };
+    const std::array<Eigen::Vector2f, 4> domainCorners{
+        Eigen::Vector2f(0, 0), Eigen::Vector2f(1, 0),
+        Eigen::Vector2f(1, 1), Eigen::Vector2f(0, 1)};
+    size_t sharedEdges = 0;
+    size_t legacyFactorMismatches = 0;
+    std::set<int> coveredOuterEdges;
+    for (size_t first = 0; first < patches.size(); ++first)
+        for (size_t second = first + 1; second < patches.size(); ++second)
+            for (int firstOuter = 0; firstOuter < 4; ++firstOuter)
+                for (int secondOuter = 0; secondOuter < 4; ++secondOuter)
+                {
+                    const auto firstDomain = domainEdges[firstOuter];
+                    const auto secondDomain = domainEdges[secondOuter];
+                    const auto& firstPatch = patches[first];
+                    const auto& secondPatch = patches[second];
+                    if (!firstPatch[firstDomain[0]].isApprox(
+                            secondPatch[secondDomain[1]]) ||
+                        !firstPatch[firstDomain[1]].isApprox(
+                            secondPatch[secondDomain[0]]))
+                        continue;
+                    ++sharedEdges;
+                    coveredOuterEdges.insert(firstOuter);
+                    coveredOuterEdges.insert(secondOuter);
+                    SCOPED_TRACE(::testing::Message()
+                        << "patches=" << first << "," << second
+                        << " outer=" << firstOuter << "," << secondOuter);
+                    const auto firstSelected = selectedEdges[firstOuter];
+                    const auto secondSelected = selectedEdges[secondOuter];
+                    EXPECT_EQ(firstSelected, firstDomain);
+                    EXPECT_EQ(secondSelected, secondDomain);
+                    const float firstFactor = factor(
+                        firstPatch[firstSelected[0]], firstPatch[firstSelected[1]]);
+                    const float secondFactor = factor(
+                        secondPatch[secondSelected[0]], secondPatch[secondSelected[1]]);
+                    EXPECT_FLOAT_EQ(firstFactor, secondFactor);
+                    const int firstSegments = static_cast<int>(std::ceil(firstFactor));
+                    const int secondSegments = static_cast<int>(std::ceil(secondFactor));
+                    ASSERT_EQ(firstSegments, secondSegments);
+                    for (int sample = 0; sample <= firstSegments; ++sample)
+                    {
+                        const float parameter = static_cast<float>(sample) / firstSegments;
+                        const Eigen::Vector2f firstUv =
+                            domainCorners[firstDomain[0]] * (1.0f - parameter) +
+                            domainCorners[firstDomain[1]] * parameter;
+                        const Eigen::Vector2f secondUv =
+                            domainCorners[secondDomain[0]] * parameter +
+                            domainCorners[secondDomain[1]] * (1.0f - parameter);
+                        EXPECT_TRUE(evaluate(firstPatch, firstUv.x(), firstUv.y()).isApprox(
+                            evaluate(secondPatch, secondUv.x(), secondUv.y()), 1.0e-6f));
+                    }
+                    const float legacyFirst = factor(
+                        firstPatch[firstOuter], firstPatch[(firstOuter + 1) % 4]);
+                    const float legacySecond = factor(
+                        secondPatch[secondOuter], secondPatch[(secondOuter + 1) % 4]);
+                    if (std::abs(legacyFirst - legacySecond) > 1.0e-4f)
+                        ++legacyFactorMismatches;
+                }
+    EXPECT_EQ(sharedEdges, 24u);
+    EXPECT_EQ(coveredOuterEdges.size(), 4u);
+    EXPECT_GT(legacyFactorMismatches, 0u);
+}
+
+TEST(TerrainMeshBuilder, CoarseLodPatchIndicesMirrorBaseQuadsAndTransitionTriangles)
+{
+    VL::TerrainBuildPlan plan = MakePlan(
+        MakeHeightmap(9, 9, [](uint32_t x, uint32_t y) {
+            return static_cast<float>(x + y) * 0.1f;
+        }));
+    plan.desc.gridResolution = 8;
+    plan.desc.chunkQuads = 8;
+    plan.desc.lodLevels = 2;
+
+    const std::vector<VL::TerrainMeshChunk> chunks =
+        VL::TerrainMeshBuilder::BuildChunks(plan, 1);
+    ASSERT_EQ(chunks.size(), 1u);
+    const VL::TerrainMeshChunk& chunk = chunks.front();
+
+    // 与 BuildChunks 相同的推导：LOD>0 只铺内圈常规四边形，
+    // 外圈由边界环 + 过渡带替代，因此 base quad 数是
+    // (quadsPerChunk - 2)²，而不是 quadsPerChunk²。
+    const uint32_t lodStep = VL::TerrainLodStepQuads(1);
+    const uint32_t quadsPerChunk = plan.desc.chunkQuads / lodStep;
+    const uint32_t verticesPerRow = quadsPerChunk + 1;
+    const uint32_t cellStart = lodStep > 1 ? 1u : 0u;
+    const uint32_t cellEnd =
+        lodStep > 1 ? (quadsPerChunk > 1 ? quadsPerChunk - 1 : 0u)
+                    : quadsPerChunk;
+    const uint32_t baseQuadSide =
+        cellEnd > cellStart ? cellEnd - cellStart : 0u;
+    const uint32_t baseQuadCount = baseQuadSide * baseQuadSide;
+    // 每条边每个粗格产生 lodStep 个扇形三角形 + 1 个收尾三角形。
+    const uint32_t transitionTriangleCount =
+        4u * quadsPerChunk * (lodStep + 1u);
+
+    EXPECT_EQ(
+        chunk.patchIndices.size(),
+        static_cast<size_t>(
+            baseQuadCount + transitionTriangleCount) * 4);
+    EXPECT_EQ(chunk.patchIndices.size() % 4, 0u);
+    EXPECT_EQ(
+        chunk.indices.size(),
+        static_cast<size_t>(baseQuadCount) * 6 +
+            static_cast<size_t>(transitionTriangleCount) * 3);
+    for (uint32_t index : chunk.patchIndices)
+        EXPECT_LT(index, chunk.vertices.size());
+
+    // 第一个内圈 base quad 的四个控制点。
+    const uint32_t firstA = cellStart * verticesPerRow + cellStart;
+    EXPECT_EQ(chunk.patchIndices[0], firstA);
+    EXPECT_EQ(chunk.patchIndices[1], firstA + 1);
+    EXPECT_EQ(chunk.patchIndices[2], firstA + verticesPerRow + 1);
+    EXPECT_EQ(chunk.patchIndices[3], firstA + verticesPerRow);
+
+    // 第一个过渡三角形在 indices 中紧接所有 base quad 三角形；
+    // 对应 patch 必须以 (i0,i1,i2,i2) 形式镜像该三角形。
+    const size_t firstTransitionPatch = static_cast<size_t>(baseQuadCount) * 4;
+    const size_t firstTransitionIndex = static_cast<size_t>(baseQuadCount) * 6;
+    ASSERT_GE(
+        chunk.indices.size(),
+        firstTransitionIndex + 3);
+    EXPECT_EQ(
+        chunk.patchIndices[firstTransitionPatch + 0],
+        chunk.indices[firstTransitionIndex + 0]);
+    EXPECT_EQ(
+        chunk.patchIndices[firstTransitionPatch + 1],
+        chunk.indices[firstTransitionIndex + 1]);
+    EXPECT_EQ(
+        chunk.patchIndices[firstTransitionPatch + 2],
+        chunk.indices[firstTransitionIndex + 2]);
+    EXPECT_EQ(
+        chunk.patchIndices[firstTransitionPatch + 3],
+        chunk.indices[firstTransitionIndex + 2]);
+
+    // 全量核对：每个过渡三角形都按同一规则编码。
+    for (uint32_t triangle = 0; triangle < transitionTriangleCount; ++triangle)
+    {
+        const size_t patchBase =
+            (static_cast<size_t>(baseQuadCount) + triangle) * 4;
+        const size_t indexBase =
+            static_cast<size_t>(baseQuadCount) * 6 +
+            static_cast<size_t>(triangle) * 3;
+        EXPECT_EQ(
+            chunk.patchIndices[patchBase + 0],
+            chunk.indices[indexBase + 0]);
+        EXPECT_EQ(
+            chunk.patchIndices[patchBase + 1],
+            chunk.indices[indexBase + 1]);
+        EXPECT_EQ(
+            chunk.patchIndices[patchBase + 2],
+            chunk.indices[indexBase + 2]);
+        EXPECT_EQ(
+            chunk.patchIndices[patchBase + 3],
+            chunk.indices[indexBase + 2]);
+    }
 }
 
 TEST(TerrainMeshBuilder, CoarseLodsMergeQuadsAndAppendStitchBand)
@@ -2271,6 +2574,27 @@ TEST(TerrainValidator, AcceptsCurrentTerrainSchema)
         BuildTerrainJson(), "TR_terrain_tests.json"));
 }
 
+TEST(TerrainValidator, AcceptsAndRejectsDetailMaterialInstancePath)
+{
+    nlohmann::json asset = BuildTerrainJson();
+    asset["detailMaterialInstancePath"] =
+        "Generated/Validation/TerrainTests/MI_terrain_detail.json";
+    EXPECT_NO_THROW(VL::TerrainAssetValidator::Validate(
+        asset, "TR_terrain_tests.json"));
+
+    asset["detailMaterialInstancePath"] = 1;
+    EXPECT_THROW(
+        VL::TerrainAssetValidator::Validate(
+            asset, "TR_terrain_tests.json"),
+        std::exception);
+
+    asset["detailMaterialInstancePath"] = "";
+    EXPECT_THROW(
+        VL::TerrainAssetValidator::Validate(
+            asset, "TR_terrain_tests.json"),
+        std::exception);
+}
+
 TEST(TerrainValidator, RejectsUnknownField)
 {
     nlohmann::json asset = BuildTerrainJson();
@@ -2759,6 +3083,129 @@ TEST_F(TerrainTest, LoadsOptionalLodFieldsAndDerivesDefaults)
     EXPECT_EQ(VL::TerrainSelectLodLevel(333.0f, distances), 0u);
     EXPECT_EQ(VL::TerrainSelectLodLevel(500.0f, distances), 1u);
     EXPECT_EQ(VL::TerrainSelectLodLevel(5000.0f, distances), 2u);
+}
+
+TEST_F(TerrainTest, LoadsDetailMaterialInstancePathAndRejectsInvalidVariants)
+{
+    HostImage heightmap;
+    heightmap.width = 2;
+    heightmap.height = 2;
+    heightmap.channels = 4;
+    heightmap.format = HostImage::PixelFormat::RGBA16_FLOAT;
+    heightmap.semantic = HostImage::TextureSemantic::Data;
+    heightmap.rowStrideBytes = heightmap.width * heightmap.GetPixelSize();
+    heightmap.data.resize(
+        static_cast<size_t>(heightmap.rowStrideBytes) * heightmap.height);
+    uint16_t* halfPixels =
+        reinterpret_cast<uint16_t*>(heightmap.data.data());
+    for (size_t index = 0;
+         index < heightmap.data.size() / sizeof(uint16_t);
+         ++index)
+    {
+        halfPixels[index] = 0x3800;
+    }
+    const auto heightmapPath = directory / "heightmap_detail.exr";
+    TextureIO::SaveOptions saveOptions;
+    saveOptions.format = TextureIO::FileFormat::Exr;
+    ASSERT_TRUE(TextureIO::Save(heightmapPath, heightmap, saveOptions));
+
+    const auto baseMaterialPath = directory / "MI_terrain_base.json";
+    {
+        std::ofstream materialStream(baseMaterialPath);
+        materialStream << nlohmann::json({
+            {"name", "MI_terrain_base"},
+            {"type", "materialInstance"},
+            {"material", "shader/glsl/M_unlit.json"}}).dump(2);
+    }
+
+    const std::string unique = std::to_string(
+        std::chrono::steady_clock::now().time_since_epoch().count());
+    const std::string detailRelative =
+        "Generated/Validation/TerrainTests/MI_terrain_detail_" +
+        unique + ".json";
+    const std::string nonMiRelative =
+        "Generated/Validation/TerrainTests/NotMI_" +
+        unique + ".json";
+    const std::filesystem::path resourceRoot =
+        std::filesystem::weakly_canonical(
+            CommonFunction::GetResourcePath());
+    const std::filesystem::path detailPhysical =
+        resourceRoot / detailRelative;
+    const std::filesystem::path nonMiPhysical =
+        resourceRoot / nonMiRelative;
+    std::filesystem::create_directories(detailPhysical.parent_path());
+    const auto writeJson = [](const std::filesystem::path& path,
+                              const nlohmann::json& json) {
+        std::ofstream stream(path);
+        stream << json.dump(2);
+    };
+    writeJson(detailPhysical, nlohmann::json({
+        {"name", "MI_terrain_detail"},
+        {"type", "materialInstance"},
+        {"material", "shader/glsl/M_terrain.json"}}));
+    writeJson(nonMiPhysical, nlohmann::json({
+        {"name", "NotMI"},
+        {"type", "material"},
+        {"material", "shader/glsl/M_terrain.json"}}));
+
+    nlohmann::json asset = BuildTerrainJson();
+    asset["heightmapPath"] = heightmapPath.string();
+    asset["materialInstancePath"] = baseMaterialPath.string();
+    asset["gridResolution"] = 2;
+    asset["chunkQuads"] = 1;
+    const auto terrainPath = directory / "TR_terrain_detail.json";
+    const auto writeTerrain = [&]() {
+        std::ofstream stream(terrainPath);
+        stream << asset.dump(2);
+    };
+    const auto prepare = [&]() {
+        return VL::TerrainAssetLoader::Prepare(terrainPath.string());
+    };
+
+    // 缺省：旧 TR 行为完全不变。
+    asset.erase("detailMaterialInstancePath");
+    writeTerrain();
+    EXPECT_TRUE(prepare().desc.detailMaterialInstancePath.empty());
+
+    // 合法：资源根相对的 materialInstance。
+    asset["detailMaterialInstancePath"] = detailRelative;
+    writeTerrain();
+    const VL::TerrainBuildPlan detailPlan = prepare();
+    EXPECT_EQ(
+        detailPlan.desc.detailMaterialInstancePath,
+        detailRelative);
+    EXPECT_EQ(
+        VL::TerrainMaterialInstancePathForLod(detailPlan.desc, 0),
+        detailRelative);
+    EXPECT_EQ(
+        VL::TerrainMaterialInstancePathForLod(detailPlan.desc, 1),
+        baseMaterialPath.string());
+
+    // 不存在。
+    asset["detailMaterialInstancePath"] =
+        "Generated/Validation/TerrainTests/Missing_" + unique + ".json";
+    writeTerrain();
+    EXPECT_THROW(prepare(), std::exception);
+
+    // 不是 materialInstance。
+    asset["detailMaterialInstancePath"] = nonMiRelative;
+    writeTerrain();
+    EXPECT_THROW(prepare(), std::exception);
+
+    // 与基础 MI 指向同一份文件：显式拒绝，避免 LOD 收敛失效。
+    asset["materialInstancePath"] = detailRelative;
+    asset["detailMaterialInstancePath"] = detailRelative;
+    writeTerrain();
+    EXPECT_THROW(prepare(), std::exception);
+
+    // 绝对路径不是资源根相对路径。
+    asset["materialInstancePath"] = baseMaterialPath.string();
+    asset["detailMaterialInstancePath"] = detailPhysical.string();
+    writeTerrain();
+    EXPECT_THROW(prepare(), std::exception);
+
+    std::filesystem::remove(detailPhysical);
+    std::filesystem::remove(nonMiPhysical);
 }
 
 TEST(TerrainSceneSchema, AcceptsTerrainSceneObject)

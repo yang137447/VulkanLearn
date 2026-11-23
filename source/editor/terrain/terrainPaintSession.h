@@ -4,12 +4,14 @@
 #include <deque>
 #include <memory>
 #include <string>
+#include <vector>
 
 #include <Eigen/Dense>
 
 #include "terrain/terrainAssetTypes.h"
 #include "terrain/terrainBrushShape.h"
 #include "terrain/terrainCollisionTypes.h"
+#include "terrain/terrainCompositedDirty.h"
 
 namespace VL::Editor
 {
@@ -45,6 +47,11 @@ public:
 
     const std::string& PlacementId() const noexcept { return placementId_; }
     const std::string& PaintPath() const noexcept { return paintPath_; }
+    // 与 TR 层顺序一致的身份列表；Save Paint 用它写 VLP2 sidecar。
+    const std::vector<std::string>& LayerKeys() const noexcept
+    {
+        return layerKeys_;
+    }
     uint32_t LayerCount() const noexcept;
     uint64_t Revision() const noexcept { return revision_; }
     bool IsStrokeActive() const noexcept { return strokeActive_; }
@@ -60,19 +67,25 @@ public:
     bool Redo();
 
     std::shared_ptr<const TerrainLayerPaintData> PaintData() const;
+    const TerrainCompositedEditDirty& CompositedDirty() const noexcept { return compositedDirty_; }
+    bool AcknowledgeCompositedDirty(uint64_t revision) { return compositedDirty_.Acknowledge(revision); }
 
 private:
+    void EnsureWritable();
     void MarkChanged();
     void Restore(TerrainLayerPaintData data);
+    void IncludeChangedTexel(uint32_t horizontal, uint32_t vertical);
 
     std::string placementId_;
     std::string paintPath_;
+    std::vector<std::string> layerKeys_;
     uint32_t layerCount_ = 0;
     std::shared_ptr<TerrainLayerPaintData> paint_;
     TerrainLayerPaintData strokeStart_;
     bool strokeActive_ = false;
     bool strokeChanged_ = false;
     uint64_t revision_ = 0;
+    TerrainCompositedEditDirty compositedDirty_;
     std::deque<TerrainLayerPaintData> undo_;
     std::deque<TerrainLayerPaintData> redo_;
 };

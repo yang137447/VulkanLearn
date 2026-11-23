@@ -1,4 +1,5 @@
 #include "skeletalPlaybackInternal.h"
+#include "Profiler.h"
 
 #include <algorithm>
 #include <cmath>
@@ -382,6 +383,7 @@ void SkeletalPlayback::SetFootPlacementEnabled(bool enabled)
     {
         footPlacement.emplace(asset->mesh);
         footPlacement->SetLockType(footLockType);
+        footPlacement->SetMaxPenetrationCm(footPlacementMaxPenetrationCm);
     }
     if (!footPlacement || footPlacement->State().enabled == enabled) return;
     footPlacement->SetEnabled(enabled);
@@ -397,6 +399,15 @@ void SkeletalPlayback::SetFootPlacementLockType(FootLockType type)
     footPlacement->SetLockType(type);
     footPlacementSource.reset();
     ResetFootPlacement("lock-mode");
+}
+
+void SkeletalPlayback::SetFootPlacementMaxPenetrationCm(float value)
+{
+    if (!std::isfinite(value))
+        return;
+    footPlacementMaxPenetrationCm = std::clamp(value, 0.0f, 60.0f);
+    if (footPlacement)
+        footPlacement->SetMaxPenetrationCm(footPlacementMaxPenetrationCm);
 }
 
 const FootPlacementState& SkeletalPlayback::FootPlacement() const
@@ -451,6 +462,7 @@ void SkeletalPlayback::ResetSlopeWarping(const char* reason)
 void SkeletalPlayback::ApplySlopeWarping(const Eigen::Matrix4f& component, bool grounded,
     const std::string& owner, float deltaSeconds, const GroundProbe& probe)
 {
+    PROFILE_SCOPE("Anim.SlopeWarping");
     if (!slopeWarping || !slopeWarping->Enabled() || deltaSeconds <= 0 ||
         explicitlyPaused || (!playing && !Completed())) return;
     FootPlacementSolver::ValidateComponent(component);
@@ -526,6 +538,7 @@ void SkeletalPlayback::SetPostProcess(std::shared_ptr<const PostProcessAsset> as
 
 void SkeletalPlayback::ApplyPostProcess(float deltaSeconds)
 {
+    PROFILE_SCOPE("Anim.PostProcess");
     if (!postProcess || !postProcess->Valid() || deltaSeconds <= 0 || explicitlyPaused ||
         (!playing && !Completed()))
         return;
@@ -641,6 +654,7 @@ void SkeletalPlayback::ResetFootPlacement(const char* reason)
 void SkeletalPlayback::ApplyFootPlacement(const Eigen::Matrix4f& component, bool grounded,
     const std::string& owner, float deltaSeconds, const GroundProbe& probe)
 {
+    PROFILE_SCOPE("Anim.FootPlacement");
     if (!footPlacement || !footPlacement->State().enabled || deltaSeconds <= 0 || explicitlyPaused ||
         (!playing && !Completed()) ||
         (footPlacementSource == preIkModels && !Completed())) return;

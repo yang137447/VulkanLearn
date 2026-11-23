@@ -9,6 +9,7 @@
 #include <nlohmann/json.hpp>
 
 #include "render/backend/rendererDescriptorWriter.h"
+#include "render/resource/terrainCompositedWorldBindings.h"
 #include "render/backend/rendererDescriptorPlan.h"
 #include "render/rendergraph/renderGraphCompiler.h"
 #include "render/rhi/rhiResourceHandles.h"
@@ -85,6 +86,10 @@ struct Renderpass
         const VL::RendererDescriptorContext& descriptorContext);
     void CreatePassDescriptorSetLayout(VL::RendererBackendVulkan& rendererBackend);
     void CreateDescriptorSets(VL::RendererBackendVulkan& rendererBackend);
+    // pass 的 descriptor layout / pool / set 是不可拆分的所有权单元。
+    // RenderInitialize 允许在上一轮中途失败后重跑；重跑前必须先释放旧一组，
+    // 否则新 handle 覆盖旧值，Shutdown 只能释放最后一组，旧的一整批泄漏。
+    void DestroyPassDescriptors(VL::RendererBackendVulkan& rendererBackend);
     void UpdateDescriptorSets(
         VL::RendererBackendVulkan& rendererBackend,
         const VL::RendererDescriptorContext& descriptorContext,
@@ -127,6 +132,9 @@ struct Renderpass
     vk::DescriptorPool descriptorPool;
     VL::RHIDescriptorPoolHandle descriptorPoolHandle;
     std::vector<std::vector<vk::DescriptorImageInfo>> inputDescriptorImageInfos;
+    std::shared_ptr<const VL::WorldBindingRegistryLease> worldBindingRegistryLease;
+    std::vector<VL::WorldBindingImageOwner> worldBindingImageOwners;
+    std::vector<std::vector<vk::WriteDescriptorSet>> worldBindingWrites;
     VL::RHIDescriptorSetLayoutHandle emptyDescriptorSetLayoutHandle;
     vk::DescriptorSetLayout emptyDescriptorSetLayout;
     VL::RHIDescriptorSetLayoutHandle descriptorSetLayoutHandle;
@@ -260,6 +268,13 @@ public:
     void RefreshRuntimeDescriptors(
         VL::RendererBackendVulkan& rendererBackend,
         const VL::RendererDescriptorContext& descriptorContext);
+    void SafeUpdateCurrentImageWorldBindings(
+        VL::RendererBackendVulkan& rendererBackend,
+        VL::RendererResourceCache& resourceCache, uint32_t imageIndex) const;
+    void SafeUpdateCurrentImageWorldBindings(
+        VL::RendererResourceCache& resourceCache, uint32_t imageIndex,
+        void (*writer)(void*, const std::vector<vk::WriteDescriptorSet>&),
+        void* writerContext) const;
     // Pass materials are world-local in the current bridge. Capture/restore is
     // used to roll back a failed world load without leaving passes bound to the
     // partially loaded world's material instances.

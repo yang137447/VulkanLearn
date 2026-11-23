@@ -44,6 +44,10 @@ public:
     const VL::MaterialDescriptorSchema& GetMaterialDescriptorSchema() const { return materialDescriptorSchema; }
     const std::vector<ShaderBinding>& GetActiveShaderBindings() const { return activeShaderBindings; }
     const std::shared_ptr<PipelineBase>& GetRenderPipeline() const { return renderPipeline; }
+    const std::shared_ptr<PipelineBase>& GetWireframeRenderPipeline() const
+    {
+        return wireframeRenderPipeline;
+    }
     const std::shared_ptr<PipelineBase>& GetShadowPipeline() const { return shadowPipeline; }
     const std::shared_ptr<PipelineBase>& GetLocalShadowPipeline() const { return localShadowPipeline; }
     const VL::MaterialPipelineReloadRecipe& GetPipelineReloadRecipe() const
@@ -89,6 +93,7 @@ private:
     PassPipelineContractKey passPipelineContractKey;
     std::vector<ShaderBinding> activeShaderBindings;
     std::shared_ptr<PipelineBase> renderPipeline;
+    std::shared_ptr<PipelineBase> wireframeRenderPipeline;
     std::shared_ptr<PipelineBase> shadowPipeline;
     std::shared_ptr<PipelineBase> localShadowPipeline;
     VL::MaterialPipelineReloadRecipe pipelineReloadRecipe;

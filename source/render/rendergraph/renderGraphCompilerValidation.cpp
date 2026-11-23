@@ -34,6 +34,7 @@ bool IsSupportedFormat(const std::string& format)
         "R8G8B8A8_UNORM",
         "R16G16B16A16_SFLOAT",
         "R32_SFLOAT",
+        "R32G32B32A32_UINT",
         "D16_UNORM",
         "D32_SFLOAT",
         "D24_UNORM_S8_UINT"

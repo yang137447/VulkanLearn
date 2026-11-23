@@ -28,6 +28,8 @@ void ParticleGpuTimer::Initialize(RendererBackendVulkan& rendererBackendIn)
         std::max(swapchainImageCount, 1u),
         FrameQueryState{});
     disabledLogged = false;
+    hasRecordingFrame = false;
+    recordingImageIndex = 0;
 
     const bool supported =
         timestampPeriodNanoseconds > 0.0f && timestampValidBits > 0;
@@ -79,6 +81,8 @@ void ParticleGpuTimer::Shutdown(RendererBackendVulkan& rendererBackendIn)
     accumulator.Reset(false);
     timestampPeriodNanoseconds = 0.0f;
     timestampValidBits = 0;
+    hasRecordingFrame = false;
+    recordingImageIndex = 0;
     rendererBackend = nullptr;
     initialized = false;
     disabledLogged = false;
@@ -89,6 +93,7 @@ void ParticleGpuTimer::BeginFrame(
     vk::CommandBuffer commandBuffer,
     uint32_t swapchainImageIndex)
 {
+    hasRecordingFrame = false;
     if (!initialized || !IsSupported())
     {
         return;
@@ -99,15 +104,19 @@ void ParticleGpuTimer::BeginFrame(
         return;
     }
 
-    CollectFrameResults(swapchainImageIndex);
-    if (!IsSupported())
-    {
-        return;
-    }
-
     FrameQueryState& frameState = frameQueryStates[swapchainImageIndex];
-    frameState.used = false;
-    frameState.open = false;
+    if (frameState.batch.HasSubmitted())
+    {
+        CollectFrameResults(swapchainImageIndex);
+        if (!IsSupported())
+        {
+            return;
+        }
+        frameState.batch.Consumed();
+    }
+    frameState.batch.BeginRecording();
+    recordingImageIndex = swapchainImageIndex;
+    hasRecordingFrame = true;
 
     try
     {
@@ -139,15 +148,18 @@ void ParticleGpuTimer::BeginPass(
     }
 
     FrameQueryState& frameState = frameQueryStates[swapchainImageIndex];
-    if (frameState.used)
+    if (frameState.batch.WasRecorded(0))
     {
         // 每帧只计一次 particle pass；重复录制保留首个区间，
         // 避免同一对 query 被后写的 end 覆盖。
         return;
     }
 
-    frameState.used = true;
-    frameState.open = true;
+    if (!frameState.batch.Begin(0))
+    {
+        Disable("particle timestamp query index is invalid");
+        return;
+    }
     try
     {
         commandBuffer.writeTimestamp(
@@ -157,8 +169,7 @@ void ParticleGpuTimer::BeginPass(
     }
     catch (const std::exception& exception)
     {
-        frameState.used = false;
-        frameState.open = false;
+        frameState.batch.Aborted();
         Disable(
             std::string("begin timestamp failed: ") +
             exception.what());
@@ -180,7 +191,7 @@ void ParticleGpuTimer::EndPass(
     }
 
     FrameQueryState& frameState = frameQueryStates[swapchainImageIndex];
-    if (!frameState.open)
+    if (!frameState.batch.IsOpen(0))
     {
         return;
     }
@@ -191,12 +202,11 @@ void ParticleGpuTimer::EndPass(
             vk::PipelineStageFlagBits::eBottomOfPipe,
             queryPool,
             GetQueryIndex(swapchainImageIndex, true));
-        frameState.open = false;
+        frameState.batch.End(0);
     }
     catch (const std::exception& exception)
     {
-        frameState.used = false;
-        frameState.open = false;
+        frameState.batch.Aborted();
         Disable(
             std::string("end timestamp failed: ") +
             exception.what());
@@ -219,8 +229,8 @@ void ParticleGpuTimer::CollectFrameResults(uint32_t swapchainImageIndex)
 
     const FrameQueryState& frameState =
         frameQueryStates[swapchainImageIndex];
-    // 只有 begin/end 都写入过的轮次才有完整 timestamp pair。
-    if (!frameState.used || frameState.open)
+    // 只有随成功提交进入 submitted 的完整 begin/end 对才允许读回。
+    if (!frameState.batch.HasSubmitted())
     {
         return;
     }
@@ -246,6 +256,21 @@ void ParticleGpuTimer::CollectFrameResults(uint32_t swapchainImageIndex)
         timestamps[1],
         timestampValidBits,
         timestampPeriodNanoseconds));
+}
+
+void ParticleGpuTimer::FrameSubmitted() noexcept
+{
+    if (hasRecordingFrame && recordingImageIndex < frameQueryStates.size())
+        frameQueryStates[recordingImageIndex].batch.Submitted();
+    hasRecordingFrame = false;
+}
+
+void ParticleGpuTimer::AbortFrame() noexcept
+{
+    // 帧命令被丢弃：本轮 query 未提交，下一次复用该 image 时禁止读回。
+    if (hasRecordingFrame && recordingImageIndex < frameQueryStates.size())
+        frameQueryStates[recordingImageIndex].batch.Aborted();
+    hasRecordingFrame = false;
 }
 
 void ParticleGpuTimer::Disable(const std::string& reason)

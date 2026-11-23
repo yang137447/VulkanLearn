@@ -1,0 +1,476 @@
+{
+  "schemaVersion": 1,
+  "status": "frozen-targets-independent-review-required",
+  "dateAsiaShanghai": "2026-11-21",
+  "frozen": true,
+  "independentReview": "pending",
+  "validRunIds": {
+    "formalCpuAndGpu": [
+      "quiet-final"
+    ],
+    "fullRouteMemoryAndReload": [
+      "cold",
+      "raw-cold",
+      "raw-warm-r2"
+    ],
+    "finiteProduction": [
+      "producer-coverage-full",
+      "producer-local-full"
+    ]
+  },
+  "excludedRunIds": {
+    "quiet": "Observed compiler processes; not a formal timing denominator",
+    "raw-warm": "Rejected zero console-command delay; no renderer measurement",
+    "producer-coverage": "Rejected redundant default material parameter",
+    "producer-local": "Old R32_FLOAT upload unsupported; negative evidence only",
+    "raw-warm-r2": "Valid functional/memory/reload evidence, but not the formal CPU timing denominator"
+  },
+  "noRelaxation": "P1-P5 and optional P6 must meet these targets; failure is reported, never fixed by raising budgets, lowering quality or changing benchmark conditions.",
+  "conditions": {
+    "gpu": "NVIDIA GeForce RTX 3080",
+    "driver": "621.01",
+    "cpu": "AMD Ryzen 9 3950X",
+    "resolution": [
+      1280,
+      720
+    ],
+    "msaa": 2,
+    "build": "Release MinGW C++17",
+    "validation": false,
+    "presentMode": "immediate",
+    "displayScope": "1280x720 SDL/Vulkan render area; physical display refresh and continuous foreground state were not measured",
+    "frameLimitHz": 30,
+    "uiEnabled": false,
+    "referenceWorkerThreads": 2,
+    "requiredCorrectnessWorkerModes": [
+      1,
+      2
+    ],
+    "route": "quiet-final/command.json: far, mid, near, tile00_near, cross_tile_corner, interpolated movement, teleport, near, final_far",
+    "formalCpuReference": "quiet-final; 370 observed compiler-inventory samples, zero busy/error samples; absence of every unrelated workload is not proven"
+  },
+  "cacheConditions": {
+    "baselineApplication": "fresh process, fresh physical residency; V1 immutable full page packages remain present",
+    "baselineShader": "warm SPV/build cache retained; no shader compile in runs",
+    "baselineOs": "OS file/standby cache not cleared or claimed cold",
+    "requiredV2Cold": "fresh process; delete all optional fine-page cache payloads and cache index under the configured private runtime cache root; preserve immutable V2 production inputs, roots/coarse pages and SPV",
+    "requiredV2Warm": "same private package, same inputs/camera/render settings, revisit trace; retain optional bounded cache",
+    "noFallback": "V1 files, authored direct evaluator and retired material switches must be rejected"
+  },
+  "measured": {
+    "quietRawGpuFrames": 1080,
+    "quietRawCpuFrames": 1081,
+    "quietGpuInstrumentedPassSumMs": {
+      "count": 1080,
+      "minimum": 1.1450559999999999,
+      "p50": 2.05704,
+      "p95": 3.410716799999999,
+      "p99": 4.198024,
+      "maximumObserved": 4.976608
+    },
+    "quietGeometryIncludingTesMs": {
+      "count": 1080,
+      "minimum": 0.607232,
+      "p50": 1.358336,
+      "p95": 2.5482751999999995,
+      "p99": 3.4122547200000026,
+      "maximumObserved": 4.225024
+    },
+    "quietUnclampedRenderFrameIntervalMs": {
+      "count": 1081,
+      "minimum": 5.3184,
+      "p50": 33.3648,
+      "p95": 44.5673,
+      "p99": 65.54924000000265,
+      "maximumObserved": 306.509
+    },
+    "worldCommitReferenceLowerBoundSeconds": 153.49790620000567,
+    "fullRoutePrivatePeakReferenceBytes": 10243166208,
+    "fullRouteWddmPeakReferenceBytes": 8722153472,
+    "finiteProductionPages": 10936,
+    "finiteMipRange": [
+      0,
+      13
+    ],
+    "finiteWeightModes": [
+      "CoverageAtlas",
+      "LocalLayerArray"
+    ],
+    "finiteHeightBlend": 3,
+    "singlePageProductionMaximumObservedMs": 2.50707,
+    "singlePageReadbackCopyMaximumObservedMs": 3.28509,
+    "singlePageProductionPlusReadbackMaximumObservedMs": 3.319266,
+    "sharedPoolMemoryRequirementsBytes": 226492416,
+    "sharedInputMemoryRequirementsEnvelopeBytes": 759801856,
+    "allResidentGeometryPayloadEnvelopeBytes": 885297152,
+    "legacyKnownImagePayloadBytes": 1163627364,
+    "legacyFullMaterialDataBytes": 19418136576,
+    "legacyFullMaterialHeadersBytes": 256
+  },
+  "steadyRvtCaps": {
+    "physicalPoolGpuBytes": 234881024,
+    "inputGpuBytes": 805306368,
+    "workspaceGpuBytes": 33554432,
+    "totalGpuBytes": 1073741824,
+    "totalCpuBytes": 536870912,
+    "physicalSlots": 512,
+    "productionTasks": 4
+  },
+  "peakRvtOwnerCaps": {
+    "physicalPoolGpuBytes": 469762048,
+    "inputGpuBytes": 1610612736,
+    "workspaceGpuBytes": 67108864,
+    "totalGpuBytes": 2147483648,
+    "totalCpuBytes": 1073741824,
+    "physicalSlots": 1024,
+    "productionTasks": 4
+  },
+  "terrainTotalCaps": {
+    "steadyGpuBytes": 2147483648,
+    "candidateActiveRetiringGpuBytes": 3221225472,
+    "geometryGpuBytesPerWorld": 1073741824,
+    "steadyCpuBytes": 2147483648,
+    "candidateActiveRetiringCpuBytes": 3221225472,
+    "geometryCpuBytesPerWorld": 1073741824
+  },
+  "workspaceReserves": {
+    "descriptorDriverMetadataGpuBytesPerWorld": 4194304,
+    "taskParameterGpuBytesPerWorld": 262144,
+    "uploadRingBytesPerSlot": 4194304,
+    "uploadRingSlots": 2,
+    "productionOutputBytesPerTask": 221956,
+    "productionTasksGlobal": 4,
+    "queueEntriesGlobal": 4096,
+    "queueMetadataCpuBytes": 16777216,
+    "indexMetadataCpuBytes": 33554432,
+    "otherHostMetadataCpuBytes": 16777216,
+    "uploadAndReadbackCpuBytes": 67108864,
+    "optionalCpuPageCacheBytes": 134217728,
+    "decodedInputCpuWorkspaceBytes": 268435456,
+    "cpuClassReserveSumBytes": 536870912
+  },
+  "accounting": {
+    "physicalPool": "Three actual image memoryRequirements capacities; roots/reserved/retiring slots included.",
+    "input": "Source arrays, global maps, shared coverage once, frame inputs, height atlas/LUTs, source maps/catalog and both local-weight representations; exact immutable resource identity deduplicates, never World count.",
+    "workspace": "Every per-surface page table, GPU feedback targets/readback, scratch/status/parameters, shared upload ring, descriptors and explicit GPU metadata reserve.",
+    "cpu": "One aggregate cap plus bounded queues, metadata, cache, input decode and host-visible ring reservations. Reserve components sum to steady total; payload allocations cannot bypass it.",
+    "gpuAdmission": "Actual Vulkan image/buffer memoryRequirements.size before allocation, including allocator alignment/padding; descriptor/opaque driver GPU bookkeeping uses explicit reserve. WDDM is a separate observed process criterion.",
+    "outerTerrainOwner": "RVT costs plus geometry and terrain host metadata; enforce both RVT caps and outer terrain caps over Candidate+Active+Retiring including old frames and task leases.",
+    "overlap": "peakRvtOwnerCaps maps to TerrainRvtBudgetCaps for renderer-wide owner; steadyRvtCaps also enforced for one active World. Outer 3GiB terrain peak may reject candidates even if each subcap separately fits. Reject and retain old World, or verified staged reuse; never silently exceed.",
+    "hostAndDriverLimits": "WDDM is a sampled allocation/residency approximation, not exact Vulkan high-water; unobservable opaque host bookkeeping remains subject to whole-process peak thresholds."
+  },
+  "targets": {
+    "singlePageProductionHardMs": 4.0,
+    "singlePageReadbackCopyHardMs": 4.0,
+    "singlePageProductionAndCopyHardMs": 6.0,
+    "perFrameProductionAndCopyHardMs": 6.0,
+    "productionPagesPerFrame": 1,
+    "productionBytesPerFrame": 221956,
+    "uploadPagesPerFrame": 16,
+    "uploadBytesPerFrame": 4194304,
+    "maxGlobalInFlightProductionTasks": 4,
+    "maxSteadyGpuPassSumP99Ms": 4.618,
+    "maxStreamingGpuPassSumP99Ms": 10.199,
+    "maxSteadyGeometryIncludingTesP99Ms": 3.754,
+    "maxRawRenderFrameIntervalP95Ms": 49.025,
+    "maxRawRenderFrameIntervalP99Ms": 72.105,
+    "minimumRawFrameSamples": 1000,
+    "maxWorldCommitSeconds": 76.748,
+    "maxProcessToInteractiveSeconds": 86.748,
+    "maxPoseOrTeleportConvergenceSeconds": 10.0,
+    "maxWholeProcessPrivatePeakBytes": 8194532966,
+    "maxWholeProcessWddmPeakBytes": 6977722777,
+    "minPrivatePeakImprovementFraction": 0.2,
+    "minWddmPeakImprovementFraction": 0.2,
+    "minStartupImprovementFraction": 0.5,
+    "maxWddmSampleGapSeconds": 2.5,
+    "minimumValidWddmSamples": 20,
+    "maxInteriorUnavailableWddmSamples": 0,
+    "maxTeardownUnavailableWddmSamples": 1,
+    "maxOptionalFineDiskCacheBytes": 268435456,
+    "maxOfflineGamePackageBytes": 1610612736,
+    "maxPublishedCoarsePagesFull16": 448,
+    "finestPublishedCoarseMip": 4,
+    "requiredPinnedRoots": 16
+  },
+  "qualityTargets": {
+    "maxEffectiveMipBias": 1,
+    "minReadyVisibleSampleFractionAtTargetPlusBias": 0.99,
+    "maxUnresolvedVisibleSamplesAtReady": 0,
+    "maxIncorrectIdentitySamples": 0,
+    "rootOnlyIsReady": false,
+    "rootOnlyAllowedAfterInteractive": false,
+    "basePageMaxAlbedoChannelByteError": 1,
+    "basePageMaxNormalChannelByteError": 1,
+    "basePageMaxOrmChannelByteError": 1,
+    "litTerrainRoiMaxMaeBytes": 2.0,
+    "litTerrainRoiMaxRmseBytes": 3.0,
+    "litTerrainRoiMaxP99ErrorBytes": 8.0,
+    "maxSilhouetteXorFraction": 0.001,
+    "tesMaxHeightErrorR16Units": 2.0,
+    "maxValidationErrors": 0,
+    "maxStalePublications": 0,
+    "loadingRelease": "All 16 roots and independent TES height closure valid, zero unknown/stale identities, >=99% visible valid feedback samples resolve no coarser than target+1, no root-only result when target<12; then expose interactive game. Validate actual sampled-page identities and images, not queue-empty or cumulative estimated histograms.",
+    "convergence": "Same readiness within 10s at each fixed pose/teleport; bias never exceeds 1. If visible working set cannot meet it with 512 slots, report budget insufficient.",
+    "visualComparison": "Lock inputs/camera/render parameters and terrain ROI. Compare baked base channels to independent current evaluator, then lit images plus active TES/dynamic items separately. Diagnose authored discontinuity without excusing addressing seams."
+  },
+  "limitations": [
+    "P0 freezes targets for future stages; it does not claim V2 runtime, package, convergence or quality targets have already passed.",
+    "Finite production collection is real tile00 data, all 5468 pages/mode at 8192, not a proof over every input, driver or GPU preemption.",
+    "Local production uses the approved isolated R32_FLOAT->eR32Sfloat upload-format correction; original unsupported-format failure remains recorded.",
+    "Synchronous copy queries measure output-to-host readback. V1 Game service queries cover real atlas uploads as a batch; future V2 GPU copy must be timestamped and checked against these hard targets.",
+    "GPU pass sum includes full geometry with TES and other objects, shadow and feedback, but excludes uninstrumented environment work; neither pure terrain time nor separate TES time is claimed.",
+    "CPU reference is unclamped rendered-frame wall interval including pacing/capture, not CPU work. World reload is validated in full runs and measured separately from quiet steady reference.",
+    "250ms milestone observer gives upper-bound observation times; first screenshot includes scheduled waits and is not earliest clear readiness. V2 must emit its own monotonic readiness event.",
+    "WDDM helper exit=1/terminal unavailable rows are explicitly retained; requested 500ms becomes approximately 1.54s actual cadence. No exact GPU transient high-water claim.",
+    "quiet observed compiler activity; raw-warm-r2 lacked a compiler-free audit. quiet-final is the sole formal CPU reference. Shorter-than-audit compiler processes and unrelated background activity cannot be ruled out."
+  ],
+  "evidenceSha256": {
+    "quiet-final/report.json": "031f152b801b9331e9d5ff5ca3d4d049a96d5605bad3418fc5df9073cdcd738f",
+    "quiet-final/raw-analysis.json": "a9a64241e284cc7be65f311bebecb12756f69d575d50bb53b59d534318be6993",
+    "quiet-final/command.json": "f6267382f9d4753297df6d6eeb2498b4e4088d86eb2f9bb51c75cc501a420a1a",
+    "quiet-final/runtime.log": "c869c1b635b503d4fb0c96cf1ce17113c9057862df06f98c9f2dcd2b4c93c141",
+    "quiet-final.host-audit-summary.json": "37a50ff69ce91798715dce48cfc67db5ff80c4bb9cf05f6b5acf44a0e3e16ab5",
+    "quiet-final.host-audit.jsonl": "14bcbd217c67a468fddff0031684373aa78c5512c01f0cd5fab3b00a7c59bc2f",
+    "quiet-final/gpu-raw.jsonl": "8138d8fee2fe46e4c833d87260989a875e3f485e52867ed9bfa75d6c3ab293e6",
+    "quiet-final/cpu-raw.jsonl": "9b359e778b48d82683ac458da62f33e3e16d350db6619944d6121c49024b95bd",
+    "quiet-final/runtime.cpu-memory.jsonl": "543c92605b1086e2451f12af516065a1cfef00def88251f3d0ade4eebe43c958",
+    "quiet-final/runtime.gpu-memory.jsonl": "f77698a3678069fbac658425d3baab21eddfd7801f52cbe8b99210c06511707e",
+    "cold/report.json": "7190c9c56f581382eb08ebf5108ecad70ae8aec38dbb26165265ed836b051175",
+    "raw-cold/report.json": "f0ac5b6fd9a7dbe4b789d0902eb2dcfb60e4a30b2f6d4fe013ca882d396cc836",
+    "raw-warm-r2/report.json": "f56fa51b085029f5a66dde1f287304003aeab612529b7a0ed6c69bc1acac0e06",
+    "producer-coverage-full/report.json": "c5e2fcbb069517148f80e7b809036d09bdb9a91148d7b84076d89223c6af054e",
+    "producer-local-full/report.json": "853cbfe3e7e723d4cbb1ad1fcc495a225aa9aa2a7f03f0b289fee7835040a574",
+    "producer-coverage-full/bake-raw.jsonl": "f3059aa4950160acb8fc705343ff6e6555d257f0b9f82055277fa1bc2ecee3ae",
+    "producer-local-full/bake-raw.jsonl": "e31353da582e5042d4d0c53583d6be36f48abf8a333ab24cf99e9bd59349e814",
+    "allocation-requirements-final.json": "0300b17cb05ee0b99ba1d49830a1e694cd6a0629620406454a10446e8d951b4c",
+    "ledger-final.json": "87cb903b9e60256f9f9673b6de75a7d48d45e57afadc38aff05606b5be4f5a36",
+    "numeric-oracle/report.json": "a97982e9ff9486679a8f93d27b3762aac13559e82befcd1b766dec65737913bf",
+    "raw-cpu-stage/p0-input-hashes.json": "dca3c35d1cb4c1af0f69ac66f766c78831a751bf097a8d32c72b41673eab8e11",
+    "raw-cpu-link/build.json": "87fcca3c76baf2be5bd97a635b9b0ce2221ab9afa11bf630f8af48deb71e7157",
+    "local-producer-link-r2/build.json": "2bc5dcb5f282c7880f79109e9b0ba53db31c74e5ffd215efe01acc6b9a7adfca",
+    "local-producer-link-r2/mapping.patch": "780192902c645df9dc451c0cee709f905af0175ceb080389ac311617324a00d2",
+    "hardware-cpu.json": "5cbd2fcf0f2c517a5a3af40290d82374556a8c29e43fee74242b45c707b2d3b3",
+    "hardware-os.json": "81aab9134ca9ede5f31b1ed62d32bef148c810105c2ff01b5f21df2a60a39951",
+    "hardware-gpu.csv": "45f013c366bea37ca0caa00416c051a7692adc31a29ecb85616b74da7c9f4103"
+  },
+  "evidenceRoot": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0",
+  "evidenceFiles": {
+    "quiet-final/report.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\quiet-final\\report.json",
+      "bytes": 274671,
+      "sha256": "031f152b801b9331e9d5ff5ca3d4d049a96d5605bad3418fc5df9073cdcd738f"
+    },
+    "quiet-final/raw-analysis.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\quiet-final\\raw-analysis.json",
+      "bytes": 8435,
+      "sha256": "a9a64241e284cc7be65f311bebecb12756f69d575d50bb53b59d534318be6993"
+    },
+    "quiet-final/command.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\quiet-final\\command.json",
+      "bytes": 45433,
+      "sha256": "f6267382f9d4753297df6d6eeb2498b4e4088d86eb2f9bb51c75cc501a420a1a"
+    },
+    "quiet-final/runtime.log": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\quiet-final\\runtime.log",
+      "bytes": 2419101,
+      "sha256": "c869c1b635b503d4fb0c96cf1ce17113c9057862df06f98c9f2dcd2b4c93c141"
+    },
+    "quiet-final.host-audit-summary.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\quiet-final.host-audit-summary.json",
+      "bytes": 489,
+      "sha256": "37a50ff69ce91798715dce48cfc67db5ff80c4bb9cf05f6b5acf44a0e3e16ab5"
+    },
+    "quiet-final.host-audit.jsonl": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\quiet-final.host-audit.jsonl",
+      "bytes": 30894,
+      "sha256": "14bcbd217c67a468fddff0031684373aa78c5512c01f0cd5fab3b00a7c59bc2f"
+    },
+    "quiet-final/gpu-raw.jsonl": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\quiet-final\\gpu-raw.jsonl",
+      "bytes": 1765684,
+      "sha256": "8138d8fee2fe46e4c833d87260989a875e3f485e52867ed9bfa75d6c3ab293e6"
+    },
+    "quiet-final/cpu-raw.jsonl": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\quiet-final\\cpu-raw.jsonl",
+      "bytes": 38798,
+      "sha256": "9b359e778b48d82683ac458da62f33e3e16d350db6619944d6121c49024b95bd"
+    },
+    "quiet-final/runtime.cpu-memory.jsonl": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\quiet-final\\runtime.cpu-memory.jsonl",
+      "bytes": 70928,
+      "sha256": "543c92605b1086e2451f12af516065a1cfef00def88251f3d0ade4eebe43c958"
+    },
+    "quiet-final/runtime.gpu-memory.jsonl": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\quiet-final\\runtime.gpu-memory.jsonl",
+      "bytes": 20515,
+      "sha256": "f77698a3678069fbac658425d3baab21eddfd7801f52cbe8b99210c06511707e"
+    },
+    "cold/report.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\cold\\report.json",
+      "bytes": 274128,
+      "sha256": "7190c9c56f581382eb08ebf5108ecad70ae8aec38dbb26165265ed836b051175"
+    },
+    "raw-cold/report.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\raw-cold\\report.json",
+      "bytes": 274190,
+      "sha256": "f0ac5b6fd9a7dbe4b789d0902eb2dcfb60e4a30b2f6d4fe013ca882d396cc836"
+    },
+    "raw-warm-r2/report.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\raw-warm-r2\\report.json",
+      "bytes": 295058,
+      "sha256": "f56fa51b085029f5a66dde1f287304003aeab612529b7a0ed6c69bc1acac0e06"
+    },
+    "producer-coverage-full/report.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\producer-coverage-full\\report.json",
+      "bytes": 991951,
+      "sha256": "c5e2fcbb069517148f80e7b809036d09bdb9a91148d7b84076d89223c6af054e"
+    },
+    "producer-local-full/report.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\producer-local-full\\report.json",
+      "bytes": 992453,
+      "sha256": "853cbfe3e7e723d4cbb1ad1fcc495a225aa9aa2a7f03f0b289fee7835040a574"
+    },
+    "producer-coverage-full/bake-raw.jsonl": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\producer-coverage-full\\bake-raw.jsonl",
+      "bytes": 656901,
+      "sha256": "f3059aa4950160acb8fc705343ff6e6555d257f0b9f82055277fa1bc2ecee3ae"
+    },
+    "producer-local-full/bake-raw.jsonl": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\producer-local-full\\bake-raw.jsonl",
+      "bytes": 657409,
+      "sha256": "e31353da582e5042d4d0c53583d6be36f48abf8a333ab24cf99e9bd59349e814"
+    },
+    "allocation-requirements-final.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\allocation-requirements-final.json",
+      "bytes": 3462,
+      "sha256": "0300b17cb05ee0b99ba1d49830a1e694cd6a0629620406454a10446e8d951b4c"
+    },
+    "ledger-final.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\ledger-final.json",
+      "bytes": 137388,
+      "sha256": "87cb903b9e60256f9f9673b6de75a7d48d45e57afadc38aff05606b5be4f5a36"
+    },
+    "numeric-oracle/report.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\numeric-oracle\\report.json",
+      "bytes": 2161,
+      "sha256": "a97982e9ff9486679a8f93d27b3762aac13559e82befcd1b766dec65737913bf"
+    },
+    "raw-cpu-stage/p0-input-hashes.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\raw-cpu-stage\\p0-input-hashes.json",
+      "bytes": 30337,
+      "sha256": "dca3c35d1cb4c1af0f69ac66f766c78831a751bf097a8d32c72b41673eab8e11"
+    },
+    "raw-cpu-link/build.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\raw-cpu-link\\build.json",
+      "bytes": 2684,
+      "sha256": "87fcca3c76baf2be5bd97a635b9b0ce2221ab9afa11bf630f8af48deb71e7157"
+    },
+    "local-producer-link-r2/build.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\local-producer-link-r2\\build.json",
+      "bytes": 2978,
+      "sha256": "2bc5dcb5f282c7880f79109e9b0ba53db31c74e5ffd215efe01acc6b9a7adfca"
+    },
+    "local-producer-link-r2/mapping.patch": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\local-producer-link-r2\\mapping.patch",
+      "bytes": 266,
+      "sha256": "780192902c645df9dc451c0cee709f905af0175ceb080389ac311617324a00d2"
+    },
+    "hardware-cpu.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\hardware-cpu.json",
+      "bytes": 127,
+      "sha256": "5cbd2fcf0f2c517a5a3af40290d82374556a8c29e43fee74242b45c707b2d3b3"
+    },
+    "hardware-os.json": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\hardware-os.json",
+      "bytes": 120,
+      "sha256": "81aab9134ca9ede5f31b1ed62d32bef148c810105c2ff01b5f21df2a60a39951"
+    },
+    "hardware-gpu.csv": {
+      "path": "D:\\YYBWorkSpace\\GitHub\\VulkanLearn-worktrees\\terrain-openworld\\VulkanLearn\\artifacts\\terrain-rvt-production\\p0\\hardware-gpu.csv",
+      "bytes": 62,
+      "sha256": "45f013c366bea37ca0caa00416c051a7692adc31a29ecb85616b74da7c9f4103"
+    }
+  },
+  "acceptanceMeasurements": {
+    "steadyGpu": {
+      "maximum": 4.618,
+      "unit": "ms",
+      "statistic": "p99 of raw per-rendered-frame instrumented GPU pass sum",
+      "minSamples": 1000,
+      "sampling": "every completed timestamp-query frame, no rolling mean",
+      "cases": [
+        "fixed nine-section warmed camera trace, worker2, 30Hz"
+      ],
+      "comparison": "at most 10% above quiet-final raw p99"
+    },
+    "steadyCpu": {
+      "maximum": 72.105,
+      "unit": "ms",
+      "statistic": "p99 of unclamped rendered-frame wall intervals including pacing/capture",
+      "minSamples": 1000,
+      "sampling": "steady_clock every rendered frame; no exposure clamp",
+      "cases": [
+        "same fixed nine-section warmed camera trace, without World reload"
+      ],
+      "comparison": "at most 10% above quiet-final raw p99"
+    },
+    "singlePageProduction": {
+      "maximum": 4.0,
+      "unit": "ms",
+      "statistic": "observed maximum",
+      "minSamples": 10936,
+      "sampling": "GPU timestamps around every page production dispatch/initialization",
+      "cases": [
+        "CoverageAtlas and LocalLayerArray",
+        "real tile00, 8192, mip0..13, heightBlend=3"
+      ],
+      "comparison": "hard target, finite pressure scope; not a hardware WCET guarantee"
+    },
+    "singlePageCopy": {
+      "maximum": 4.0,
+      "unit": "ms",
+      "statistic": "observed maximum",
+      "minSamples": 10936,
+      "sampling": "GPU timestamp pair per page",
+      "cases": [
+        "synchronous output-to-host copy finite reference; V2 buffer-to-atlas copy must be measured separately"
+      ],
+      "comparison": "independent copy hard target; production+copy and per-frame sum must also stay <=6ms"
+    },
+    "wddmPeak": {
+      "maximum": 6977722777,
+      "unit": "bytes",
+      "statistic": "maximum simultaneous PID dedicated+shared sample",
+      "minSamples": 20,
+      "sampling": "requested 500ms, actual cadence recorded, gap <=2.5s; only one terminal unavailable allowed",
+      "cases": [
+        "same Full16 full route including candidate/old World reload overlap"
+      ],
+      "comparison": "at least 20% below minimum of this session's three matching full-route peaks"
+    },
+    "privatePeak": {
+      "maximum": 8194532966,
+      "unit": "bytes",
+      "statistic": "maximum sampled PID private bytes; OS peakPagefile/working-set retained separately",
+      "minSamples": 20,
+      "sampling": "GetProcessMemoryInfo, requested 500ms",
+      "cases": [
+        "same Full16 full route including reload overlap"
+      ],
+      "comparison": "at least 20% below minimum of this session's three full-route private peaks"
+    },
+    "startup": {
+      "maximum": 76.748,
+      "unit": "seconds",
+      "statistic": "process-launch to first World commit; compare monotonic event if available",
+      "minSamples": 2,
+      "sampling": "one fresh process per cold/warm case; observer uncertainty explicit",
+      "cases": [
+        "V2 fine-cache empty/SPV warm/OS uncontrolled",
+        "same inputs with bounded warm fine cache"
+      ],
+      "comparison": "at least 50% faster than current-session minimum observed startup minus 250ms observer uncertainty"
+    }
+  }
+}

@@ -200,7 +200,7 @@ mirror; this is the only third-party download in the default configure path.
 Build:
 
 ```powershell
-cmake --build build --target main_editor main_game main -j 4
+cmake --build build --target main_editor main_game main
 ```
 
 Executable output:
@@ -232,12 +232,15 @@ build\bin\main_game.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_
 
 `--exit-after-frames <N>` exits with code 0 after `N` completed `Tick()` calls.
 `--frame-limit` is a 1..1000 Hz pacing cap, not a frame count. The console
-`quit` command requests the same clean shutdown path.
+`quit` command requests the same clean shutdown path. `--autoplay` starts
+blueprint scenes in Play for this process only (it overrides
+`config/config.json -> scripts.autoPlay` without writing the file), which is
+how AI runs a playable map headlessly.
 
 Game-flavor packaging requires a Release game cache and the game binary:
 
 ```powershell
-cmake --build build-game --target main_game vl_export_game -j 4
+cmake --build build-game --target main_game vl_export_game
 build-game\bin\main_game.exe --shader-force-rebuild --exit-after-frames 2
 build-game\bin\vl_export_game.exe --project-root . --flavor game `
   --initial-scene Maps/SC_fracture_playground/SC_fracture_playground.json `
@@ -472,157 +475,81 @@ Scene JSON currently supports these `type` values:
 - `balloon` (runtime rubber soft body; current scope and limits are in `documents/contracts/softbody-runtime.md`; Jolt impact, convex-hull shards, shard-shard contact, neck anchoring, approximate Jolt-pose coupling and asset-backed audio with procedural fallback are connected; advanced spatial audio/material are not)
 - `glassPane` (runtime glass plate; current scope and limits are in `documents/contracts/glass-fracture-runtime.md`; impact-point radial fracture, Jolt convex-hull shards, attached plates, support islands, CCD projectiles, landing secondary fracture and asset-backed glass audio with procedural fallback are connected; transparent material is not)
 
-`terrain` requires `terrainPath` and is preflighted by `TerrainAssetLoader::Prepare`, which decodes
-the heightmap before a World candidate is committed. Optional scene-object `pageOrigin` /
-`pageTilesPerSide` override the TR's virtual page region; each terrain object gets
-`placementId = terrain|<name>`, so the same TR may be placed several times in one World
-(empty `placementId` falls back to `assetPath`). The renderer expands it into chunk
-`MeshObjectBuildPlan`s; there is still no separate World terrain type. `M_terrain` implements Phase C2c + P3 streaming:
-up to 256 layers in the layer table; `TerrainPageManager` registers all terrains in a World into one
-32×32 global page table and 4096×4096 ID/weight atlases (top-4 per texel); terrain meshes carry global
-page coordinates in `texCoord1`, and the shader uses `texelFetch(pageTable)` then samples the atlases
-and three texture arrays. `TerrainLayerTable::BuildImage` packs a 256×4 RGBA32F LUT for
-per-layer metadata (row0 height/slope, row1 noise/blendEdge/uv, row2 pagesPerSide/pageTableBase/
-sourceSet/flags, row3 avgColor/reserved; the shader still reads only row1). The page table/atlases
-and layer table are World-level shared resources. Since S1 the catalog is built from a World-level
-`TerrainLayerRegistry` (`source/terrain/terrainLayerRegistry.*`): layer identity is `layer.key`
-(default `"<assetPath>#<name>"`), identical keys with identical parameters dedupe to one globalId,
-conflicting keys / duplicate keys inside one TR / more than 256 global layers fail at load. Assignment
-follows scene-object order × first appearance, so a single-TR World keeps `globalId == local index`
-and its catalog/ID images are byte-identical. `TerrainWeightMapBuilder` takes the placement's
-local→global map and writes globalId into the ID image and candidate lists; `TerrainPageManager`
-stores that map per registration. Each MI's `TR.layers.size()` is checked against its own bound
-arrays. S2 replaces the single source-texture triple with
-`TerrainLayerSourceSets = map<sourceSet, TerrainSourceSetRecord>` (`source/terrain/terrainLayerSources.h`):
-one set must always point at the same albedo/normal/pbr shared_ptrs, different sets may bind different
-arrays (and different `sourceResolution`), uploads pick the record by `layer.sourceSet` and the source
-slice through `layerSlices` (globalId → slice), and all sets still share one atlas so their three
-formats must match. `TerrainPageManager` has CPU-side resident/eviction/LRU/priority/refcount APIs.
-`terrainlayerstats` prints `globalLayers / sourceSets / dedupedLayers / capacity`. Multi-biome mode 0
-still indexes each MI's `sampler2DArray` by globalId, so mode 0 arrays must be laid out per globalId;
-mode 1 is not affected.
-Registration is keyed by `placementId`, not `assetPath`; all 32×32 physical atlas slots (1024) are
-allocatable — a missing page renders a neutral surface (baseColor 0.18, roughness 0.9, geometry
-normal) directly in the shader, so no fallback page is reserved and a 32×32 single terrain
-registers. The World raises the resident capacity to cover every registered page (capped at 1024).
-`RegisterTerrain(preload=true)` records `preloadDeferredCount` and keeps going when capacity
-cannot evict. The renderer creates zero page table/atlas textures, then `BuildUploadBatch` /
-`RecordTerrainPageUploads` records the page-table and atlas subregion copies into one command
-buffer and commits dirty only after successful upload. Production streaming uses
-`RegisterTerrain(preload=false)`: each placement
-prefetches only a 2×2 center set, then `TerrainPageManager::ApplyFeedback` consumes the dedicated
-128×128 `terrainFeedback` pass (color + 128×128 depth, so only the nearest page wins) through a
-host-visible, frame-fence-gated readback ring
-(`source/terrain/terrainFeedback.*`, `source/render/resource/terrainFeedbackGpu.*`). Feedback hits
-advance `lastSeenEpoch` and `lastTouchedEpoch`; misses enter a cross-frame request queue (priority desc, deferred
-rotation), at most 8 `RequestPageAtEpoch` calls per frame. `TerrainUploadGpuRing`
-(`source/render/resource/rendererTerrainLoader.*`) has one preallocated staging slot per frame
-fence; at most 8 atlas pages are recorded into the main frame command buffer before scene passes,
-and `TerrainUploadTransaction` commits only after `SubmitFrame` succeeds. Eviction no longer clears
-the atlas: the physical slot is quarantined until
-`max(lastSeenEpoch, lastSubmittedEpoch) + framesInFlight + 1 <= completedEpoch`, then
-`ReclaimExpiredQuarantines` returns it to the immediately-allocatable pool. The effective CPU
-eviction window is `max(2, framesInFlight + 1)`. The default resident budget is 512 because the
-measured 32×32 wide-view working set is about 415 pages. `terrain stats` reports residency/eviction/upload
-counters (`requestHits` vs `feedbackHits` are distinct) and `terrain capacity N` queues a budget
-change consumed at frame start; lowering it only evicts pages outside the safety window and may
-temporarily stay over budget. Only terrain with `TR.layers` and a `layerTable` material participates
-in feedback; layerless M_pbr/M_unlit terrain neither registers virtual pages nor drives residency.
-Current limits: no dedicated low-resolution fallback page or temporal fade (the L4e path only
-blends a coarser mip toward `avgColor`), no frustum/tile-level prefetch (only forward-motion
-prefetch), and no terrain editing or per-chunk/edit-time collision rebuild. Runtime chunk
-streaming does unload out-of-window geometry.
-CPU geometry LOD/stitching generation, load-time chunk residency, runtime streaming and LOD
-selection are wired: with `lodLevels>1` (`TerrainMeshBuilder::BuildChunks(plan, lodLevel,
-filter)`, TR `lodLevels`/`lodDistances`/`chunkResidencyDistances`) the loader computes chunk
-AABBs from the heightmap (`ComputeChunkBounds`), keeps only the (chunk, LOD) pairs inside the
-residency window (`TerrainChunkResidencyDistancesCm`, default `lodDistances × 1.1`, coarsest
-always resident) and generates those meshes. LOD>0 uses boundary stitching, with the boundary
-ring at `step=1` normals and coarse vertices blended toward them near the edge; there is no
-skirt. The load-time window comes from the scene JSON camera; `TerrainChunkStreamer` then
-consumes the render camera every frame, builds missing chunks on a worker thread, creates their
-GPU objects on the game thread, and retires chunks absent for two frames. `WorldSnapshotBuilder`
-picks one level per
-`lodGroupId = placementId|chunkX|chunkZ` from the camera's distance to the chunk world AABB with a
-10% hysteresis band; if the target level was never resident it falls back to the nearest coarser
-resident level (worst case coarsest) instead of leaving a hole. The snapshot is the single
-source for color, shadow, picking and MaterialInstance context; all levels of a group share one
-RuntimeId. `terrainlod stats` reports per-group level/distance/switch count and
-`terrainchunk stats` reports load-time geometry bytes, created/skipped chunks, per-level
-vertices/indices and the current frame's draws.
-`lodLevels=1` old assets still generate and bind LOD0 only, byte-identical to the legacy path.
-`source/terrain/terrainCollision.*` turns a `TerrainBuildPlan` plus placement into a static
-Jolt `HeightFieldShape` body in a caller-owned `PhysicsSystem` (cm→m, 16-bit height compression,
-Y*X*Z degrees rotation); `ScriptPhysicsWorld::SetTerrainCollisions` owns those RAII bodies and
-`ScriptRuntimeSubsystem` feeds the World's instances on every Play (cm/degree/scale validation
-happens at World build). `terraincollision stats` prints the Play-mode body count and placements;
-`source/physics/joltRegistration.*` is the shared process-wide Jolt registration, and
-`TerrainCollisionWorld` is only a test/offline fixture. `TerrainLayerPageManager`
-(`source/terrain/terrainLayerPageManager.*`) has an L2 GPU side: a 256×4 catalog, one
-RGBA32F page table per mip (width capped at 4096), and three 4096²/slice `sampler2DArray`
-atlases (no mip) are created World-locally and the per-layer tail pages are copied GPU→GPU
-at load. Page-table texels are `R=physicalPage/G=mip/B=valid/A=priority`; eviction emits an
-all-zero invalidation in the same upload batch. BC atlases cannot use `vkCmdClearColorImage`,
-so they are zeroed with a 16 KiB zero-page staging copy. L3 adds the optional shader path:
-`M_terrain` keeps `u_terrainLayerMode=0` sampling `layerAlbedo/Normal/Pbr` directly
-(byte-identical legacy path), while mode 1 resolves top-4 IDs through the catalog, per-mip
-page table (stride = page-table texel count / 256), physical page, and 4096² atlas with
-half-texel page inset; invalid entries use catalog row3 `avgColor`, never layer 0.
-`sourceResolution` must match the real square source extent; mode 0 only warns, mode 1
-fails at load. L4a drives mode 1 residency from the existing 128×128 coverage-page feedback:
-`TerrainLayerVisibilityResolver` (`source/terrain/terrainLayerVisibility.*`) turns each visible
-cover page's top-4 layers into (layer, mip, that mip's full page set), limited to 16
-`RequestPageAtEpoch` calls and 8 atlas-page uploads per frame through
-`TerrainLayerUploadGpuRing`. Only pages that the current frame's feedback actually hit are refreshed:
-pages of a visible layer that are not candidates use a short 16-epoch idle window, so residency
-tracks the visible working set instead of every historical mip; pages that leave view are evicted
-after a 180-epoch idle window plus the GPU safety window. `MipForPriority` has seven levels
-(`>=192/>=128/>=64/>=32/>=16/>=8/else` → mip0..6) so 2K mip4 and 4K mip6 are reachable, and `TerrainLayerDesc::avgColor`
-defaults to neutral 0.18 instead of black. L4b adds a precise per-slot layer feedback on the same
-pass: four fixed 128×128 `R8G8B8A8_UNORM` attachments (`terrainLayerFeedback0..3`) encode
-`R=layerId, G=pageIndex, B=mip|valid, A=frameTag`, sharing the cover RT's D32 depth. The pass now
-takes 4 `worldTexture` inputs (page table, layer catalog, layer IDs, layer weights) and writes 5
-color outputs; `TerrainLayerFeedbackGpuRing` reads the four images back into one 64 KiB ring slot per
-frame, `SummarizeTerrainLayerFeedback` dedupes/stales them, and `ApplyExact` drives
-`RequestPageAtEpoch`/`MarkPageUsedAtEpoch`; layer UV/mip/page math lives in
-`shader/glsl/materialFunction/terrainLayerVTMath.glsl` and is shared by `mf_terrainLayerVT.glsl`
-and `pass/terrainFeedback.frag`. Exact feedback is the primary driver; L4a derivation is only the
-startup/backpressure fallback. `terrainlayerstats` reports layer residency/atlas format/bytes plus
-visibleLayers, `feedbackHits`, `exactSlots`/`exactPages`, `requested`/`accepted`, uploads, pending and
-the mip request distribution; `terrainlayer capacity N` and `terrainlayer preload` (full-preload
-comparison, disables idle eviction) are console-only.
-L4c adds coarser-mip prefetch on the same resolver: a missing target page also queues the
-`+1`/`+2` mip pages of the same UV region (`pageX >> level`), priority ×3/4 and ×1/2, clamped by the
-layer's maximum mip and the per-frame request budget; pages that are already resident do not expand.
-`terrainlayer stats` adds `fallbackSlots`, `fallbackPages`, `fallbackLevels` and `targetMips`. Shader-side
-`avgColor` fade-in is still **not** implemented — a missing target mip still hard-switches to the coarser
-page, or to `avgColor` when no coarser page exists.
-L4d adds starvation protection: when the exact layer feedback has fewer than
-`minValidFeedbackTexels` (default 1) valid texels — camera inside/clipped by terrain, or all
-cover pages missing — the resolver only bumps `starvedFrames`, never touches
-`lastSeenEpoch`/`lastTouchedEpoch`, and adds `starvationCreditEpochs`
-(`min(starvedFrames, starvationGraceFrames)`, default grace 480) to the idle window so the
-resident set is preserved. `ApplyTerrainLayerExactFeedback` then returns false so
-`RenderSystem` runs the L4a cover-page derivation in the same frame; recovery clears
-`starvedFrames`, advances `lastValidFeedbackEpoch` and decays the credit by
-`starvationCreditDecayPerFrame` (default 1). Past the grace window the credit is capped and the
-resident set decays at `starvationEvictionPagesPerFrame` (default 2) pages/frame, so a long
-feedback outage never locks memory. `terrainlayerstats` prints `starvedFrames` /
-`lastValidEpoch` / `usedCoverFallback` / `idleGrace`.
-L4e adds `u_layerForceMip` (-1 auto, 0..4 console override via
-`terrainlayer forcemip N`) on both `M_terrain` and `M_terrainFeedback`; the shader and
-feedback share `TerrainLayerTargetMip` in `terrainLayerVTMath.glsl`. When the sampled
-`usedMip` is coarser than the target, `TerrainLayerFallbackBlend` mixes albedo toward catalog
-`avgColor`, pbr toward the neutral value and normal toward the geometric normal at
-`0.2 × mip-gap` (cap 0.6, gap 0 unchanged). Camera forward motion above 5 cm/frame makes
-`TerrainLayerVisibilityResolver` prefetch the four finer-mip children of resident visible
-pages, at most 4 requests/frame, outside the feedback request budget but still through
-`RequestPageAtEpoch`. `terrainlayer stats` additionally prints `forceMip` / `prefetchMoving` /
-`prefetchPages` / `prefetchRequests` / `prefetchAccepted` / `fallbackBlendPages` /
-`avgColorPages`.
-CPU page baking is still
-synchronous inside `RequestPageAtEpoch`. Editor thumbnails do not render terrain. The contract is
-`documents/contracts/terrain.md`.
+`terrain` requires `terrainPath` and is preflighted by `TerrainAssetLoader::Prepare`
+before a World candidate is committed. Each placement has `placementId = terrain|<name>`;
+the same TR can be placed multiple times with distinct names. Internal callers with an empty
+placementId fall back to assetPath. Scene-object `pageOrigin` / `pageTilesPerSide` override
+that placement's coverage region, not the composited material resolution. The renderer expands
+terrain into chunk `MeshObjectBuildPlan`s; World rendering still uses ordinary mesh objects.
+
+The only terrain material runtime standard is **compositedVT + resident tiling height**.
+TR assets must explicitly declare `compositedVT.enabled=true` and a resource-relative
+`packagePath` shared by all terrains in one World; Editor/Cook additionally requires a shared
+`productionSourcePath` author recipe. Current Store is sparse V2, generator3, raw RGBA8;
+V1 fallback and TR `residentPages`/`heightBudgetBytes` are rejected. The World pool and
+cross-World Candidate/Active/Retiring admission use the unchanged P0Frozen hash and caps.
+Rendering requires validated real production inputs, not dependency hashes alone. Cook, dependency identity,
+material-page residency/feedback, height atlas/LUT, budgets and publication rules belong to
+[the composited VT contract](documents/contracts/terrain-composited-vt.md).
+The default scene in `config/config.json` is
+`Generated/Validation/TerrainCompositedVT/Variants/RVTv2_Full4x4_R8192_Default_CoverageAtlas/SC_composited_vt_4x4.json`
+(the RVTv2 V2 Full16 CoverageAtlas publication). It lives under the gitignored resource
+`Generated/` tree, so a fresh clone of the resources worktree does not contain it and the
+default startup fails until that publication is produced locally; pass `--initial-scene` for
+another scene in that case.
+Default selection is not proof of complete runtime/package acceptance; check the scoped evidence
+linked from [the acceptance entry](documents/reference/rendering/terrain-composited-vt-acceptance.md).
+Gates that were explicitly deferred rather than passed (full P4 editing, authoring-mode fault
+consumption, per-class memory attribution, per-phase independent sign-off, R17 re-export and
+V1 artifact removal) are listed in the deferral section of
+`documents/rationale/terrain-rvt-production-execution.md`. The active producer uses World + WorldPadding compute;
+the old five compute stages and depth-replay capture pass are deleted. Quality imports the
+original feedback pass's 7-MRT winner payload (two 128² RGBA32_UINT images) plus final depth,
+not a second visibility replay. Complete captures are module evidence, not interactive acceptance.
+RawAuthorSource kind3 binds verified author bytes separately from author projection digests;
+it does not become generator input or a base-page hash dependency.
+shader files, quality interfaces, root-ready, Cook and far-view results are not final evidence.
+Keep the P3 Repeat-129 padding counterexample distinct from Clamp support proofs, and bind
+final claims to the actual binary, generator source/artifact hashes and independent audit.
+
+`TerrainLayerRegistry` assigns World-global layer IDs in scene/first-appearance order.
+Layer identity is `layer.key` (default `<assetPath>#<name>`); identical keys and parameters
+deduplicate, while conflicts, duplicate keys within a TR and more than 256 global layers fail.
+Coverage uses the placement's local-to-global mapping. Layer catalog, sourceSet/slice mappings,
+Paint, coverage page table and ID/weight inputs remain dependencies for compositing, near-field
+detail, TES or editing; they must not be removed merely because the former layer-source streaming
+path was retired. They do not provide an alternative base-material runtime.
+
+CPU geometry remains heightmap-based. `TerrainMeshBuilder` generates chunk LODs and boundary
+stitching without skirts; the shared boundary uses LOD0 samples/normals. Load-time residency
+uses chunk world AABBs and `chunkResidencyDistances` (default `lodDistances * 1.1`),
+with the coarsest level always resident. `TerrainChunkStreamer` builds missing CPU chunks on
+a worker, uploads on GT at safe boundaries and retires out-of-window GPU resources by epoch.
+`WorldSnapshotBuilder` selects one resident level per `placementId|chunkX|chunkZ` using
+camera-to-AABB distance and 10% hysteresis, falling back to a coarser resident level.
+Color, shadow, picking and material context consume the same snapshot; levels share a RuntimeId.
+`terrainlod stats` / `terrainchunk stats` expose selection and geometry residency.
+
+Landscape Paint/Sculpt retain authoring sessions and immutable World snapshots. Sculpt updates
+macro geometry/bounds through the composited sculpt commit and safe vertex-update queue;
+Paint refreshes coverage/composited author data. Saving heightmap and Paint are separate
+operations and do not themselves prove Cook or runtime acceptance.
+Geometry, TR schema, placement, coverage and Editor details belong to
+[the terrain contract](documents/contracts/terrain.md).
+
+`terrainCollision.*` creates static Jolt heightfields from macro height in the caller-owned
+PhysicsSystem (cm to m, 16-bit height compression, Y*X*Z rotation).
+World retains each placement's plan/TRS; every Play passes them to
+`ScriptPhysicsWorld::SetTerrainCollisions`. Stop, repeated Play and World replacement destroy
+the old RAII bodies. Ordinary Editor loading creates no physics world. Near-character patches
+also sample macro height; resident tiling height/TES displacement does not enter collision or
+foot IK. `terraincollision stats` reports Play collision state; process-wide registration is
+shared through `EnsureJoltRegistered`, and `TerrainCollisionWorld` is a test/offline fixture.
+
+Retired dual-path sampling, layer-source page management/feedback and old debug controls are
+documented only in [the historical snapshot](documents/rationale/terrain-legacy-runtime-contract-snapshot.md).
+That snapshot's paths, commands, screenshots and test counts are historical evidence, not current
+implementation instructions or acceptance results.
 
 If adding a new type, update both loader logic and documentation.
 The historical `SC_scene01` `sunLight` object was migrated to

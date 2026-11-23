@@ -1,6 +1,8 @@
 #include "render/preview/materialPreviewCommit.h"
 
 #include "renderSystem.h"
+#include "render/resource/rendererTerrainLoader.h"
+#include "render/resource/terrainCompositedService.h"
 
 #include "commonFunction.h"
 #include "core/runtimeResult.h"
@@ -550,6 +552,10 @@ RenderSystem::CommitMaterialInstancePreviewDraft(
         activeOfflineWorldAssets.swap(preparedOfflineAssets);
 
         hasMaterialInstancePreviewMaterialOverride = true;
+        const auto terrainStreaming = activeCache.GetTerrainStreaming();
+        if (terrainStreaming && terrainStreaming->composited)
+            terrainStreaming->composited->NotifyMaterialChanged(
+                materialInstancePath.value, replacementMaterialInstance);
         materialInstancePreviewOverridePath.swap(replacementPath);
         materialInstancePreviewOverrideMaterialKey.swap(replacementKey);
 

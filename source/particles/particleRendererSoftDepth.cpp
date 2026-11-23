@@ -56,14 +56,29 @@ void ParticleRenderer::RecordSoftDepth(
     }
 
     const uint32_t imageCount = backend->GetSwapchainImageCount();
-    const uint64_t signature =
-        reinterpret_cast<uintptr_t>(
-            static_cast<VkImageView>(depth.imageView)) * 1315423911ull ^
-        reinterpret_cast<uintptr_t>(
-            static_cast<VkSampler>(depth.sampler)) * 2654435761ull ^
-        reinterpret_cast<uintptr_t>(
-            static_cast<VkImageView>(soft.imageView)) * 40503ull ^
-        static_cast<uint64_t>(imageCount) * 97ull;
+    // 签名必须覆盖全部 image 的 view/sampler：所有 set 与 UBO 都是按 image
+    // 一次性建好的。只哈希当前 image 会让签名随 swapchain image 轮换而变化，
+    // 从而每帧销毁重建整个 descriptor pool 与 N 个 UBO（实测 ~1.3ms/帧）。
+    uint64_t signature = 14695981039346656037ull;
+    const auto mixSignature = [&signature](uint64_t value)
+    {
+        signature ^= value;
+        signature *= 1099511628211ull;
+    };
+    mixSignature(imageCount);
+    for (uint32_t image = 0; image < imageCount; ++image)
+    {
+        const auto& imageDepth = depthList.at(
+            std::min<size_t>(image, depthList.size() - 1));
+        const auto& imageSoft = softList.at(
+            std::min<size_t>(image, softList.size() - 1));
+        mixSignature(reinterpret_cast<uintptr_t>(
+            static_cast<VkImageView>(imageDepth.imageView)));
+        mixSignature(reinterpret_cast<uintptr_t>(
+            static_cast<VkSampler>(imageDepth.sampler)));
+        mixSignature(reinterpret_cast<uintptr_t>(
+            static_cast<VkImageView>(imageSoft.imageView)));
+    }
     if (softDepthResources.signature != signature ||
         softDepthResources.sets.size() != imageCount)
     {

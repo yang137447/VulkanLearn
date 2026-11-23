@@ -198,14 +198,15 @@ float LayerWeight(
 }
 
 void SelectTop4(
-    const std::vector<float>& weights,
+    const float* weights,
+    size_t weightCount,
     const std::vector<uint8_t>& layerIds,
     uint8_t* outIds,
     uint8_t* outWeights)
 {
     float topWeights[TopLayerCount] = {0.0f, 0.0f, 0.0f, 0.0f};
     int topIndices[TopLayerCount] = {0, 0, 0, 0};
-    for (size_t index = 0; index < weights.size(); ++index)
+    for (size_t index = 0; index < weightCount; ++index)
     {
         const float weight = weights[index];
         for (uint32_t slot = 0; slot < TopLayerCount; ++slot)
@@ -424,7 +425,12 @@ void BakeTile(
             }
             uint8_t ids[TopLayerCount];
             uint8_t texelWeights[TopLayerCount];
-            SelectTop4(weights, tile.layerIds, ids, texelWeights);
+            SelectTop4(
+                weights.data(),
+                weights.size(),
+                tile.layerIds,
+                ids,
+                texelWeights);
             const size_t offset =
                 ((static_cast<size_t>(outputStartY + y) * outputRowStrideTexels) +
                  static_cast<size_t>(outputStartX + x)) * 4;

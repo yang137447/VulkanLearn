@@ -59,3 +59,9 @@ resources/**/*.json filter=lfs diff=lfs merge=lfs -text
 
 # Small editor icons belong in regular Git, overriding format-wide LFS rules.
 ui/icons/** -filter -diff -merge -text
+
+# 运行时与 exporter 按字节校验这些文件的 SHA256（config/*.sha256），
+# Windows 上 core.autocrlf=true 检出为 CRLF 会使冻结摘要失配，故固定 LF。
+config/terrainRvtP0Frozen.json text eol=lf
+config/terrainRvtP0Frozen.json.sha256 text eol=lf
+config/terrainRvtP0Frozen.json.review.json text eol=lf

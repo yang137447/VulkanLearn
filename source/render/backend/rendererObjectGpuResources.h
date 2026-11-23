@@ -1,12 +1,17 @@
 #pragma once
 
 #include <vector>
+#include <map>
+#include <memory>
 
 #include <vulkan/vulkan.hpp>
 
 #include "baseStructs.h"
 #include "render/rhi/rhiResourceHandles.h"
 #include "animation/skinPose.h"
+
+class Texture;
+class MaterialInstance;
 
 namespace VL
 {
@@ -49,6 +54,9 @@ struct RendererObjectGpuResources
     std::vector<std::vector<RHIDescriptorSetHandle>> descriptorSetHandles;
     std::vector<std::vector<vk::DescriptorSet>> descriptorSets;
     std::vector<std::vector<vk::WriteDescriptorSet>> writeDescriptorSets;
+    std::vector<std::map<uint32_t, std::shared_ptr<Texture>>> materialTextureReferences;
+    std::vector<uint64_t> materialTextureVersions;
+    std::vector<const MaterialInstance*> materialTextureOwners;
 
     RHIDescriptorPoolHandle shadowDescriptorPoolHandle;
     vk::DescriptorPool shadowDescriptorPool;

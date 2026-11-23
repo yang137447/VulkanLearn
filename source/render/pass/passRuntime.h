@@ -1,6 +1,7 @@
 #pragma once
 
 #include <memory>
+#include <array>
 #include <cstddef>
 #include <string>
 #include <vector>
@@ -15,11 +16,14 @@
 
 class PipelineBase;
 class MaterialInstance;
+class Texture;
 class RenderGraph;
 struct Renderpass;
+class PipelineBase;
 
 namespace VL
 {
+class TerrainCompositedQualityGpu;
 
 // Frame-data upload and renderer-state query service used by pass recording.
 // PassRuntime owns pass flow, while RenderSystem supplies updates and policy

@@ -1,0 +1,38 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#define VL_TERRAIN_TES_STAGE 1
+#include "generate/M_terrainParamter.glsl"
+#include "materialFunction/mf_terrainLayerBlend.glsl"
+
+layout(local_size_x = 64) in;
+layout(set = 4, binding = 0, std430) readonly buffer Queries
+{
+    vec4 localAndGlobalUv[];
+} queries;
+layout(set = 4, binding = 1, std430) writeonly buffer Results
+{
+    vec4 weightsAndDisplacement[];
+} results;
+layout(push_constant) uniform QueryCount
+{
+    uint count;
+} queryCount;
+
+void main()
+{
+    uint index = gl_GlobalInvocationID.x;
+    if (index >= queryCount.count) return;
+    MaterialFunctionContext context;
+    context.texCoord = queries.localAndGlobalUv[index].xy;
+    context.texCoord1 = queries.localAndGlobalUv[index].zw;
+    int ids[4];
+    float weights[4];
+    uint status = TerrainResolveTopLayers(context, false, false, ids, weights);
+    float displacement = TerrainBlendedLayerDisplacementMeters(context, ids, weights);
+    results.weightsAndDisplacement[index * 3] =
+        vec4(float(ids[0]), float(ids[1]), float(ids[2]), float(ids[3]));
+    results.weightsAndDisplacement[index * 3 + 1] =
+        vec4(weights[0], weights[1], weights[2], weights[3]);
+    results.weightsAndDisplacement[index * 3 + 2] =
+        vec4(displacement, float(status), 0, 0);
+}

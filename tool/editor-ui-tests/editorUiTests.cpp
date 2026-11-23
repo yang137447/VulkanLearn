@@ -36,6 +36,7 @@
 #include "engine/particlePreviewRequest.h"
 #include "engine/modelPreviewRotation.h"
 #include "input/mouseMotionBatch.h"
+#include "baseStructs.h"
 #include "debug/drawDebug.h"
 #include "sceneNode.h"
 #include "world/meshSceneObjectIdentity.h"
@@ -276,7 +277,11 @@ EditorSceneActorSnapshot CameraBlueprint(const std::string& name)
 class TestSystem final : public Rml::SystemInterface
 {
 public:
-    double GetElapsedTime() override { return Rml::SystemInterface::GetElapsedTime() + timeOffset; }
+    double GetElapsedTime() override
+    {
+        return (manualClock ? 0.0 : Rml::SystemInterface::GetElapsedTime()) + timeOffset;
+    }
+    bool manualClock = false;
     double timeOffset = 0;
     bool LogMessage(Rml::Log::Type type, const Rml::String& message) override
     {
@@ -2329,6 +2334,7 @@ TEST_F(EditorUiTest, BlueprintAssetComponentSelectionShowsOnlyItsDetailsWithoutM
 
 TEST_F(EditorUiTest, BlueprintLogicSelectionHidesSpatialGizmoAndViewportPickSelectsOnlyMesh)
 {
+    system.manualClock = true;
     OpenBlueprintAsset();
     PublishBlueprintViewport();
     PublishBlueprintLogicComponents();
@@ -2344,6 +2350,14 @@ TEST_F(EditorUiTest, BlueprintLogicSelectionHidesSpatialGizmoAndViewportPickSele
             EXPECT_FALSE(document->GetElementById("blueprint-gizmo-" + std::to_string(axis) + "-" +
                 std::to_string(line))->IsVisible(true));
     MovePointer(BlueprintViewportPoint());
+    auto* pickHover = context->GetHoverElement();
+    auto* pickImage = document->GetElementById("blueprint-asset-preview-image");
+    const auto pickPoint = BlueprintViewportPoint();
+    ASSERT_EQ(pickHover, pickImage)
+        << "hover=" << (pickHover ? pickHover->GetId() : "null")
+        << " point=" << pickPoint.x << "," << pickPoint.y
+        << " image visible=" << pickImage->IsVisible(true)
+        << " image size=" << pickImage->GetClientWidth() << "," << pickImage->GetClientHeight();
     context->ProcessMouseButtonDown(0, 0);
     context->ProcessMouseButtonUp(0, 0);
     Refresh();
@@ -2351,16 +2365,48 @@ TEST_F(EditorUiTest, BlueprintLogicSelectionHidesSpatialGizmoAndViewportPickSele
     EXPECT_TRUE(document->GetElementById("blueprint-asset-component-details-0")->IsVisible(true));
     EXPECT_FALSE(document->QuerySelector("#blueprint-asset-logic-tree-0 .list-item")->IsClassSet("selected"));
     EXPECT_TRUE(sink.commands.empty());
-    // Publishing the viewport schedules a debounced PreviewBlueprint request;
-    // it is not part of the viewport pick and must not hide a pick-generated action.
-    runtimeSink.actions.erase(
-        std::remove_if(runtimeSink.actions.begin(), runtimeSink.actions.end(),
-            [](const UiAction& action)
-            {
-                return action.type == UiActionType::PreviewBlueprint;
-            }),
-        runtimeSink.actions.end());
     EXPECT_TRUE(runtimeSink.actions.empty());
+}
+
+TEST_F(EditorUiTest, BlueprintViewportPickWaitsForDebouncedReplacementGeneration)
+{
+    system.manualClock = true;
+    OpenBlueprintAsset();
+    PublishBlueprintViewport();
+    PublishBlueprintLogicComponents();
+    Click("[data-action=blueprint-asset-logic-select][data-index='0']");
+    system.timeOffset = 0.349;
+    Refresh();
+    auto* image = document->GetElementById("blueprint-asset-preview-image");
+    ASSERT_TRUE(image->IsVisible(true));
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    system.timeOffset = 0.351;
+    Refresh();
+    ASSERT_EQ(runtimeSink.actions.size(), 1u);
+    ASSERT_EQ(runtimeSink.actions[0].type, UiActionType::PreviewBlueprint);
+    EXPECT_FALSE(image->IsVisible(true));
+    MovePointer(BlueprintViewportPoint());
+    EXPECT_EQ(context->GetHoverElement(), document->GetElementById("blueprint-asset-preview-surface"));
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-logic-details-0")->IsVisible(true));
+    auto replacement = std::make_shared<std::vector<EditorSceneActorSnapshot>>(*snapshot.sceneActors);
+    for (auto& actor : *replacement)
+        actor.worldGeneration = 8;
+    snapshot.sceneActors = replacement;
+    Refresh();
+    ASSERT_TRUE(image->IsVisible(true));
+    MovePointer(BlueprintViewportPoint());
+    ASSERT_EQ(context->GetHoverElement(), image);
+    context->ProcessMouseButtonDown(0, 0);
+    context->ProcessMouseButtonUp(0, 0);
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("blueprint-asset-logic-details-0")->IsVisible(true));
+    EXPECT_TRUE(document->GetElementById("blueprint-asset-component-details-0")->IsVisible(true));
+    EXPECT_FALSE(document->QuerySelector("#blueprint-asset-logic-tree-0 .list-item")->IsClassSet("selected"));
+    EXPECT_EQ(runtimeSink.actions.size(), 1u);
+    EXPECT_TRUE(sink.commands.empty());
 }
 
 TEST_F(EditorUiTest, BlueprintLogicSelectionFallsBackImmediatelyWhenRemoved)
@@ -5675,6 +5721,88 @@ TEST_F(EditorUiTest, ExpandedOutlinerMeshRoutesChildSelectionThroughTheExistingS
     EXPECT_TRUE(sink.commands.empty());
 }
 
+TEST_F(EditorUiTest, TerrainModelSelectionIdentityEnablesSculptWithoutSelectingSameNamedMesh)
+{
+    const auto terrain = LayeredTerrainActor("Landscape_00", 1);
+    SelectSceneActorForSculpt(terrain);
+    AddActor(MeshActor("Landscape_00", 1));
+    snapshot.selectedActorIdentity.clear();
+    Refresh();
+    Click("[data-action=outliner-actor][data-index='1']");
+    ASSERT_TRUE(selectionSink.selectedModel);
+    const auto& selected = *selectionSink.selectedModel;
+    snapshot.selectedActorIdentity = ResolveSceneSelectionActorIdentity(
+        selected.actorIdentity, selected.objectIdentity);
+    Refresh();
+    EXPECT_FALSE(document->GetElementById("terrain-mode-sculpt")->HasAttribute("disabled"));
+    EXPECT_FALSE(document->GetElementById("terrain-mode-paint")->HasAttribute("disabled"));
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    const auto stroke = BeginTerrainStrokeAtCenter();
+    ASSERT_EQ(stroke.type, UiActionType::TerrainEdit);
+    EXPECT_EQ(stroke.terrainBrush.placementId, terrain.identity);
+    EXPECT_EQ(stroke.terrainBrush.worldGeneration, terrain.worldGeneration);
+}
+
+TEST_F(EditorUiTest, TerrainMaterialSelectionIdentityKeepsPaintAvailable)
+{
+    const auto terrain = LayeredTerrainActor("Landscape_00", 1);
+    SelectSceneActorForSculpt(terrain);
+    Click("[data-action=outliner-expand][data-index='1']");
+    Refresh();
+    Click("[data-action=outliner-slot]");
+    ASSERT_TRUE(selectionSink.selectedMaterial);
+    const auto& selected = *selectionSink.selectedMaterial;
+    snapshot.selectedActorIdentity = ResolveSceneSelectionActorIdentity(
+        selected.modelContext.actorIdentity, selected.objectIdentity);
+    snapshot.selectedMaterialSlotIndex = selected.materialSlotIndex;
+    Refresh();
+    ASSERT_FALSE(document->GetElementById("terrain-mode-paint")->HasAttribute("disabled"));
+    Click("#terrain-mode-paint");
+    Refresh();
+    const auto stroke = BeginPaintStrokeAtCenter();
+    ASSERT_EQ(stroke.type, UiActionType::TerrainPaint);
+    EXPECT_EQ(stroke.terrainPaint.placementId, terrain.identity);
+    EXPECT_EQ(stroke.terrainPaint.worldGeneration, terrain.worldGeneration);
+}
+
+TEST_F(EditorUiTest, TerrainPickContextIdentityResolvesActorInsteadOfChunkObject)
+{
+    const auto terrain = LayeredTerrainActor("Landscape_00", 1);
+    SelectSceneActorForSculpt(terrain);
+    Editor::Selection::MaterialInstanceSelection picked;
+    picked.worldGeneration = terrain.worldGeneration;
+    picked.objectId = terrain.meshObjectId;
+    picked.objectIdentity = "Landscape_00::chunk_0_0";
+    picked.modelContext.actorIdentity = terrain.identity;
+    snapshot.selectedActorIdentity = ResolveSceneSelectionActorIdentity(
+        picked.modelContext.actorIdentity, picked.objectIdentity);
+    Refresh();
+    ASSERT_FALSE(document->GetElementById("terrain-mode-paint")->HasAttribute("disabled"));
+    Click("#terrain-mode-sculpt");
+    Refresh();
+    const auto stroke = BeginTerrainStrokeAtCenter();
+    ASSERT_EQ(stroke.type, UiActionType::TerrainEdit);
+    EXPECT_EQ(stroke.terrainBrush.placementId, terrain.identity);
+}
+
+TEST_F(EditorUiTest, SelectionWithoutActorIdentityFallsBackToMeshAndDisablesTerrainBrushes)
+{
+    const auto terrain = LayeredTerrainActor("Landscape_00", 1);
+    SelectSceneActorForSculpt(terrain);
+    const auto mesh = MeshActor("Landscape_00", 1);
+    AddActor(mesh);
+    snapshot.selectedActorIdentity = ResolveSceneSelectionActorIdentity(
+        {}, mesh.sceneObjectIdentity);
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("terrain-mode-sculpt")->HasAttribute("disabled"));
+    EXPECT_TRUE(document->GetElementById("terrain-mode-paint")->HasAttribute("disabled"));
+    Click("#workspace-undo");
+    EXPECT_TRUE(runtimeSink.actions.empty());
+    EXPECT_NE(document->GetElementById("actor-details-content")->GetInnerRML().find(
+        mesh.sections.front().meshKey), std::string::npos);
+}
+
 TEST_F(EditorUiTest, OutlinerMeshSelectionKeepsThePreviousModelRouting)
 {
     AddActor(MeshActor("Sphere_01", 1));
@@ -8016,7 +8144,7 @@ TEST_F(EditorUiTest, ViewportToolbarKeepsOneActiveToolSpaceAndViewMode)
     }
     EXPECT_EQ(panel->ViewportTransformSpace(), "local");
 
-    // 只有 view mode 有真实后端：Lit=0，Unlit=1，未实现的 Wireframe 保持禁用。
+    // 只有 view mode 有真实后端：Lit=0，Unlit=1，Wireframe=100。
     Click("#viewport-view-lit");
     ASSERT_EQ(runtimeSink.actions.size(), 1u);
     EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetDebugViewMode);
@@ -8038,10 +8166,18 @@ TEST_F(EditorUiTest, ViewportToolbarKeepsOneActiveToolSpaceAndViewMode)
 
     auto* wireframe = document->GetElementById("viewport-view-wireframe");
     ASSERT_NE(wireframe, nullptr);
-    EXPECT_TRUE(wireframe->HasAttribute("disabled"));
+    EXPECT_FALSE(wireframe->HasAttribute("disabled"));
     EXPECT_FALSE(wireframe->GetAttribute<Rml::String>("title", "").empty());
     wireframe->DispatchEvent("click", {});
-    EXPECT_EQ(runtimeSink.actions.size(), 2u);
+    ASSERT_EQ(runtimeSink.actions.size(), 3u);
+    EXPECT_EQ(runtimeSink.actions.back().type, UiActionType::SetDebugViewMode);
+    EXPECT_EQ(runtimeSink.actions.back().intValue, kRenderViewModeWireframe);
+    view.debugViewMode = kRenderViewModeWireframe;
+    panel->UpdateRuntimeView(view);
+    context->Update();
+    EXPECT_TRUE(wireframe->IsClassSet("active"));
+    EXPECT_FALSE(document->GetElementById("viewport-view-lit")->IsClassSet("active"));
+    EXPECT_FALSE(document->GetElementById("viewport-view-unlit")->IsClassSet("active"));
     EXPECT_TRUE(sink.commands.empty());
 }
 
@@ -9099,10 +9235,10 @@ TEST_F(EditorUiTest, LandscapePanelShowsEmptyStateAndLayerCardsFromSelectedTerra
     EXPECT_EQ(document->GetElementById("terrain-layer-visible-count")->GetInnerRML(), "2 / 2 layers");
     EXPECT_NE(cards->GetInnerRML().find("Grass"), std::string::npos);
     EXPECT_NE(cards->GetInnerRML().find("Rock"), std::string::npos);
-    EXPECT_NE(cards->GetInnerRML().find("set 1"), std::string::npos);
-    EXPECT_NE(cards->GetInnerRML().find("uvScale 2"), std::string::npos);
-    EXPECT_NE(cards->GetInnerRML().find("set 2"), std::string::npos);
-    EXPECT_NE(cards->GetInnerRML().find("uvScale 1.5"), std::string::npos);
+    // 卡片只保留材质名字和层号；uvScale/uvRotation 留给双击滑出的细节面板。
+    EXPECT_NE(cards->GetInnerRML().find("Layer 0"), std::string::npos);
+    EXPECT_NE(cards->GetInnerRML().find("Layer 1"), std::string::npos);
+    EXPECT_EQ(cards->GetInnerRML().find("uvScale"), std::string::npos);
 
     const std::string status = document->GetElementById("terrain-layer-status")->GetInnerRML();
     EXPECT_NE(status.find("Selected: Grass"), std::string::npos);
@@ -9130,6 +9266,86 @@ TEST_F(EditorUiTest, LandscapePanelShowsEmptyStateAndLayerCardsFromSelectedTerra
     EXPECT_EQ(document->GetElementById("terrain-surface-chunk-count")->GetInnerRML(),
         "2 x 2 (4)");
     EXPECT_EQ(document->GetElementById("terrain-surface-section-count")->GetInnerRML(), "3");
+}
+
+TEST_F(EditorUiTest, LandscapeDetailMaterialExposesTessellationControls)
+{
+    EditorSceneActorSnapshot terrain = LayeredTerrainActor("Landscape", 31);
+    auto terrainPlan = std::make_shared<TerrainBuildPlan>(*terrain.terrainPlan);
+    terrainPlan->desc.materialInstancePath =
+        "Maps/SC_test/Materials/MI_terrain.json";
+    terrainPlan->desc.detailMaterialInstancePath =
+        "Maps/SC_test/Materials/MI_terrain_tess.json";
+    terrainPlan->desc.layers[0].displacementM = 0.12f;
+    terrain.terrainPlan = std::move(terrainPlan);
+    SelectSceneActorForSculpt(std::move(terrain));
+    Click("#viewport-tool-landscape");
+    Refresh();
+    Click("#workspace-terrain-tab");
+    Refresh();
+    document->GetElementById("terrain-layer-card-0")->DispatchEvent("dblclick", {});
+    Refresh();
+    EXPECT_TRUE(document->GetElementById("terrain-layer-details")->IsClassSet("open"));
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-layer-displacement"), 12.0f);
+
+    EXPECT_NE(document->GetElementById("terrain-detail-material-path")->GetInnerRML()
+            .find("MI_terrain_tess.json"), std::string::npos);
+    EXPECT_FALSE(document->GetElementById("terrain-detail-material-open")
+            ->HasAttribute("disabled"));
+    const char* tessControls[] = {
+        "terrain-material-tess-max",
+        "terrain-material-tess-pixels",
+        "terrain-material-tess-radius",
+        "terrain-material-detail-uv",
+        "terrain-material-displacement-scale",
+    };
+    for (const char* id : tessControls)
+        EXPECT_TRUE(document->GetElementById(id)->HasAttribute("disabled")) << id;
+
+    // 细分参数只存在于 LOD0 的 detail MI；打开它以后同一组输入框才可编辑。
+    snapshot.activeDocument.emplace();
+    auto& asset = *snapshot.activeDocument;
+    asset.assetPath = "Maps/SC_test/Materials/MI_terrain_tess.json";
+    asset.baseMaterialPath = "shader/glsl/M_terrain.json";
+    const auto addFloat = [&](const char* name, float value)
+    {
+        EditorParameterSnapshot parameter;
+        parameter.name = name;
+        parameter.type = EditorParameterType::Float;
+        parameter.effectiveValue = {EditorParameterType::Float, {value, 0.0f, 0.0f, 0.0f}};
+        parameter.defaultValue = parameter.effectiveValue;
+        asset.parameters.push_back(parameter);
+    };
+    addFloat("u_terrainTessMax", 24.0f);
+    addFloat("u_terrainTessTargetPixels", 6.0f);
+    addFloat("u_terrainTessRadiusM", 140.0f);
+    addFloat("u_detailUvScale", 5.0f);
+    addFloat("u_layerDisplacementScale", 2.5f);
+    panel->Build(snapshot);
+    context->Update();
+
+    for (const char* id : tessControls)
+        EXPECT_FALSE(document->GetElementById(id)->HasAttribute("disabled")) << id;
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-tess-max"), 24.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-tess-pixels"), 6.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-tess-radius"), 140.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-detail-uv"), 5.0f);
+    EXPECT_FLOAT_EQ(FieldNumber("terrain-material-displacement-scale"), 2.5f);
+
+    sink.commands.clear();
+    SetValue("terrain-material-tess-max", "20");
+    panel->Build(snapshot);
+    ASSERT_FALSE(sink.commands.empty());
+    const auto& batch = std::get<ExecuteEditorCommandBatchPayload>(
+        sink.commands.back().payload);
+    ASSERT_EQ(batch.commands.size(), 1u);
+    EXPECT_EQ(batch.commands[0].type, EditorCommandType::SetMaterialParameterOverride);
+    const auto& payload = std::get<SetMaterialParameterOverridePayload>(
+        batch.commands[0].payload);
+    EXPECT_EQ(payload.assetPath, asset.assetPath);
+    EXPECT_EQ(payload.parameter, "u_terrainTessMax");
+    EXPECT_FLOAT_EQ(std::get<float>(payload.value), 20.0f);
+
 }
 
 TEST_F(EditorUiTest, LandscapeBrushLibraryAppliesPresetParameters)

@@ -27,10 +27,12 @@
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/rendererResourceLoadContext.h"
 #include "render/resource/terrainFeedbackGpu.h"
-#include "render/resource/terrainLayerFeedbackGpu.h"
+#include "render/resource/terrainCompositedFeedbackGpu.h"
 #include "render/resource/terrainPageBakeGpu.h"
+#include "render/resource/terrainCompositedService.h"
 #include "render/resource/rendererTerrainLoader.h"
 #include "terrain/terrainPageManager.h"
+#include "terrain/terrainVertexUpdateQueue.h"
 #include "terrain/terrainLayerRegistry.h"
 #include "terrain/terrainLayerTable.h"
 #include "renderGraph.h"
@@ -454,15 +456,19 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     // TerrainStreamingState 上，而不是 coordinator 的函数局部变量。
     std::shared_ptr<TerrainStreamingState> terrainStreaming =
         std::make_shared<TerrainStreamingState>();
+    terrainStreaming->composited = std::make_shared<TerrainCompositedService>(
+        *rendererBackend, *pipelineFactory, *terrainStreaming);
+    terrainStreaming->composited->SetWorldGeneration(
+        loadContext.resourceCache.CaptureActiveWorldLocalResources()->ownerGeneration);
+    terrainStreaming->setResourcePhase = [service = std::weak_ptr<TerrainCompositedService>(
+        terrainStreaming->composited)](TerrainRvtResourcePhase phase) {
+        if (const auto owner = service.lock())
+            owner->SetPhase(phase);
+    };
+    terrainStreaming->terrainVertices = std::make_shared<TerrainVertexUpdateQueue>();
     TerrainPageManager& terrainPageManager = terrainStreaming->pageManager;
     // page table 与 feedback ring 始终存在：即使 World 没有地形，feedback pass
     // 仍需要一个合法 worldTexture，并清空一张 128×128 RT 产出 0 页统计。
-    terrainStreaming->pageResources.pageTable =
-        CreateTerrainPageTableGpuResource(*rendererBackend);
-    terrainStreaming->feedbackRing =
-        std::make_shared<TerrainFeedbackGpuRing>(*rendererBackend);
-    terrainStreaming->layerFeedbackRing =
-        std::make_shared<TerrainLayerFeedbackGpuRing>(*rendererBackend);
     // S1：先在整个 World 上建立全局层注册表。多个 TR 可以有不同层定义；
     // 同 key 且参数一致的去重成同一个 globalId，冲突在注册任何页之前失败。
     TerrainLayerRegistry layerRegistry;
@@ -485,6 +491,24 @@ RendererResourceLoadCoordinator::LoadRendererResources(
     const std::vector<TerrainLayerDesc> worldTerrainLayers =
         layerRegistry.LayerDescriptions();
     const bool hasTerrainLayers = !layerTerrains.empty();
+    std::vector<TerrainBuildPlan> compositedPlans;
+    for (const auto& object : worldBuildPlan.sceneAssetPlan.objectPlans)
+        if (object.objectType == "terrain" && object.terrainBuildPlan)
+            compositedPlans.push_back(*object.terrainBuildPlan);
+    if (!compositedPlans.empty())
+        TerrainCompositedService::InitializeFrozenConfig(*rendererBackend);
+    terrainStreaming->composited->PrepareWorld(compositedPlans);
+    if (!compositedPlans.empty())
+        terrainStreaming->composited->ConfigureWorldDescriptorBudget(loadContext.resourceCache);
+    const auto terrainBudget = terrainStreaming->composited->BudgetOwner();
+    if (compositedPlans.empty() || TerrainCompositedService::CookMode())
+        terrainStreaming->feedbackRing =
+            std::make_shared<TerrainFeedbackGpuRing>(*rendererBackend, terrainBudget);
+    terrainStreaming->compositedFeedbackRing =
+        std::make_shared<TerrainCompositedFeedbackGpuRing>(*rendererBackend, terrainBudget);
+    if (!terrainStreaming->pageResources.pageTable)
+        terrainStreaming->pageResources.pageTable =
+            CreateTerrainPageTableGpuResource(*rendererBackend);
     for (const TerrainBuildPlan* terrainPlan : layerTerrains)
     {
         const std::vector<uint8_t>* layerIdMap =
@@ -496,7 +520,7 @@ RendererResourceLoadCoordinator::LoadRendererResources(
             layerIdMap == nullptr ? std::vector<uint8_t>() : *layerIdMap,
             false);
     }
-    if (!terrainPageManager.Registrations().empty())
+    if (!terrainPageManager.Registrations().empty() && TerrainCompositedService::CookMode())
     {
         // 驻留预算必须覆盖整个世界，否则 LRU 会在世界内部切出一条直线：
         // 一侧的页常驻、另一侧永远缺页（实测 4×4 tile × 8×8 页 = 1024 页，
@@ -524,7 +548,11 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         for (const TerrainPageManager::Registration& registration :
              terrainPageManager.Registrations())
         {
-            terrainPageManager.RequestInitialTerrainPages(registration);
+            for (uint32_t pageY = 0; pageY < registration.tilesPerSide; ++pageY)
+                for (uint32_t pageX = 0; pageX < registration.tilesPerSide; ++pageX)
+                    if (!terrainPageManager.RequestPage(
+                        registration.placementId, pageX, pageY))
+                        throw std::runtime_error("World coverage cannot fit complete frozen inputs");
         }
         // 初始 2×2 页会写脏页表和 atlas；这一整批就是 streaming state 的初始版本。
         terrainStreaming->NotifyContentChanged();
@@ -532,22 +560,6 @@ RendererResourceLoadCoordinator::LoadRendererResources(
 
         // CPU 初始页上传完成后打开 GPU 烘焙：之后所有 RequestPageAtEpoch
         // 只记录 job，渲染线程不再同步烘焙 128² 层权重。
-        terrainStreaming->pageBake =
-            std::make_shared<TerrainPageBakeGpu>(
-                *rendererBackend,
-                *pipelineFactory,
-                terrainPageManager);
-        if (terrainStreaming->pageBake->Available())
-        {
-            terrainPageManager.SetGpuPageBakeEnabled(true);
-        }
-        else
-        {
-            std::cerr
-                << "[Terrain] Falling back to CPU page bake: "
-                << terrainStreaming->pageBake->UnavailableReason()
-                << std::endl;
-        }
     }
     if (hasTerrainLayers)
     {
@@ -556,31 +568,9 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         // 局部层总数，供 terrainlayerstats 验证去重效果。
         terrainStreaming->layerDedupedLayerCount =
             layerRegistry.DedupedLayerCount();
-        // 层页虚拟编号依赖各层源分辨率，必须在创建页表/请求页之前配置。
-        terrainStreaming->layerPageManager.ConfigureLayers(worldTerrainLayers);
-        // 与覆盖页同一条规则：驻留预算必须覆盖整个世界的层页虚拟页数，
-        // 否则 LRU 会在世界内部切出一条边界，界外的层页永远“请求 -> 淘汰 ->
-        // 再请求”。上限是层页管理器的可用物理槽位（fallback 槽位除外）。
-        // 全 1K 层时每层 mip0..3 = 85 页：4 层 340 页仍取下限 512；
-        // 2K 层（341 页/层）或更多层会把容量抬到物理上限，再由 mip 预算在
-        // 容量内做粗化分配，而不是靠淘汰追尾。
-        uint32_t layerVirtualPages = 0;
-        for (size_t layerIndex = 0; layerIndex < worldTerrainLayers.size();
-             ++layerIndex)
-        {
-            layerVirtualPages += terrainStreaming->layerPageManager
-                .TotalPagesForLayer(static_cast<uint32_t>(layerIndex));
-        }
-        terrainStreaming->layerPageManager.SetResidentCapacity(
-            ComputeTerrainResidentCapacity(
-                layerVirtualPages,
-                TerrainLayerPageManager::DefaultResidentCapacity,
-                terrainStreaming->layerPageManager.UsablePhysicalPageCount()));
-        terrainStreaming->layerResources =
-            CreateTerrainLayerGpuResources(
-                *rendererBackend,
-                worldTerrainLayers,
-                terrainStreaming->layerPageManager);
+        if (TerrainCompositedService::CookMode())
+            terrainStreaming->layerResources =
+                CreateTerrainLayerGpuResources(*rendererBackend, worldTerrainLayers);
     }
     // candidate 拥有新 state；提交时随 package 一起发布，失败时随 candidate 析构。
     loadContext.resourceCache.BindTerrainStreaming(terrainStreaming);
@@ -775,28 +765,16 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         }
     }
 
+    // 每块地形都有自己的层权重量；一个 MI 被多个 placement 共享时，
+    // u_terrainWeightMapMode=1 会让所有 tile 采同一份掩码（表现为同一图案
+    // 逐 tile 重复、掩码边界变成硬边）。这里直接失败，而不是静默采错。
+    const std::string weightMapError =
+        terrainStreaming->weightMapBindings.SharedBindingError();
+    if (!weightMapError.empty())
+        throw std::runtime_error(weightMapError);
+
     if (hasTerrainLayers && !terrainStreaming->layerSources.empty())
     {
-        // L3：atlas 依赖真实 MI 的层数组，已在首个地形 MI 载入时创建；这里
-        // 只做兜底。mode 0 上传每层尾页的映射验证集合；mode 1 也只请求
-        // 这个小集合，其余层页由覆盖页 feedback 逐帧驱动（L4a）。
-        if (!terrainStreaming->layerResources.atlasesCreated)
-        {
-            CreateTerrainLayerAtlasGpuResources(
-                *rendererBackend,
-                *terrainStreaming);
-        }
-        if (terrainStreaming->layerVTRequested &&
-            !terrainStreaming->layerUploadRing)
-        {
-            // 逐帧层页上传 ring：槽数 = frame fence 数，只打包页表 texel；
-            // atlas 像素走 GPU→GPU copy，不占 staging。
-            terrainStreaming->layerUploadRing =
-                std::make_shared<TerrainLayerUploadGpuRing>(
-                    *rendererBackend,
-                    terrainStreaming->layerPageManager,
-                    terrainStreaming->maxLayerPageUploadsPerFrame);
-        }
         // L4b：层页 feedback 的 worldTexture 必须指向真实的 catalog/ID/权重，
         // 并且要在 pass descriptor 建立之前绑定（本函数返回后才建 descriptor）。
         loadContext.resourceCache.BindWorldTexture(
@@ -808,14 +786,11 @@ RendererResourceLoadCoordinator::LoadRendererResources(
         loadContext.resourceCache.BindWorldTexture(
             "terrainLayerWeights",
             terrainStreaming->pageResources.layerWeights);
-        RequestInitialTerrainLayerPages(
-            *terrainStreaming,
-            0,
-            rendererBackend->GetFrameFenceCount());
-        terrainStreaming->NotifyContentChanged();
-        ApplyTerrainLayerStreamingUploads(*rendererBackend, *terrainStreaming);
     }
     // 所有 mesh renderable 都已创建，现在才能跨对象解析根点骨骼绑定。
+    loadContext.resourceCache.BindWorldTexture(
+        "terrainCompositedSurfaceMap",
+        terrainStreaming->composited->SurfaceMap());
     // 失败直接抛出，由 World 事务回滚；不留下部分绑定或静默回退 rest pin。
     // GPU 发丝的 renderable key 已含 placement 身份（renderableObjectKey.h），
     // 因此同一 SM 的多个 placement 各自持有可变模拟状态，不再在加载期拒绝。

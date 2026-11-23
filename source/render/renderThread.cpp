@@ -4,6 +4,7 @@
 
 #include "profiler.h"
 #include "renderSystem.h"
+#include "render/backend/frameAbandon.h"
 
 namespace VL
 {
@@ -137,6 +138,7 @@ std::string RenderThread::ConsumeFatalError()
 
 void RenderThread::ThreadMain()
 {
+    TaskFrameWorkerScope workerScope;
     while (true)
     {
         {
@@ -161,6 +163,14 @@ void RenderThread::ThreadMain()
         {
             PROFILE_SCOPE("RenderThread::Frame");
             renderSystem->RenderLatestSnapshotOrLastGood();
+        }
+        catch (const TaskFrameAborted&)
+        {
+            // 仅显式测试已完成 backend 恢复；仍走 EndRender 归还 mailbox/frame budget。
+        }
+        catch (const DescriptorFrameSkipped&)
+        {
+            // 这不是成功的 scene frame；仅归还已恢复同步的请求槽，保留后续正常帧机会。
         }
         catch (const std::exception& exception)
         {

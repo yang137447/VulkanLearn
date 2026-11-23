@@ -1,6 +1,7 @@
 #include "textureIO.h"
 
 #include "compressedTextureDecoder.h"
+#include "core/tracingIfstream.h"
 
 #include <algorithm>
 #include <array>
@@ -16,15 +17,19 @@
 #include <utility>
 
 #define STB_IMAGE_IMPLEMENTATION
+#define fopen VL::RuntimeFileTrace::OpenCFile
 #include <stb_image.h>
+#undef fopen
 #include <ImfArray.h>
 #include <ImfRgbaFile.h>
+#include <ImfStdIO.h>
+#include <IexThrowErrnoExc.h>
 
 namespace
 {
     std::vector<uint8_t> ReadWholeFile(const std::filesystem::path& path)
     {
-        std::ifstream stream(path, std::ios::binary);
+        VL::RuntimeFileTrace::TracingIfstream stream(path, std::ios::binary, "TextureIO.ReadWholeFile");
         if (!stream.is_open())
             throw std::runtime_error("Failed to open texture file: " + path.string());
         stream.seekg(0, std::ios::end);
@@ -135,14 +140,8 @@ namespace
         return useSrgb ? HostImage::PixelFormat::RGBA8_SRGB : HostImage::PixelFormat::RGBA8_UNORM;
     }
 
-    HostImage LoadExrWithOpenExr(
-        const std::filesystem::path& path,
-        HostImage::TextureSemantic semantic)
+    HostImage ReadExrPixels(Imf::RgbaInputFile& file, HostImage::TextureSemantic semantic)
     {
-        try
-        {
-            // 用 OpenEXR 正式读取文件，避免 TinyEXR 在部分压缩格式上解码失败。
-            Imf::RgbaInputFile file(path.string().c_str());
             const Imath::Box2i dataWindow = file.dataWindow();
             const int width = dataWindow.max.x - dataWindow.min.x + 1;
             const int height = dataWindow.max.y - dataWindow.min.y + 1;
@@ -186,6 +185,28 @@ namespace
             }
 
             return image;
+    }
+
+    HostImage LoadExrWithOpenExr(
+        const std::filesystem::path& path,
+        HostImage::TextureSemantic semantic)
+    {
+        try
+        {
+            // 用 OpenEXR 正式读取文件，避免 TinyEXR 在部分压缩格式上解码失败。
+            if (!VL::RuntimeFileTrace::IsEnabled())
+            {
+                Imf::RgbaInputFile file(path.string().c_str());
+                return ReadExrPixels(file, semantic);
+            }
+            const auto filename = path.string();
+            VL::RuntimeFileTrace::TracingIfstream input(
+                std::filesystem::u8path(filename), std::ios::in | std::ios::binary, "TextureIO.OpenEXR");
+            if (!input)
+                Iex::throwErrnoExc();
+            Imf::StdIFStream stream(input, filename.c_str());
+            Imf::RgbaInputFile file(stream);
+            return ReadExrPixels(file, semantic);
         }
         catch (const std::exception& e)
         {
@@ -805,7 +826,8 @@ std::vector<uint8_t> TextureIO::SaveToMemory(const HostImage& image, const SaveO
     const std::filesystem::path tempPath = std::filesystem::temp_directory_path() / "textureio_temp_output.exr";
     if (Save(tempPath, image, options))
     {
-        std::ifstream stream(tempPath, std::ios::binary);
+        VL::RuntimeFileTrace::TracingIfstream stream(
+            tempPath, std::ios::binary, "TextureIO.SaveToMemoryReadback");
         output.assign(std::istreambuf_iterator<char>(stream), std::istreambuf_iterator<char>());
         std::error_code ec;
         std::filesystem::remove(tempPath, ec);

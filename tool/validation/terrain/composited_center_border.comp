@@ -1,0 +1,62 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#define dFdx(value) vec2(0.0)
+#define dFdy(value) vec2(0.0)
+#include "materialFunction/mf_terrainCompositedVT.glsl"
+#undef dFdx
+#undef dFdy
+
+layout(local_size_x = 8, local_size_y = 8) in;
+layout(std430, set = 0, binding = 1) buffer Output { uint words[]; } outputPage;
+layout(set = 0, binding = 13) uniform sampler2DArray testPageTable;
+layout(set = 0, binding = 14) uniform sampler2DArray testAlbedo;
+layout(set = 0, binding = 15) uniform sampler2DArray testNormal;
+layout(set = 0, binding = 16) uniform sampler2DArray testOrm;
+
+void main()
+{
+    uvec2 pixel = gl_GlobalInvocationID.xy;
+    if (any(greaterThanEqual(pixel, uvec2(136))))
+        return;
+    const vec2 gradientX[16] = vec2[16](
+        vec2(8, 0), vec2(1, 0), vec2(5.65685425), vec2(5, 0),
+        vec2(7.9, 0), vec2(1.99, 0), vec2(5.58614357), vec2(0),
+        vec2(2, 0), vec2(5.5, 0), vec2(128, 0), vec2(128, 0),
+        vec2(0.25, 0), vec2(-4, 0), vec2(7.5, 0), vec2(7.5, 0));
+    const vec2 gradientY[16] = vec2[16](
+        vec2(0, 1), vec2(0, 8), vec2(-0.70710678, 0.70710678), vec2(5, 1),
+        vec2(0, 1.99), vec2(0, 7.9), vec2(-1.40714249, 1.40714249), vec2(0),
+        vec2(0, 1), vec2(0, 1.41421356), vec2(0, 0.25), vec2(0, 0.25),
+        vec2(0, 0.125), vec2(0, -1), vec2(0, 1), vec2(0, 1));
+    float epsilon = (float(pixel.x % 17u) + 0.5) / 65536.0;
+    vec2 uv = vec2(0.5) + vec2(
+        pixel.x % 2u == 0u ? epsilon : -epsilon,
+        pixel.x % 4u < 2u ? epsilon : -epsilon);
+    if ((pixel.x / 17u) % 2u != 0u)
+        uv = vec2(pixel.x % 2u == 0u ? epsilon : 1.0 - epsilon,
+            pixel.x % 4u < 2u ? epsilon : 1.0 - epsilon);
+    uint scenario = pixel.y % 16u;
+    if (scenario == 14u)
+        uv += vec2(2, -3);
+    if (scenario == 15u)
+        uv += vec2(pixel.x % 2u == 0u ? -1 : 1, pixel.x % 4u < 2u ? -1 : 1);
+    TerrainCompositedFootprint footprint = TerrainCompositedFootprintFromGradients(
+        gradientX[scenario] / 256.0, gradientY[scenario] / 256.0, vec2(256), 1.0);
+    if (scenario == 11u)
+        footprint.targetMip = 0.0;
+    TerrainCompositedVTResult actual = MF_TerrainCompositedVTAtFootprint(
+        testPageTable, testAlbedo, testNormal, testOrm, uv, vec2(256), 1.0,
+        pixel.y >= 68u ? 1.0 : 0.0, 0.0, mat3(1), footprint);
+    uint texel = pixel.y * 136u + pixel.x;
+    const uint plane = 18496u;
+    outputPage.words[texel] = packUnorm4x8(actual.albedo);
+    outputPage.words[plane + texel] = packUnorm4x8(vec4(actual.normalWorld * 0.5 + 0.5, 1));
+    outputPage.words[2u * plane + texel] = packUnorm4x8(actual.orm);
+    outputPage.words[3u * plane + texel] = floatBitsToUint(actual.actualMips.x);
+    outputPage.words[4u * plane + texel] = floatBitsToUint(actual.actualMips.y);
+    outputPage.words[5u * plane + texel] = floatBitsToUint(actual.valid);
+    outputPage.words[6u * plane + texel] = floatBitsToUint(footprint.targetMip);
+    outputPage.words[7u * plane + texel] = floatBitsToUint(float(footprint.tapCount));
+    outputPage.words[8u * plane + texel] = floatBitsToUint(uv.x);
+    outputPage.words[9u * plane + texel] = floatBitsToUint(uv.y);
+}

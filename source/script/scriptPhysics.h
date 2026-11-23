@@ -33,6 +33,8 @@ public:
     // body 由本对象持有，析构/Stop 时一定早于 PhysicsSystem 销毁。
     void SetTerrainCollisions(const std::vector<TerrainCollisionInstance>& instances);
     size_t TerrainCollisionBodyCount() const;
+    size_t TerrainCollisionProxyCount() const;
+    size_t TerrainCollisionPatchCount() const;
     std::vector<std::string> TerrainCollisionPlacementIds() const;
 private:
     void StepInternal(nlohmann::json& states, const nlohmann::json& declarations, float dt, int substeps);

@@ -71,6 +71,9 @@ void PrepareMaterial(
         path, input.surfaceContracts.at(mode), resolved.effectiveMaterialInstanceJson,
         resolved.materialPath, resolved.materialJson, input.supportsDualSourceBlend,
         // 缩略图只渲染一帧且不录制 pre-skin pass，始终使用原有混合路径。
+        false,
+        // 预览球没有 patch 索引：地形细分变体在缩略图里会被跳过绘制，
+        // 因此这里强制关闭细分，保留材质参数预览。
         false);
     PrepareShader(compiler, input, result, plan.shaderVariantKey, plan.baseShaderCompileRequest);
 

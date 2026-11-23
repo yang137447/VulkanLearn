@@ -12,6 +12,13 @@
 
 namespace VL::EditorUi
 {
+std::string ResolveSceneSelectionActorIdentity(
+    const std::string& actorIdentity, const std::string& objectIdentity)
+{
+    return !actorIdentity.empty() ? actorIdentity :
+        SceneActorIdentity(EditorSceneActorType::Mesh, objectIdentity);
+}
+
 namespace
 {
 

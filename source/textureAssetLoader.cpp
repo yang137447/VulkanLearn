@@ -5,6 +5,7 @@
 #include <cctype>
 #include <filesystem>
 #include <fstream>
+#include "core/tracingIfstream.h"
 #include <sstream>
 #include <stdexcept>
 #include <nlohmann/json.hpp>
@@ -94,7 +95,8 @@ void ValidateTextureAssetReference(
 TextureBindingLoadDesc LoadTextureAssetDesc(std::string_view textureAssetPath)
 {
     // 先读取纹理资产 JSON，再统一导出为 RendererMaterialLoader 可复用的加载描述。
-    std::ifstream textureAssetFile(CommonFunction::Path(std::string(textureAssetPath)));
+    VL::RuntimeFileTrace::TracingIfstream textureAssetFile(
+        CommonFunction::Path(std::string(textureAssetPath)), std::ios::in, "TextureAssetLoader.Json");
     if (!textureAssetFile.is_open())
     {
         throw std::runtime_error("Failed to open texture asset: " + std::string(textureAssetPath));

@@ -1,0 +1,87 @@
+#version 450
+#extension GL_GOOGLE_include_directive : require
+#include "terrainCompositedBakeWorldTypes.glsl"
+layout(local_size_x = 16) in;
+layout(std430, set = 0, binding = 0) readonly buffer World
+{
+    uvec4 page;
+    uvec4 control;
+    TerrainBakeSurface surfaces[16];
+} world;
+layout(set = 0, binding = 1) uniform sampler2DArray albedos[16];
+layout(set = 0, binding = 2) uniform sampler2D catalogs[16];
+layout(std430, set = 0, binding = 3) readonly buffer Queries
+{
+    uvec4 header;
+    vec4 items[];
+} queries;
+layout(std430, set = 0, binding = 4) buffer Results
+{
+    vec4 values[];
+} results;
+#include "../materialFunction/terrainCompositedEvaluation.glsl"
+
+void SampleDiagnostic(sampler2DArray source, sampler2D catalog,
+    uint target, uint identity, vec2 domain, uint queryIndex)
+{
+    const vec2 surfaceUv = world.surfaces[target].surfaceUv.xy +
+        domain * world.surfaces[target].surfaceUv.zw;
+    const vec4 extra = texelFetch(catalog, ivec2(identity, 1), 0);
+    const vec2 uv = TerrainCompositedLayerUv(
+        surfaceUv, world.surfaces[target].material.x, extra);
+    const uint slice = world.surfaces[target].globalToSlice[identity];
+    const ivec2 extent = textureSize(source, 0).xy;
+    const vec2 position = uv * vec2(extent) - 0.5;
+    const ivec2 base = ivec2(floor(position));
+    const vec2 fraction = fract(position);
+    const uint offset = queryIndex * 9u;
+    results.values[offset] = vec4(uv, float(slice), float(identity));
+    results.values[offset + 1u] = vec4(position, fraction);
+    const vec4 sampled = textureLod(source, vec3(uv, float(slice)), 0.0);
+    results.values[offset + 2u] = sampled;
+    vec4 manual = vec4(0);
+    for (int vertical = 0; vertical < 2; ++vertical)
+        for (int horizontal = 0; horizontal < 2; ++horizontal)
+        {
+            const ivec2 texel = ((base + ivec2(horizontal, vertical)) % extent + extent) % extent;
+            const vec4 tap = texelFetch(source, ivec3(texel, int(slice)), 0);
+            results.values[offset + 3u + uint(vertical * 2 + horizontal)] = tap;
+            manual += tap * (horizontal != 0 ? fraction.x : 1.0 - fraction.x) *
+                (vertical != 0 ? fraction.y : 1.0 - fraction.y);
+        }
+    results.values[offset + 7u] = manual;
+    results.values[offset + 8u] = sampled - manual;
+}
+
+#define DIAGNOSTIC_LITERAL_CASE(target) \
+    case target: SampleDiagnostic(albedos[target], catalogs[target], target, \
+        identity, query.xy, queryIndex); break
+
+void main()
+{
+    const uint queryIndex = gl_GlobalInvocationID.x;
+    if (queryIndex >= queries.header.x)
+        return;
+    const vec4 query = queries.items[queryIndex];
+    const uint target = uint(query.z);
+    const uint identity = uint(query.w);
+    switch (target)
+    {
+    DIAGNOSTIC_LITERAL_CASE(0);
+    DIAGNOSTIC_LITERAL_CASE(1);
+    DIAGNOSTIC_LITERAL_CASE(2);
+    DIAGNOSTIC_LITERAL_CASE(3);
+    DIAGNOSTIC_LITERAL_CASE(4);
+    DIAGNOSTIC_LITERAL_CASE(5);
+    DIAGNOSTIC_LITERAL_CASE(6);
+    DIAGNOSTIC_LITERAL_CASE(7);
+    DIAGNOSTIC_LITERAL_CASE(8);
+    DIAGNOSTIC_LITERAL_CASE(9);
+    DIAGNOSTIC_LITERAL_CASE(10);
+    DIAGNOSTIC_LITERAL_CASE(11);
+    DIAGNOSTIC_LITERAL_CASE(12);
+    DIAGNOSTIC_LITERAL_CASE(13);
+    DIAGNOSTIC_LITERAL_CASE(14);
+    DIAGNOSTIC_LITERAL_CASE(15);
+    }
+}

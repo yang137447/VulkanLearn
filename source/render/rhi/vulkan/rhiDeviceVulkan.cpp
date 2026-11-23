@@ -85,6 +85,17 @@ void RHIDeviceVulkan::WaitForFence(vk::Fence fence)
     }
 }
 
+bool RHIDeviceVulkan::WaitForFence(vk::Fence fence, uint64_t timeoutNanoseconds)
+{
+    const vk::Result result =
+        GetDevice().waitForFences(fence, true, timeoutNanoseconds);
+    if (result == vk::Result::eSuccess)
+        return true;
+    if (result == vk::Result::eTimeout)
+        return false;
+    throw std::runtime_error("Failed to wait for fence: " + vk::to_string(result));
+}
+
 void RHIDeviceVulkan::ResetFence(vk::Fence fence)
 {
     GetDevice().resetFences(fence);
@@ -168,6 +179,16 @@ bool RHIDeviceVulkan::IsDualSourceBlendEnabled() const
 {
     // 由 VulkanManager 返回创建逻辑设备时实际启用的状态，避免误用仅物理支持的结果。
     return VulkanManager::GetInstance().IsDualSourceBlendEnabled();
+}
+
+bool RHIDeviceVulkan::IsTessellationShaderEnabled() const
+{
+    return VulkanManager::GetInstance().IsTessellationShaderEnabled();
+}
+
+bool RHIDeviceVulkan::IsFillModeNonSolidEnabled() const
+{
+    return VulkanManager::GetInstance().IsFillModeNonSolidEnabled();
 }
 
 bool RHIDeviceVulkan::IsDrawIndirectCountEnabled() const
@@ -365,6 +386,17 @@ const std::vector<vk::Image>& RHIDeviceVulkan::GetSwapchainImages(
     const VL::PresentTarget& target) const
 {
     return target.images;
+}
+
+std::shared_ptr<const void> RHIDeviceVulkan::CapturePresentTargetLifetime(
+    const VL::PresentTarget& target) const
+{
+    return target.swapchainOwner;
+}
+
+uint64_t RHIDeviceVulkan::GetPresentTargetGeneration(const VL::PresentTarget& target) const
+{
+    return target.swapchainGeneration;
 }
 
 std::vector<vk::Fence>& RHIDeviceVulkan::GetTaskFinishedFences()

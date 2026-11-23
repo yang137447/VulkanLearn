@@ -39,6 +39,7 @@ void ShaderReloadRuntime::Initialize(
 
     shaderFileMonitor = std::make_unique<ShaderFileMonitor>();
     shaderFileMonitor->Initialize(shaderRoot);
+    shaderFileMonitor->SetBackgroundScanEnabled(true);
     shaderCompileWorker = std::make_unique<ShaderCompileWorker>();
     shaderCompileWorker->Start(shaderCompiler);
 }

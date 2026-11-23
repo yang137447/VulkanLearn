@@ -4,6 +4,7 @@
 #include "pipeline/pipelineFactory.h"
 #include "pipeline/graphicsShaderVariantArtifact.h"
 #include "pipeline/pipelineBase.h"
+#include "render/backend/rendererBackendVulkan.h"
 #include "renderGraph.h"
 #include <algorithm>
 #include <memory>
@@ -93,22 +94,39 @@ Material::Material(
             this->materialDescriptorSchema,
             shaderArtifact.shaderBindings);
 
-    renderPipeline = candidateState != nullptr
-        ? pipelineFactory.CreateGraphicsPipelineCandidate(
-            *candidateState,
-            &renderPass.renderPass,
-            surfacePassPipelineContractKey,
-            shaderArtifact,
-            cullMode,
-            blendMode,
-            pipelineLayoutDesc)
-        : pipelineFactory.CreateGraphicsPipeline(
-            &renderPass.renderPass,
-            surfacePassPipelineContractKey,
-            shaderArtifact,
-            cullMode,
-            blendMode,
-            pipelineLayoutDesc);
+    const auto createSurfacePipeline =
+        [&](const PassPipelineContractKey& contract)
+        {
+            return candidateState != nullptr
+                ? pipelineFactory.CreateGraphicsPipelineCandidate(
+                    *candidateState,
+                    &renderPass.renderPass,
+                    contract,
+                    shaderArtifact,
+                    cullMode,
+                    blendMode,
+                    pipelineLayoutDesc)
+                : pipelineFactory.CreateGraphicsPipeline(
+                    &renderPass.renderPass,
+                    contract,
+                    shaderArtifact,
+                    cullMode,
+                    blendMode,
+                    pipelineLayoutDesc);
+        };
+    renderPipeline = createSurfacePipeline(surfacePassPipelineContractKey);
+    // Wireframe 只替换 tessellation 材质的 surface pipeline；shadow/local shadow
+    // 继续使用它们自己的管线，不复制 eLine 状态。
+    if (VL::RendererBackendVulkan::SupportsWireframeCapability() &&
+        shaderArtifact.hasTessellation &&
+        !surfacePassPipelineContractKey.isShadowPass)
+    {
+        PassPipelineContractKey wireframeContract =
+            surfacePassPipelineContractKey;
+        wireframeContract.wireframe = true;
+        wireframeRenderPipeline =
+            createSurfacePipeline(wireframeContract);
+    }
     activeShaderBindings = shaderArtifact.shaderBindings;
     surfaceShaderArtifact = shaderArtifact;
 
@@ -241,6 +259,8 @@ VL::RetiredMaterialPipelines Material::CommitPipelineReload(
     {
         retired.surfacePipeline = std::move(renderPipeline);
         renderPipeline = std::move(commit.surfacePipeline);
+        retired.wireframePipeline = std::move(wireframeRenderPipeline);
+        wireframeRenderPipeline = std::move(commit.wireframePipeline);
     }
     if (commit.replaceShadow)
     {

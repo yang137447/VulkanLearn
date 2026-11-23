@@ -59,6 +59,11 @@ Rml::Input::KeyIdentifier ToRmlKey(PlatformKey key)
     case PlatformKey::Enter: return Rml::Input::KI_RETURN;
     case PlatformKey::Escape: return Rml::Input::KI_ESCAPE;
     case PlatformKey::A: return Rml::Input::KI_A;
+    case PlatformKey::Q: return Rml::Input::KI_Q;
+    case PlatformKey::W: return Rml::Input::KI_W;
+    case PlatformKey::E: return Rml::Input::KI_E;
+    case PlatformKey::F: return Rml::Input::KI_F;
+    case PlatformKey::R: return Rml::Input::KI_R;
     case PlatformKey::S: return Rml::Input::KI_S;
     case PlatformKey::C: return Rml::Input::KI_C;
     case PlatformKey::V: return Rml::Input::KI_V;

@@ -13,6 +13,12 @@ public:
     static void Init(vk::Instance instance);
 
     /**
+     * @brief 关闭调试工具：清空扩展函数指针，后续 label 调用变为空操作。
+     * 当 VK_EXT_debug_utils 未启用时必须调用，避免调用未启用扩展的命令。
+     */
+    static void Disable();
+
+    /**
      * @brief 设置 Vulkan 对象名称（在 RenderDoc 等调试工具中显示）
      * @param device Vulkan 逻辑设备
      * @param object 对象句柄（需转换为 uint64_t）

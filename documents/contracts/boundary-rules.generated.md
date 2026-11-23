@@ -5,7 +5,7 @@
 脚本是**可执行的架构契约**：它定义代码不得违反什么。规则正文以脚本为唯一真相，本表只是索引——
 它说明每条规则的名字、它做什么检查、以及它作用于哪些路径。
 
-生成源 revision：`f1d1422a90daf2ae3882af7831de255fb83ca284`
+生成源 revision：`5df9fbc0af122581260d614b3b9f35d8a4d8bacd`
 
 | 规则名 | 检查类型 | 作用对象 |
 | --- | --- | --- |
@@ -100,5 +100,8 @@
 | Game shader cache closure | pattern must match in a file | `（路径由脚本内条件生成）` |
 | Game shader cache closure | pattern must not match in a file | `（路径由脚本内条件生成）` |
 | Game shader cache closure | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Terrain composited-only cutover | pattern must not match in a file | `shader/glsl/M_terrain.json`, `shader/glsl/pass/M_terrainFeedback.json`, `shader/glsl/pass/terrainFeedback.frag`, `shader/glsl/materialFunction/mf_terrainLayerBlend.glsl`, `source/render/resource/rendererTerrainLoader.cpp`, `source/render/terrain/terrainFeedbackRuntime.cpp` 等 8 项 |
+| Terrain composited-only cutover | pattern must match in a file | `（路径由脚本内条件生成）` |
+| Terrain composited-only cutover | pattern must match in a file | `（路径由脚本内条件生成）` |
 
-共 91 条规则。
+共 94 条规则。

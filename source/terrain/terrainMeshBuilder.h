@@ -24,6 +24,13 @@ struct TerrainMeshChunk
     uint32_t lodLevel = 0;
     std::vector<Vertex> vertices;
     std::vector<uint32_t> indices;
+    // 所有 LOD 都生成：常规四边形按周长顺序
+    // (x,z)、(x+1,z)、(x+1,z+1)、(x,z+1) 提交，
+    // 对应 base.tese.glsl 的 p0→p1→p2→p3 参数化。
+    // LOD>0 只包含内圈常规四边形，外圈由过渡带替代。
+    // LOD>0 的过渡带三角形编码成退化四边形 (i0,i1,i2,i2)，
+    // tessellation factor=1 时退化为原三角形。
+    std::vector<uint32_t> patchIndices;
     Eigen::Vector3f boundsMin = Eigen::Vector3f::Zero();
     Eigen::Vector3f boundsMax = Eigen::Vector3f::Zero();
 };

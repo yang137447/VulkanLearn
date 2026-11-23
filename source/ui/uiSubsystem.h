@@ -4,6 +4,7 @@
 #include <chrono>
 #include <cstdint>
 #include <filesystem>
+#include <future>
 #include <memory>
 #include <optional>
 #include <string>
@@ -229,6 +230,10 @@ public:
     }
     bool IsScenePickTarget(float mouseX, float mouseY) const;
     bool ShouldUseRelativeMouseModeForGame() const;
+    // UE PIE 对齐：Playing 时即使开发者 UI 可见也捕获鼠标，除非打开了资产编辑器。
+    bool ShouldUseRelativeMouseModeForPie(bool playing) const;
+    void SetGameFocusCaptured(bool captured);
+    bool RequestFrameSelectedActor();
     bool ShouldGameReceiveKeyboard() const;
     bool ShouldGameReceivePointer() const;
     const UiInputOwnershipSnapshot& GetInputOwnership() const { return inputOwnership; }
@@ -361,6 +366,9 @@ private:
     std::unordered_set<PlatformMouseButton> rmlPressedMouseButtons;
     std::unordered_set<PlatformGamepadButton> rmlPressedGamepadButtons;
     std::chrono::steady_clock::time_point nextHotReloadCheck;
+    // 资产指纹扫描在后台线程执行：Windows 下逐文件 stat 一次约 20ms，
+    // 放在 GT 上会形成每 0.5s 一次的可见顿挫。GT 只负责领取已完成的结果。
+    std::future<AssetFingerprint> pendingAssetScan;
     uint64_t uiFrameIndex = 0;
     size_t previousUiVertexCount = 0;
     size_t previousUiIndexCount = 0;

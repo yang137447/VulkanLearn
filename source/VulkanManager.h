@@ -142,6 +142,10 @@ public:
         presentModePreference = preference;
     }
 
+    // 运行期校验层开关：同一个二进制既能全速跑，也能在需要时开启校验。
+    // 未调用时沿用编译期默认（VULKANLEARN_ENABLE_VULKAN_VALIDATION）。
+    void SetValidationEnabled(bool enabled) { validationEnabled = enabled; }
+
 private:
     friend class VL::RHIDeviceVulkan;
 
@@ -193,6 +197,12 @@ private:
     {
         return drawIndirectCountEnabled;
     }
+    // 地形近场细分使用 tessellation control/evaluation；缺失时材质回退到
+    // 现有 CPU 网格路径，不能静默创建 PATCH_LIST pipeline。
+    inline bool IsTessellationShaderEnabled() const
+    {
+        return tessellationShaderEnabled;
+    }
     inline bool IsFragmentStoresAndAtomicsEnabled() const
     {
         return fragmentStoresAndAtomicsEnabled;
@@ -202,6 +212,11 @@ private:
     inline bool IsIndependentBlendEnabled() const
     {
         return independentBlendEnabled;
+    }
+    // Wireframe 视图只对 tessellation 材质创建 eLine 管线；缺失时保持正常渲染。
+    inline bool IsFillModeNonSolidEnabled() const
+    {
+        return fillModeNonSolidEnabled;
     }
 
     void CreateVkInstance();
@@ -216,7 +231,8 @@ private:
     void CreateVkDevice();
     void DestroyVkDevice();
 
-    void CreateVkSwapChain(VL::PresentTarget &target);
+    void CreateVkSwapChain(VL::PresentTarget &target,
+        std::shared_ptr<const VL::PresentSwapchainResources> oldOwner = {});
     void DestroyVkSwapChain(VL::PresentTarget &target);
 
     // 共享命令池：生命周期与设备一致，**不随 swapchain 重建**。
@@ -245,11 +261,17 @@ private:
     VL::PresentTarget& defaultTarget() { return presentTargets.front(); }
 
     vk::Instance instance;
-    std::vector<const char *> instanceLayers = {
+    // Init 按 validationEnabled 填充；成员保留容量，避免每次构造分配。
+    std::vector<const char *> instanceLayers;
+    bool validationEnabled =
 #if defined(VULKANLEARN_ENABLE_VULKAN_VALIDATION)
-            "VK_LAYER_KHRONOS_validation"
+        true;
+#else
+        false;
 #endif
-    };
+    // VK_EXT_debug_utils 与校验层解耦：Debug 构建的 region/object label 需要它，
+    // 即使 --no-validation 也必须启用；Release 仅在启用校验层时顺带打开。
+    bool debugUtilsEnabled = false;
     std::vector<const char *> instanceExtensions = {};
     std::vector<const char *> deviceExtensions = {
             VK_KHR_SWAPCHAIN_EXTENSION_NAME};
@@ -265,6 +287,8 @@ private:
     bool drawIndirectCountEnabled = false;
     bool fragmentStoresAndAtomicsEnabled = false;
     bool independentBlendEnabled = false;
+    bool tessellationShaderEnabled = false;
+    bool fillModeNonSolidEnabled = false;
     vk::Queue graphicsQueue;
 
     vk::Device device;

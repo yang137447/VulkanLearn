@@ -109,6 +109,10 @@ vk::Format RenderGraph::GetFormat(const std::string& formatStr)
     {
         return vk::Format::eR32Sfloat;
     }
+    else if (formatStr == "R32G32B32A32_UINT")
+    {
+        return vk::Format::eR32G32B32A32Uint;
+    }
     else
     {
         throw std::runtime_error("Unsupported format string");

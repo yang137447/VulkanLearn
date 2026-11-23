@@ -83,10 +83,17 @@ std::vector<std::filesystem::path> BuildPlatformFontCandidates()
     return fonts;
 }
 
-uint64_t GetFileFingerprint(const std::filesystem::directory_entry& entry)
+uint64_t GetFileFingerprint(
+    const std::filesystem::directory_entry& entry,
+    std::error_code& error)
 {
-    const uint64_t writeTime = static_cast<uint64_t>(entry.last_write_time().time_since_epoch().count());
-    const uint64_t size = entry.is_regular_file() ? static_cast<uint64_t>(entry.file_size()) : 0;
+    // 后台扫描线程不能抛异常：任何 stat 失败都让该文件退化为 0，下一轮再试。
+    const auto writeTimePoint = entry.last_write_time(error);
+    if (error) return 0;
+    const uint64_t writeTime =
+        static_cast<uint64_t>(writeTimePoint.time_since_epoch().count());
+    const uint64_t size = static_cast<uint64_t>(entry.file_size(error));
+    if (error) return 0;
     return writeTime ^ (size + 0x9e3779b97f4a7c15ull + (writeTime << 6u) + (writeTime >> 2u));
 }
 
@@ -471,52 +478,78 @@ void UiSubsystem::ApplyDocumentState()
 
 void UiSubsystem::TryHotReload()
 {
-    if (!desc.hotReload || std::chrono::steady_clock::now() < nextHotReloadCheck)
-    {
-        return;
-    }
-    nextHotReloadCheck = std::chrono::steady_clock::now() + std::chrono::milliseconds(500);
-    PROFILE_SCOPE("UI.HotReloadScan");
-
-    AssetFingerprint candidateFingerprint = BuildAssetFingerprint();
-    if (!HasAssetFingerprintChanged(candidateFingerprint))
+    if (!desc.hotReload)
     {
         return;
     }
 
-    auto localizationResult = LoadLocalizationCandidate();
-    if (localizationResult.IsFailure())
+    // 扫描在后台线程完成：GT 只在本帧结果已就绪时消费，绝不在这里阻塞。
+    if (pendingAssetScan.valid() &&
+        pendingAssetScan.wait_for(std::chrono::milliseconds(0)) ==
+            std::future_status::ready)
     {
-        hotReloadStatus = "hot reload rollback: localization invalid";
-        diagnostics->ReportRuntimeError("UI hot reload rejected", localizationResult.Error());
-        return;
-    }
-    auto documentResult = LoadDocumentCandidate();
-    if (documentResult.IsFailure())
-    {
-        hotReloadStatus = "hot reload rollback: document invalid";
-        diagnostics->ReportRuntimeError("UI hot reload rejected", documentResult.Error());
-        return;
-    }
-
-    if (developerUiEnabled && editorUiShell != nullptr)
-    {
-        auto editorResult = editorUiShell->ReloadDocument();
-        if (editorResult.IsFailure())
+        PROFILE_SCOPE("UI.HotReloadApply");
+        AssetFingerprint candidateFingerprint = pendingAssetScan.get();
+        if (!HasAssetFingerprintChanged(candidateFingerprint))
         {
-            rmlContext->UnloadDocument(documentResult.Value());
-            hotReloadStatus = "hot reload rollback: editor invalid";
-            diagnostics->ReportRuntimeError("UI hot reload rejected", editorResult.Error());
             return;
         }
-        ResetRuntimeInputState();
+
+        auto localizationResult = LoadLocalizationCandidate();
+        if (localizationResult.IsFailure())
+        {
+            hotReloadStatus = "hot reload rollback: localization invalid";
+            diagnostics->ReportRuntimeError("UI hot reload rejected", localizationResult.Error());
+            return;
+        }
+        auto documentResult = LoadDocumentCandidate();
+        if (documentResult.IsFailure())
+        {
+            hotReloadStatus = "hot reload rollback: document invalid";
+            diagnostics->ReportRuntimeError("UI hot reload rejected", documentResult.Error());
+            return;
+        }
+
+        if (developerUiEnabled && editorUiShell != nullptr)
+        {
+            auto editorResult = editorUiShell->ReloadDocument();
+            if (editorResult.IsFailure())
+            {
+                rmlContext->UnloadDocument(documentResult.Value());
+                hotReloadStatus = "hot reload rollback: editor invalid";
+                diagnostics->ReportRuntimeError("UI hot reload rejected", editorResult.Error());
+                return;
+            }
+            ResetRuntimeInputState();
+        }
+        CommitDocumentCandidate(*documentResult.Value(), std::move(localizationResult.Value()));
+        assetFingerprint = std::move(candidateFingerprint);
+        hotReloadStatus = "hot reload: committed";
+        // 文档/本地化已经整份替换：下一帧按正常路径再更新一次并重发快照。
+        uiUpdateScheduler.MarkMutation(UiMutationKind::HotReload);
+        diagnostics->ReportInfo("UI hot reload committed: " + desc.documentPath.string());
+        return;
     }
-    CommitDocumentCandidate(*documentResult.Value(), std::move(localizationResult.Value()));
-    assetFingerprint = std::move(candidateFingerprint);
-    hotReloadStatus = "hot reload: committed";
-    // 文档/本地化已经整份替换：下一帧按正常路径再更新一次并重发快照。
-    uiUpdateScheduler.MarkMutation(UiMutationKind::HotReload);
-    diagnostics->ReportInfo("UI hot reload committed: " + desc.documentPath.string());
+
+    const std::chrono::steady_clock::time_point now = std::chrono::steady_clock::now();
+    if (now < nextHotReloadCheck)
+    {
+        return;
+    }
+    nextHotReloadCheck = now + std::chrono::milliseconds(500);
+    if (!pendingAssetScan.valid())
+    {
+        try
+        {
+            pendingAssetScan = std::async(std::launch::async,
+                [this] { return BuildAssetFingerprint(); });
+        }
+        catch (const std::exception& error)
+        {
+            // 线程创建失败不应拖垮 UiSubsystem；下一轮再试。
+            hotReloadStatus = std::string("hot reload scan unavailable: ") + error.what();
+        }
+    }
 }
 
 UiSubsystem::AssetFingerprint UiSubsystem::BuildAssetFingerprint() const
@@ -533,7 +566,9 @@ UiSubsystem::AssetFingerprint UiSubsystem::BuildAssetFingerprint() const
         const std::filesystem::directory_entry& entry = *iterator;
         if (entry.is_regular_file(error))
         {
-            fingerprint.emplace(entry.path().string(), GetFileFingerprint(entry));
+            fingerprint.emplace(entry.path().string(),
+                GetFileFingerprint(entry, error));
+            error.clear();
         }
         iterator.increment(error);
     }

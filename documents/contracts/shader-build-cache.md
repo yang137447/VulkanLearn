@@ -70,8 +70,10 @@ changed、dependency changed、output digest mismatch、ABI fingerprint changed 
 
 ## 提交语义
 
-- runtime/debug Graphics Pair 是一份完整 artifact：两个 stage 全部成功、反射
-  成功、schema 校验成功后才一起提交。
+- runtime/debug Graphics Pair 是一份完整 artifact：请求里的**全部 stage**
+  （普通材质为 vertex/fragment；声明 `VL_TERRAIN_TESSELLATION=1` 的材质还含
+  tessellation control/evaluation）全部编译成功、反射成功、schema 校验成功后
+  才一起提交。
 - `CommitArtifactsWithAdditionalFiles` 用进程内 publication mutex 覆盖完整发布事务：
   路径预检、cache-hit 复核、临时写/替换、提交后摘要校验、manifest commit 和失败回滚
   不会与同一 `ShaderCompiler` 的另一发布交错。

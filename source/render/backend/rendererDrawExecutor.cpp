@@ -1,7 +1,10 @@
+#include "render/diagnostics/terrainCaptureHooks.h"
 #include "render/backend/rendererDrawExecutor.h"
 
+#include "baseStructs.h"
 #include "commonFunction.h"
 #include "material.h"
+#include "pipeline/graphicsPipeline.h"
 #include "pipeline/pipelineBase.h"
 #include "renderGraph.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
@@ -147,6 +150,31 @@ std::string BuildResolvedDrawErrorPrefix(const char* passName, const ResolvedDra
         std::to_string(draw.drawPacketIndex) + ": ";
 }
 
+// Draw 端只持有 PipelineBase 引用；细分标志走虚函数（非图形/非细分管线
+// 返回 false），避免每个 draw 的 RTTI 开销。是否可画由 RenderableObject
+// 自己判断：tess pipeline 遇到没有 patch 索引的对象会跳过，绝不回退到
+// 三角索引（PATCH_LIST 拓扑下那是错误绘制）。
+bool PipelineUsesTessellation(const PipelineBase& pipeline)
+{
+    return pipeline.UsesTessellation();
+}
+
+const PipelineBase& SelectSurfaceRenderPipeline(
+    const Material& material,
+    int debugViewMode)
+{
+    if (IsWireframeRenderViewMode(debugViewMode))
+    {
+        const std::shared_ptr<PipelineBase>& wireframePipeline =
+            material.GetWireframeRenderPipeline();
+        if (wireframePipeline)
+        {
+            return *wireframePipeline;
+        }
+    }
+    return *material.GetRenderPipeline();
+}
+
 ResolvedDrawResources RequireResolvedDrawResources(
     const char* passName,
     const ResolvedDrawPacket& draw,
@@ -237,6 +265,8 @@ void RendererDrawExecutor::DrawShadowScene(
 
         const std::string pipelineRegionName =
             "Shadow Pipeline: " + materialGroup.material->GetMaterialKey();
+        const bool shadowUsesTessellation =
+            PipelineUsesTessellation(*shadowPipeline);
         VulkanDebug::ScopedRegion pipelineRegion(
             commandBuffer,
             pipelineRegionName,
@@ -334,7 +364,8 @@ void RendererDrawExecutor::DrawShadowScene(
                 drawResources.renderableObject->Draw(
                     commandBuffer,
                     context.swapChainImageIndex %
-                        RenderableObject::DynamicMeshFrameSlotCount);
+                        RenderableObject::DynamicMeshFrameSlotCount,
+                    shadowUsesTessellation);
             }
         }
     }
@@ -388,6 +419,8 @@ void RendererDrawExecutor::DrawLocalShadowScene(
             usesMaterialLocalShadowPass
             ? materialGroup.material->GetLocalShadowPipeline().get()
             : &commonLocalShadowPipeline;
+        const bool localShadowUsesTessellation =
+            PipelineUsesTessellation(*localShadowPipeline);
 
         const std::string pipelineRegionName =
             "LocalShadow Pipeline: " +
@@ -473,7 +506,10 @@ void RendererDrawExecutor::DrawLocalShadowScene(
                 context.services.UpdateObjectUBOForPass(
                     objectResources,
                     drawPacket);
-                drawResources.renderableObject->Draw(commandBuffer);
+                drawResources.renderableObject->Draw(
+                    commandBuffer,
+                    0,
+                    localShadowUsesTessellation);
             }
         }
     }
@@ -511,6 +547,8 @@ void RendererDrawExecutor::DrawTerrainFeedbackScene(
     RendererDrawContext& context) const
 {
     vk::CommandBuffer& commandBuffer = context.commandBuffer;
+    const bool passUsesTessellation =
+        PipelineUsesTessellation(passPipeline);
 
     for (const ResolvedMaterialGroup& materialGroup :
          context.resolvedRenderScene.materialGroups)
@@ -574,7 +612,8 @@ void RendererDrawExecutor::DrawTerrainFeedbackScene(
                 drawResources.renderableObject->Draw(
                     commandBuffer,
                     context.swapChainImageIndex %
-                        RenderableObject::DynamicMeshFrameSlotCount);
+                        RenderableObject::DynamicMeshFrameSlotCount,
+                    passUsesTessellation);
             }
         }
     }
@@ -589,6 +628,7 @@ void RendererDrawExecutor::DrawSortedTransparentScene(
         BuildSortedTransparentDraws(context);
 
     vk::Pipeline boundPipeline;
+    bool boundPipelineUsesTessellation = false;
     const MaterialInstance* boundMaterialInstance = nullptr;
     // 全局排序会打散原有 Material 分组，因此在排序结果上显式缓存当前 pipeline/MI，
     // 既保持正确绑定，又避免相邻对象恰好同材质时重复更新状态。
@@ -599,7 +639,9 @@ void RendererDrawExecutor::DrawSortedTransparentScene(
         const ResolvedMaterialInstanceGroup& materialInstanceGroup =
             *sortedDraw.materialInstanceGroup;
         const PipelineBase& renderPipeline =
-            *materialGroup.material->GetRenderPipeline();
+            SelectSurfaceRenderPipeline(
+                *materialGroup.material,
+                context.renderScene.debugViewMode);
 
         VulkanDebug::ScopedRegion pipelineRegion(
             commandBuffer,
@@ -611,6 +653,8 @@ void RendererDrawExecutor::DrawSortedTransparentScene(
                 renderPipeline.GetBindPoint(),
                 renderPipeline.GetPipeline());
             boundPipeline = renderPipeline.GetPipeline();
+            boundPipelineUsesTessellation =
+                PipelineUsesTessellation(renderPipeline);
             boundMaterialInstance = nullptr;
 
             // Pass Set 属于 pipeline layout；跨材质切换 pipeline 后必须按新 layout 重新绑定。
@@ -658,7 +702,8 @@ void RendererDrawExecutor::DrawSortedTransparentScene(
         drawResources.renderableObject->Draw(
             commandBuffer,
             context.swapChainImageIndex %
-                RenderableObject::DynamicMeshFrameSlotCount);
+                RenderableObject::DynamicMeshFrameSlotCount,
+                    boundPipelineUsesTessellation);
     }
 }
 
@@ -684,7 +729,12 @@ void RendererDrawExecutor::DrawSurfaceScene(
         }
 
         const std::string& materialKey = materialGroup.material->GetMaterialKey();
-        const PipelineBase& renderPipeline = *materialGroup.material->GetRenderPipeline();
+        const PipelineBase& renderPipeline =
+            SelectSurfaceRenderPipeline(
+                *materialGroup.material,
+                context.renderScene.debugViewMode);
+        const bool renderPipelineUsesTessellation =
+            PipelineUsesTessellation(renderPipeline);
 
         VulkanDebug::ScopedRegion pipelineRegion(
             commandBuffer,
@@ -724,10 +774,45 @@ void RendererDrawExecutor::DrawSurfaceScene(
                     nullptr);
 
                 context.services.UpdateObjectUBOForPass(objectResources, drawPacket);
+                const auto captureHooks = domain == SurfaceDrawDomain::Geometry && drawPacket.isTerrain
+                    ? AcquireTerrainCaptureHooks() : std::shared_ptr<ITerrainCaptureHooks>{};
+                std::shared_ptr<PipelineBase> diagnosticPipeline;
+                TerrainCaptureDrawInputs captureInputs;
+                if (captureHooks)
+                {
+                    captureInputs = BuildTerrainCaptureDrawInputs(drawPacket,
+                        static_cast<uint32_t>(draw.drawPacketIndex),
+                        context.swapChainImageIndex % RenderableObject::DynamicMeshFrameSlotCount,
+                        context.swapChainImageIndex, renderPipeline, renderPass,
+                        drawResources.renderableObject, draw.objectResourceEntry,
+                        materialGroup.material, materialInstanceGroup.materialInstance);
+                    diagnosticPipeline = captureHooks->SelectActualDraw(captureInputs);
+                }
+                if (diagnosticPipeline)
+                {
+                    if (diagnosticPipeline->UsesTessellation() != renderPipelineUsesTessellation)
+                        throw std::runtime_error("Diagnostic pipeline changed actual draw topology");
+                    commandBuffer.bindPipeline(diagnosticPipeline->GetBindPoint(), diagnosticPipeline->GetPipeline());
+                    for (uint32_t set = 0; set < 4; ++set)
+                        if (captureInputs.descriptorSetMask & (1u << set))
+                            commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                diagnosticPipeline->GetPipelineLayout(), set, captureInputs.descriptorSets[set], nullptr);
+                    captureHooks->BindActualDraw(commandBuffer, captureInputs, *diagnosticPipeline);
+                }
                 drawResources.renderableObject->Draw(
                     commandBuffer,
                     context.swapChainImageIndex %
-                        RenderableObject::DynamicMeshFrameSlotCount);
+                        RenderableObject::DynamicMeshFrameSlotCount,
+                    renderPipelineUsesTessellation);
+                if (diagnosticPipeline)
+                {
+                    captureHooks->ActualDrawRecorded(captureInputs);
+                    commandBuffer.bindPipeline(renderPipeline.GetBindPoint(), renderPipeline.GetPipeline());
+                    for (uint32_t set = 0; set < 4; ++set)
+                        if (captureInputs.descriptorSetMask & (1u << set))
+                            commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eGraphics,
+                                renderPipeline.GetPipelineLayout(), set, captureInputs.descriptorSets[set], nullptr);
+                }
             }
         }
     }

@@ -166,9 +166,29 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             continue;
         }
 
+        // 蓝图场景启动即 Play：默认仍读 config.scripts.autoPlay，显式 flag 只做启动覆盖，
+        // 供无 UI 的 Game/编辑器命令行直接进入可操作状态，不改变仓库默认行为。
+        if (argument == "--autoplay")
+        {
+            options.autoplay = true;
+            continue;
+        }
+
         if (argument == "--gpu-stats")
         {
             options.gpuStats = true;
+            continue;
+        }
+
+        if (argument == "--validation")
+        {
+            options.vulkanValidation = true;
+            continue;
+        }
+
+        if (argument == "--no-validation")
+        {
+            options.vulkanValidation = false;
             continue;
         }
 
@@ -209,6 +229,11 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
         if (argument == "--shader-force-rebuild")
         {
             options.forceShaderRebuild = true;
+            continue;
+        }
+        if (argument == "--terrain-vt-cook")
+        {
+            options.terrainVtCook = true;
             continue;
         }
 
@@ -418,11 +443,13 @@ void PrintLaunchUsage()
         << "       main.exe [--shader-compute-reload-test --exit-after-tests]\n"
         << "       main.exe [--world-graph-transaction-test --exit-after-tests]\n"
         << "       main.exe [--shader-force-rebuild]\n"
+        << "       main_editor.exe --terrain-vt-cook --initial-scene <scene-path> --exit-after-frames 2\n"
         << "       main.exe [--initial-scene <scene-path>]\n"
         << "       main.exe [--worker-thread-count <1|2>]\n"
         << "       main.exe [--frame-limit <hz>]\n"
         << "       main.exe [--exit-after-frames <count>]\n"
         << "       main.exe [--present-mode <auto|fifo|mailbox|immediate>]\n"
+        << "       main.exe [--validation | --no-validation]\n"
         << "       main.exe [--gpu-stats]\n"
         << "       main.exe [--prerender-skin]\n"
         << "       main.exe [--perf-jsonl <path>]\n"
@@ -436,6 +463,7 @@ void PrintLaunchUsage()
         << "  --frame-limit <hz>                  Cap render frame pacing at 1..1000 Hz (default 0 = uncapped; fixed 60 Hz physics unchanged; this is a rate cap, not a frame count).\n"
         << "  --exit-after-frames <count>         Exit with code 0 after <count> completed frames (>= 1).\n"
         << "  --present-mode <mode>               Swapchain present mode: auto, fifo, mailbox, immediate (default auto = mailbox-first).\n"
+        << "  --validation / --no-validation     Override the compile-time Vulkan validation layer default for this process.\n"
         << "  --gpu-stats                         Log a per-pass GPU timestamp table every 120 frames (default off).\n"
         << "  --no-prerender-skin                 Disable per-frame pre-skinning and fall back to per-pass GPU skinning (default on).\n"
         << "  --perf-jsonl <path>                 Append one perf JSON line per second to <path> (creates parent directories; enables GPU collection).\n"
@@ -444,6 +472,7 @@ void PrintLaunchUsage()
         << "  --dev-ui                            Enable the RmlUi editor workspace for this launch.\n"
         << "  --no-dev-ui                         Disable the RmlUi editor workspace for this launch.\n"
         << "  --focus-window                      Request OS keyboard focus at startup (input automation).\n"
+        << "  --autoplay                          Start blueprint scenes in Play for this process (overrides config scripts.autoPlay).\n"
         << "  --exit-after-tests                  Exit with 0 on success or 2 on test failure.\n";
 }
 

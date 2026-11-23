@@ -147,6 +147,25 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
             chunk.indices.reserve(
                 static_cast<size_t>(quadsPerChunk) * quadsPerChunk * 6 +
                 static_cast<size_t>(lodStep > 1 ? desc.chunkQuads * 4 * 2 : 0));
+            // 粗 LOD 最外一圈格子不铺常规四边形，改由边界环 + 过渡带填充。
+            const uint32_t cellStart = lodStep > 1 ? 1u : 0u;
+            const uint32_t cellEnd =
+                lodStep > 1 ? (quadsPerChunk > 1 ? quadsPerChunk - 1 : 0u)
+                            : quadsPerChunk;
+            const uint32_t baseQuadSide =
+                cellEnd > cellStart ? cellEnd - cellStart : 0u;
+            // patch 列表必须覆盖实际提交的拓扑：
+            // - 常规网格：baseQuadSide² 个四边形 patch；
+            // - 粗 LOD 过渡带：每个三角形编码成一个退化四边形 patch。
+            // 外圈常规四边形已被过渡带替代，不能再额外加入，否则会重叠。
+            const size_t transitionTriangleCount =
+                lodStep > 1
+                    ? static_cast<size_t>(4) * quadsPerChunk *
+                        (lodStep + 1u)
+                    : 0u;
+            chunk.patchIndices.reserve(
+                (static_cast<size_t>(baseQuadSide) * baseQuadSide +
+                 transitionTriangleCount) * 4u);
 
             auto appendVertex = [&](uint32_t globalX, uint32_t globalZ,
                                     uint32_t gradientStep,
@@ -247,11 +266,6 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
                 }
             }
 
-            // 粗 LOD 最外一圈格子不铺常规四边形，改由边界环 + 过渡带填充。
-            const uint32_t cellStart = lodStep > 1 ? 1u : 0u;
-            const uint32_t cellEnd =
-                lodStep > 1 ? (quadsPerChunk > 1 ? quadsPerChunk - 1 : 0u)
-                            : quadsPerChunk;
             for (uint32_t localZ = cellStart; localZ < cellEnd; ++localZ)
             {
                 for (uint32_t localX = cellStart; localX < cellEnd; ++localX)
@@ -271,10 +285,34 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
                 }
             }
 
+            // 常规网格四边形：LOD0 覆盖全部 chunkQuads² 个格子；粗 LOD
+            // 只覆盖内圈（cellStart..cellEnd），外圈由下面的过渡带负责。
+            // 顶点行优先：index = localZ * (chunkQuads + 1) + localX。
+            // 每个 quad 的 4 个控制点沿用现有 a/b/c/d 命名：
+            // a=(x,z)、b=(x+1,z)、c=(x,z+1)、d=(x+1,z+1)。
+            // base.tese.glsl 按周长顺序 p0->p1->p2->p3 做双线性插值，
+            // 因此提交 a、b、d、c（左上、右上、右下、左下）。
+            for (uint32_t localZ = cellStart; localZ < cellEnd; ++localZ)
+            {
+                for (uint32_t localX = cellStart; localX < cellEnd; ++localX)
+                {
+                    const uint32_t a =
+                        localZ * verticesPerRow + localX;
+                    const uint32_t b = a + 1;
+                    const uint32_t c = a + verticesPerRow;
+                    const uint32_t d = c + 1;
+                    chunk.patchIndices.push_back(a);
+                    chunk.patchIndices.push_back(b);
+                    chunk.patchIndices.push_back(d);
+                    chunk.patchIndices.push_back(c);
+                }
+            }
+
             // 边界缝合：四条边一律按 LOD0 间距采样，再与第一条粗网格线之间
             // 铺一圈过渡三角形。因为任何级别的 chunk 边界都落在同一组 LOD0
             // 采样点上，相邻 chunk 无论 LOD 差几级都是水密的，不需要运行时
             // 知道邻居级别，也不需要 shader 里 morph。
+            const size_t transitionTriangleStart = chunk.indices.size();
             if (lodStep > 1)
             {
                 const uint32_t edge = desc.chunkQuads;
@@ -331,6 +369,22 @@ std::vector<TerrainMeshChunk> TerrainMeshBuilder::BuildChunks(
                         chunk.indices.push_back(innerFirst);
                     }
                 }
+            }
+
+            // 过渡带三角形无法直接进入 PATCH_LIST；把每个 (i0,i1,i2)
+            // 编码成退化四边形 (i0,i1,i2,i2)。tessellation factor=1 时
+            // TES 的四个角点中 p2/p3 重合，渲染结果退化回原三角形。
+            for (size_t index = transitionTriangleStart;
+                 index + 2 < chunk.indices.size();
+                 index += 3)
+            {
+                const uint32_t i0 = chunk.indices[index];
+                const uint32_t i1 = chunk.indices[index + 1];
+                const uint32_t i2 = chunk.indices[index + 2];
+                chunk.patchIndices.push_back(i0);
+                chunk.patchIndices.push_back(i1);
+                chunk.patchIndices.push_back(i2);
+                chunk.patchIndices.push_back(i2);
             }
 
             chunks.push_back(std::move(chunk));

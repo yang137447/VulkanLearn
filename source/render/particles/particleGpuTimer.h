@@ -11,6 +11,7 @@
 
 #include <vulkan/vulkan.hpp>
 
+#include "render/backend/gpuTimestampQueryBatch.h"
 #include "render/particles/particleGpuTiming.h"
 
 namespace VL
@@ -36,6 +37,11 @@ public:
         vk::CommandBuffer commandBuffer,
         uint32_t swapchainImageIndex);
 
+    // 帧命令成功提交 / 被丢弃的显式边界：被丢弃的帧不能在下一次复用 image
+    // 时读回（那些 query 从未提交，读取会得到 VK_NOT_READY）。
+    void FrameSubmitted() noexcept;
+    void AbortFrame() noexcept;
+
     const ParticleGpuTimingSnapshot& GetSnapshot() const noexcept
     {
         return accumulator.GetSnapshot();
@@ -50,8 +56,8 @@ private:
 
     struct FrameQueryState
     {
-        bool used = false;
-        bool open = false;
+        // 每个 image 一对 query；batch 保证只有提交过的完整 pair 才被读回。
+        GpuTimestampQueryBatch batch{ 1 };
     };
 
     uint32_t GetQueryIndex(
@@ -68,6 +74,9 @@ private:
     uint32_t timestampValidBits = 0;
     bool initialized = false;
     bool disabledLogged = false;
+    // 本帧 BeginFrame 选中的 image 只在录制期有效；提交/废弃后清空。
+    uint32_t recordingImageIndex = 0;
+    bool hasRecordingFrame = false;
 };
 
 } // namespace VL

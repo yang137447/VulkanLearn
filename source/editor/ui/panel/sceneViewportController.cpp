@@ -1,6 +1,7 @@
 #include "editor/ui/materialInstanceAssetEditorPanel.h"
 #include "editor/ui/panel/editorPanelInternalHelpers.h"
 #include "animation/motionDebug.h"
+#include "baseStructs.h"
 #include "debug/drawDebug.h"
 
 #include <algorithm>
@@ -108,10 +109,13 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
     SetViewportToolbarClass("viewport-tool-scale", viewportTransformTool == "scale");
     SetViewportToolbarClass("viewport-space-world", viewportTransformSpace == "world");
     SetViewportToolbarClass("viewport-space-local", viewportTransformSpace == "local");
-    // view mode 直接映射运行时 debug view：0 是完整画面，1 是基础色。
+    // view mode 直接映射运行时视图：0 完整画面，1 基础色，100 线框。
     // 工具栏不声明自己没有设置过的调试视图，因此其他调试模式在这三个按钮上都没有高亮。
     SetViewportToolbarClass("viewport-view-lit", runtimeView.debugViewMode == 0);
     SetViewportToolbarClass("viewport-view-unlit", runtimeView.debugViewMode == 1);
+    SetViewportToolbarClass(
+        "viewport-view-wireframe",
+        IsWireframeRenderViewMode(runtimeView.debugViewMode));
     if (auto* check = document->GetElementById("viewport-snap-enabled"))
     {
         if (sceneSnapEnabled && !check->HasAttribute("checked")) check->SetAttribute("checked", "checked");
@@ -131,7 +135,10 @@ void MaterialInstanceAssetEditorPanel::RefreshViewportToolbar()
             {"context-view-mode", mode}, modes[mode], runtimeView.debugViewMode == static_cast<int>(mode), false);
     SetMarkup("viewport-buffer-modes", markup);
     const int mode = runtimeView.debugViewMode;
-    SetMarkup("viewport-view-title", std::string(mode >= 0 && mode < 13 ? modes[mode] : "Debug View") + " v");
+    const char* viewTitle = IsWireframeRenderViewMode(mode)
+        ? "Wireframe"
+        : (mode >= 0 && mode < 13 ? modes[mode] : "Debug View");
+    SetMarkup("viewport-view-title", std::string(viewTitle) + " v");
     RefreshViewportAxisIndicator();
     RefreshActorVisualization();
     RefreshSceneGizmo();
@@ -522,6 +529,7 @@ bool MaterialInstanceAssetEditorPanel::ProcessViewportShortcut(Rml::Event& event
 {
     if (event.GetType() != "keydown" || document == nullptr ||
         IsAssetEditorVisible() || HasModal()) return false;
+    if (gameFocusCaptured) return false;
     auto* focus = document->GetContext()->GetFocusElement();
     if (dynamic_cast<Rml::ElementFormControl*>(focus) != nullptr) return false;
     const int key = event.GetParameter<int>("key_identifier", 0);
@@ -543,6 +551,24 @@ bool MaterialInstanceAssetEditorPanel::ProcessViewportShortcut(Rml::Event& event
     viewportTransformTool = tool;
     RefreshViewportToolbar();
     RefreshSceneGizmo();
+    return true;
+}
+
+bool MaterialInstanceAssetEditorPanel::FrameSelectedActor()
+{
+    if (document == nullptr || HasModal() || IsAssetEditorVisible() ||
+        runtimeActionSink == nullptr ||
+        runtimeView.scripts.state != ScriptPlayState::Editing)
+        return false;
+    Rml::Element* focus = document->GetContext()->GetFocusElement();
+    if (dynamic_cast<Rml::ElementFormControl*>(focus) != nullptr) return false;
+    const EditorSceneActorSnapshot* actor = SelectedActor();
+    if (actor == nullptr) return false;
+    UiAction request;
+    request.type = UiActionType::FrameEditorActor;
+    request.actorProperty.worldGeneration = actor->worldGeneration;
+    request.actorProperty.identity = actor->identity;
+    runtimeActionSink->RequestRuntimeAction(std::move(request));
     return true;
 }
 

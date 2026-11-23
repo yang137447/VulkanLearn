@@ -35,6 +35,7 @@ class PassRuntimeServices;
 class TerrainFeedbackRuntime;
 class HairRuntime;
 class UiOverlayRendererVulkan;
+class TerrainCaptureFrameBridge;
 struct UiRenderSnapshotQueue;
 struct OfflinePublishedResult;
 
@@ -87,6 +88,10 @@ struct RenderFrameRecorderContext
     std::function<void(vk::CommandBuffer&, const Renderpass&)>
         recordParticleSoftDepth;
     std::function<void()> logLocalShadowCasterStatistics;
+    // 帧命令成功提交后确认 GPU query 批次；命令被丢弃时作废本帧录制。
+    // 只有确认过的完整批次才允许在下一帧读回。
+    std::function<void()> submitFrameGpuQueries;
+    std::function<void()> abandonFrameGpuQueries;
 };
 // Owns the per-frame CPU plumbing that does not depend on RenderSystem's
 // lifetime: dynamic-mesh queue drain, global/shadow UBO construction and the
@@ -96,6 +101,7 @@ class RenderFrameRecorder
 public:
     void RecordAndSubmitCurrentRenderScene(
         RenderFrameRecorderContext& ctx);
+    void CloseTerrainCaptureAfterDeviceIdle();
 
     void ApplyQueuedDynamicMeshUpdates(
         VL::DynamicMeshUpdateQueue& queue,
@@ -104,6 +110,8 @@ public:
         uint32_t frameSlot);
 
     void UpdateExposureFrameTiming(VL::GpuPassTimer& gpuPassTimer);
+    void UpdateExposureFrameTiming(VL::GpuPassTimer& gpuPassTimer, const RenderFrameRecorderContext* ctx,
+        const struct RendererFrameContext* frame, const struct RenderFrameIdentity* identity);
     float ExposureDeltaSeconds() const noexcept { return exposureDeltaSeconds; }
 
     void UpdateGlobalUBO(
@@ -114,7 +122,9 @@ public:
         bool hasRenderScene,
         const std::function<void()>& refreshRenderScene,
         VL::CsmRuntime& csmRuntime,
-        uint32_t currentFrame);
+        uint32_t currentFrame,
+        uint32_t viewportWidth,
+        uint32_t viewportHeight);
     void UpdateGlobalUBOWithProjectionTransform(
         vk::CommandBuffer& commandBuffer,
         VL::RendererFrameResources& frameResources,
@@ -124,6 +134,8 @@ public:
         const std::function<void()>& refreshRenderScene,
         VL::CsmRuntime& csmRuntime,
         uint32_t currentFrame,
+        uint32_t viewportWidth,
+        uint32_t viewportHeight,
         float projectionScaleX,
         float projectionScaleY,
         float projectionOffsetX,
@@ -142,6 +154,7 @@ public:
         uint32_t cascadeIndex);
 
 private:
+    std::shared_ptr<TerrainCaptureFrameBridge> terrainCaptureBridge;
     // RT-only: one warning per mesh key, otherwise a missing object spams every
     // frame while its World entry is being torn down.
     std::unordered_set<std::string> reportedMissingDynamicMeshKeys;

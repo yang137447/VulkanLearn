@@ -3,6 +3,7 @@
 #include "../vulkanDebug.h"
 #include "vulkanPipelineDiagnostics.h"
 
+#include <algorithm>
 #include <stdexcept>
 
 GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
@@ -26,14 +27,43 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
             .setVertexAttributeDescriptions(desc.vertexInputAttributeDescriptions);
     }
 
+    const bool hasTessControlStage = std::any_of(
+        desc.shaderStages.begin(),
+        desc.shaderStages.end(),
+        [](const vk::PipelineShaderStageCreateInfo& stage) {
+            return stage.stage ==
+                vk::ShaderStageFlagBits::eTessellationControl;
+        });
+    const bool hasTessEvaluationStage = std::any_of(
+        desc.shaderStages.begin(),
+        desc.shaderStages.end(),
+        [](const vk::PipelineShaderStageCreateInfo& stage) {
+            return stage.stage ==
+                vk::ShaderStageFlagBits::eTessellationEvaluation;
+        });
+    if (hasTessControlStage != hasTessEvaluationStage)
+    {
+        throw std::runtime_error(
+            "Tessellation pipeline requires both tesc and tese stages: " +
+            desc.pipelineName);
+    }
+    const bool usesTessellation =
+        hasTessControlStage && hasTessEvaluationStage;
+
     vk::PipelineInputAssemblyStateCreateInfo pipelineInputAssemblyStateCreateInfo;
     pipelineInputAssemblyStateCreateInfo
-        .setTopology(vk::PrimitiveTopology::eTriangleList)
+        .setTopology(
+            usesTessellation
+                ? vk::PrimitiveTopology::ePatchList
+                : vk::PrimitiveTopology::eTriangleList)
         .setPrimitiveRestartEnable(false);
 
     vk::PipelineRasterizationStateCreateInfo pipelineRasterizationStateCreateInfo;
     pipelineRasterizationStateCreateInfo
-        .setPolygonMode(vk::PolygonMode::eFill)
+        .setPolygonMode(
+            desc.pipelineStateDesc.wireframe
+                ? vk::PolygonMode::eLine
+                : vk::PolygonMode::eFill)
         .setCullMode(desc.pipelineStateDesc.cullMode)
         .setFrontFace(vk::FrontFace::eClockwise)
         .setDepthClampEnable(false)
@@ -246,6 +276,11 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
             .setRasterizationSamples(vk::SampleCountFlagBits::e1);
     }
 
+    vk::PipelineTessellationStateCreateInfo
+        pipelineTessellationStateCreateInfo;
+    pipelineTessellationStateCreateInfo.setPatchControlPoints(
+        desc.patchControlPoints);
+
     vk::GraphicsPipelineCreateInfo graphicsPipelineCreateInfo;
     graphicsPipelineCreateInfo
         .setLayout(desc.pipelineLayout)
@@ -253,7 +288,10 @@ GraphicsPipelineBuildResult GraphicsPipelineBuilder::Build(
         .setPInputAssemblyState(&pipelineInputAssemblyStateCreateInfo)
         .setPRasterizationState(&pipelineRasterizationStateCreateInfo)
         .setPColorBlendState(&pipelineColorBlendStateCreateInfo)
-        .setPTessellationState(nullptr)
+        .setPTessellationState(
+            usesTessellation
+                ? &pipelineTessellationStateCreateInfo
+                : nullptr)
         .setPMultisampleState(&pipelineMultisampleStateCreateInfo)
         .setPDynamicState(&pipelineDynamicStateCreateInfo)
         .setPViewportState(&pipelineViewportStateCreateInfo)

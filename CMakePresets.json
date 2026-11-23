@@ -102,38 +102,32 @@
         {
             "name": "development",
             "configurePreset": "development",
-            "targets": ["main"],
-            "jobs": 4
+            "targets": ["main"]
         },
         {
             "name": "debug",
             "configurePreset": "debug",
-            "targets": ["main"],
-            "jobs": 4
+            "targets": ["main"]
         },
         {
             "name": "development-fast",
             "configurePreset": "development-fast",
-            "targets": ["main_editor"],
-            "jobs": 4
+            "targets": ["main_editor"]
         },
         {
             "name": "profile",
             "configurePreset": "profile",
-            "targets": ["main"],
-            "jobs": 4
+            "targets": ["main"]
         },
         {
             "name": "release",
             "configurePreset": "release",
-            "targets": ["main"],
-            "jobs": 4
+            "targets": ["main"]
         },
         {
             "name": "prebuilt-game",
             "configurePreset": "prebuilt-game",
-            "targets": ["main_game"],
-            "jobs": 4
+            "targets": ["main_game"]
         }
     ]
 }

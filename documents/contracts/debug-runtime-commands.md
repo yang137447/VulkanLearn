@@ -25,9 +25,9 @@ screenshot
 screenshot debug_view.bmp
 ```
 
-相对路径统一写入 `resourcePath/Generated/Screenshots/`，绝对路径可以直接使用。截图请求在当前帧 UI 录制完成并提交后执行，backend 等待该次提交完成，从 swapchain image 做一次性 GPU 回读并写出 24-bit BMP。这样截图不依赖窗口是否位于前台，且不会让 DebugConsole 线程访问 Vulkan 对象。
+相对路径统一写入 `resourcePath/Generated/Screenshots/`，绝对路径可以直接使用。截图请求在当前帧 UI 录制完成并提交后执行：copy 已经录进该帧提交，backend 只等待这次提交自己的 frame fence（不再做 device-wide `WaitIdle`，也不排空 present 队列），超时上限 1 s；staging buffer 优先 `HOST_CACHED` 主机内存（缺失时退回 `HOST_VISIBLE|HOST_COHERENT`），映射后转成 top-down 24-bit BMP。这样截图不依赖窗口是否位于前台，不会让 DebugConsole 线程访问 Vulkan 对象，也不会让调试截图重新引入 ~210 ms 的帧停顿。
 
-截图是显式调试操作，因此只在请求发生的帧执行一次 `WaitIdle`；正常帧路径不增加同步开销。
+截图是显式调试操作，只在请求发生的帧等待该帧 fence；正常帧路径不增加同步开销。`Screenshot saved: <path>` 诊断仍在同一帧打印，内容/朝向/格式与旧实现一致。
 
 ## Particle Dump
 

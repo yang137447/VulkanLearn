@@ -31,6 +31,7 @@
 #include <Jolt/Physics/Constraints/HingeConstraint.h>
 #include "physics/joltRegistration.h"
 #include "terrain/terrainCollision.h"
+#include "engine/terrainCollisionPatchStreamer.h"
 
 namespace VL
 {
@@ -43,6 +44,11 @@ constexpr double MaxRigidSubsteps = 16.0;
 constexpr float MaxCharacterIteration = 0.05f;
 constexpr int MaxCharacterIterations = 8;
 constexpr JPH::ObjectLayer StaticLayer = 0, MovingLayer = 1;
+// 地形碰撞分组：宏 body 14，近场 patch 15。两者都在默认 16 位 collisionMask
+// 内，因此现有脚本无需改 mask；角色在 patch 内时从 mask 去掉 14、加上 15，
+// 其他 body 始终保留 14、去掉 15。
+constexpr uint32_t TerrainMacroCollisionGroup = 14;
+constexpr uint32_t TerrainPatchCollisionGroup = 15;
 
 JPH::Vec3 PhysicsVector(const nlohmann::json& node, const char* field, float factor = 0.01f)
 {
@@ -130,6 +136,9 @@ struct ScriptPhysicsWorld::Impl
         bool trigger = false, jump = false, refreshContacts = true;
         bool rootMotionActive = false;
         uint32_t layer = 0, mask = 65535;
+        uint32_t baseMask = 65535;
+        bool terrainEligible = false;
+        bool patchActive = false;
         std::string compoundSignature;
     };
     // Jolt 的 Allocate() 依赖 RegisterDefaultAllocator() 写入的函数指针；
@@ -154,6 +163,12 @@ struct ScriptPhysicsWorld::Impl
     // 逆序析构保证这一点。放置/替换只经由 SetTerrainCollisions。
     std::vector<TerrainCollisionBody> terrainBodies;
     std::map<JPH::BodyID, std::string> terrainIdentities;
+    // 碰撞代理只保存采样后的宏高度；Step 2 的 patch streamer 将在这里
+    // 追加/替换近场代理，而不触碰渲染 plan。
+    std::map<std::string, std::shared_ptr<const TerrainCollisionProxy>>
+        terrainProxies;
+    std::unique_ptr<TerrainCollisionPatchStreamer> patchStreamer;
+    JPH::BodyID activePatchBodyId;
     std::map<std::string, Body> bodies;
     std::map<JPH::BodyID, std::string> identities;
     JPH::Ref<ScriptCollisionGroupFilter> collisionGroups = new ScriptCollisionGroupFilter();
@@ -184,8 +199,15 @@ struct ScriptPhysicsWorld::Impl
     {
         // 静态地形不与脚本 body 建约束；先清空地形句柄，再移除脚本体，
         // 让所有 TerrainCollisionBody::Reset 都发生在 PhysicsSystem 仍存活时。
+        if (patchStreamer)
+        {
+            patchStreamer->Reset();
+            patchStreamer.reset();
+        }
+        activePatchBodyId = JPH::BodyID();
         terrainBodies.clear();
         terrainIdentities.clear();
+        terrainProxies.clear();
         for (auto& joint : joints) world.RemoveConstraint(joint.second.constraint);
         joints.clear();
         for (auto& body : bodies) Remove(body.second);
@@ -213,6 +235,23 @@ struct ScriptPhysicsWorld::Impl
             world.GetBodyInterface().RemoveBody(body.id);
             world.GetBodyInterface().DestroyBody(body.id);
         }
+    }
+    void ApplyTerrainPatchMask(Body& body)
+    {
+        if (body.motion != "character")
+            return;
+        uint32_t mask = body.baseMask;
+        if (body.terrainEligible && body.patchActive)
+        {
+            mask = (mask & ~(1u << TerrainMacroCollisionGroup)) |
+                (1u << TerrainPatchCollisionGroup);
+        }
+        if (mask != body.mask)
+            body.refreshContacts = true;
+        body.mask = mask;
+        world.GetBodyInterface().SetCollisionGroup(
+            body.id,
+            JPH::CollisionGroup(collisionGroups, body.layer, body.mask));
     }
     // 查询结果同时服务脚本实体与地形摆放；两者身份空间不同，未命中返回 false。
     bool TryIdentity(JPH::BodyID id, std::string& out) const
@@ -375,6 +414,12 @@ struct ScriptPhysicsWorld::Impl
         body.trigger = physics.value("trigger", false);
         body.layer = physics.value("collisionLayer", 0u);
         body.mask = physics.value("collisionMask", 65535u);
+        body.baseMask = body.mask;
+        body.terrainEligible =
+            (body.baseMask & (1u << TerrainMacroCollisionGroup)) != 0;
+        // Patch 只与角色碰撞；其他脚本 body 从 mask 去掉 patch group。
+        if (body.motion != "character")
+            body.mask &= ~(1u << TerrainPatchCollisionGroup);
         body.shape = CreateBodyShape(state, declaration);
         if (physics.value("shape", "box") == "compound" || physics.value("shape", "box") == "mesh")
             body.compoundSignature = state.value("components", nlohmann::json::array()).dump();
@@ -648,6 +693,60 @@ void ScriptPhysicsWorld::StepInternal(nlohmann::json& states, const nlohmann::js
         }
         body.last = state;
     }
+    if (impl->patchStreamer)
+    {
+        auto character = impl->bodies.end();
+        for (auto it = impl->bodies.begin(); it != impl->bodies.end(); ++it)
+        {
+            if (it->second.character &&
+                it->second.motion == "character" &&
+                it->second.terrainEligible)
+            {
+                character = it;
+                break;
+            }
+        }
+        if (character != impl->bodies.end())
+        {
+            auto& characterBody = character->second;
+            const JPH::RVec3 position = interface.GetPosition(characterBody.id);
+            impl->patchStreamer->Update(Eigen::Vector3f(
+                position.GetX() * 100.0f,
+                position.GetY() * 100.0f,
+                position.GetZ() * 100.0f));
+            const JPH::BodyID patchBodyId =
+                impl->patchStreamer->ActivePatchBodyId();
+            const uint32_t patchValue = patchBodyId.GetIndexAndSequenceNumber();
+            const uint32_t previousValue =
+                impl->activePatchBodyId.GetIndexAndSequenceNumber();
+            if (patchValue != previousValue)
+            {
+                if (!impl->activePatchBodyId.IsInvalid())
+                    impl->terrainIdentities.erase(impl->activePatchBodyId);
+                if (!patchBodyId.IsInvalid())
+                {
+                    impl->terrainIdentities[patchBodyId] =
+                        impl->patchStreamer->ActivePlacementId();
+                }
+                impl->activePatchBodyId = patchBodyId;
+            }
+            const bool patchActive = impl->patchStreamer->HasActivePatch();
+            if (patchActive != characterBody.patchActive)
+            {
+                characterBody.patchActive = patchActive;
+                impl->ApplyTerrainPatchMask(characterBody);
+            }
+        }
+        else
+        {
+            impl->patchStreamer->Reset();
+            if (!impl->activePatchBodyId.IsInvalid())
+            {
+                impl->terrainIdentities.erase(impl->activePatchBodyId);
+                impl->activePatchBodyId = JPH::BodyID();
+            }
+        }
+    }
 }
 nlohmann::json ScriptPhysicsWorld::Raycast(const nlohmann::json& requests) const
 {
@@ -737,7 +836,8 @@ Animation::FootGroundHit ScriptPhysicsWorld::ProbeGround(const std::string& owne
     const Eigen::Vector3f from = origin * 0.01f, delta = displacement * 0.01f;
     const JPH::RRayCast ray({from.x(), from.y(), from.z()}, {delta.x(), delta.y(), delta.z()});
     JPH::RayCastResult hit;
-    if (!impl->world.GetNarrowPhaseQuery().CastRay(ray, hit, {}, {}, filter)) return result;
+    if (!impl->world.GetNarrowPhaseQuery().CastRay(ray, hit, {}, {}, filter))
+        return result;
     std::string identity;
     if (!impl->TryIdentity(hit.mBodyID, identity)) return result;
     const auto support = impl->bodies.find(identity);
@@ -748,10 +848,17 @@ Animation::FootGroundHit ScriptPhysicsWorld::ProbeGround(const std::string& owne
     if (support != impl->bodies.end() && support->second.motion != "static") return result;
     JPH::BodyLockRead lock(impl->world.GetBodyLockInterface(), hit.mBodyID);
     const auto point = ray.GetPointOnRay(hit.mFraction);
-    const auto normal = lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, point);
+    Eigen::Vector3f pointCm =
+        Eigen::Vector3f(point.GetX(), point.GetY(), point.GetZ()) * 100;
+    const Eigen::Vector3f normal = [&]()
+    {
+        const auto value =
+            lock.GetBody().GetWorldSpaceSurfaceNormal(hit.mSubShapeID2, point);
+        return Eigen::Vector3f(value.GetX(), value.GetY(), value.GetZ());
+    }();
     result.hit = true;
-    result.point = Eigen::Vector3f(point.GetX(), point.GetY(), point.GetZ()) * 100;
-    result.normal = {normal.GetX(), normal.GetY(), normal.GetZ()};
+    result.point = pointCm;
+    result.normal = normal;
     result.supportIdentity = std::move(identity);
     return result;
 }
@@ -762,26 +869,66 @@ void ScriptPhysicsWorld::SetMeshGeometry(const std::map<std::string, std::vector
 void ScriptPhysicsWorld::SetTerrainCollisions(
     const std::vector<TerrainCollisionInstance>& instances)
 {
+    if (impl->patchStreamer)
+    {
+        impl->patchStreamer->Reset();
+        impl->patchStreamer.reset();
+    }
+    impl->activePatchBodyId = JPH::BodyID();
     // 先完整创建新集合，再一次性替换：任一 terrain 创建失败时旧 body 仍然有效，
     // 不会留下半套地形或悬空句柄。TerrainCollisionBody 的析构在 Impl 里早于
     // PhysicsSystem，因此替换/Stop/World 换代都不会命中已销毁的 Jolt 世界。
     std::vector<TerrainCollisionBody> bodies;
     std::map<JPH::BodyID, std::string> identities;
+    std::map<std::string, std::shared_ptr<const TerrainCollisionProxy>> proxies;
+    TerrainCollisionSettings macroSettings;
+    macroSettings.collisionGroup = TerrainMacroCollisionGroup;
+    macroSettings.groupFilter = impl->collisionGroups.GetPtr();
     bodies.reserve(instances.size());
     for (const TerrainCollisionInstance& instance : instances)
     {
+        std::shared_ptr<const TerrainCollisionProxy> proxy =
+            BuildTerrainCollisionProxy(instance.plan, instance.placement);
         TerrainCollisionBody body = CreateTerrainCollisionBody(
-            impl->world, instance.plan, instance.placement);
+            impl->world, *proxy, macroSettings);
         identities.emplace(JPH::BodyID(body.GetBodyIdValue()), instance.placementId);
+        proxies.emplace(instance.placementId, std::move(proxy));
         bodies.push_back(std::move(body));
     }
     impl->terrainBodies = std::move(bodies);
     impl->terrainIdentities = std::move(identities);
+    impl->terrainProxies = std::move(proxies);
+    if (!impl->terrainProxies.empty())
+    {
+        TerrainCollisionPatchStreamer::Settings patchSettings;
+        patchSettings.body.collisionGroup = TerrainPatchCollisionGroup;
+        patchSettings.body.groupFilter = impl->collisionGroups.GetPtr();
+        impl->patchStreamer =
+            std::make_unique<TerrainCollisionPatchStreamer>(
+                impl->world, patchSettings);
+        std::vector<std::shared_ptr<const TerrainCollisionProxy>> proxyList;
+        proxyList.reserve(impl->terrainProxies.size());
+        for (const auto& entry : impl->terrainProxies)
+            proxyList.push_back(entry.second);
+        impl->patchStreamer->SetProxies(std::move(proxyList));
+    }
 }
 
 size_t ScriptPhysicsWorld::TerrainCollisionBodyCount() const
 {
     return impl->terrainBodies.size();
+}
+
+size_t ScriptPhysicsWorld::TerrainCollisionProxyCount() const
+{
+    return impl->terrainProxies.size();
+}
+
+size_t ScriptPhysicsWorld::TerrainCollisionPatchCount() const
+{
+    return impl->patchStreamer && impl->patchStreamer->HasActivePatch()
+        ? 1u
+        : 0u;
 }
 
 std::vector<std::string> ScriptPhysicsWorld::TerrainCollisionPlacementIds() const

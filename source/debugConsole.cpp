@@ -201,11 +201,6 @@ void DebugConsole::PrintHelp() const
     std::cout << "  terrain parity [x z] - compare CPU/GPU bake for one page\n";
     std::cout << "  terrain capacity N - set resident page budget for the active World\n";
     std::cout << "  terrainfeedback - report completed terrain feedback page statistics (read-only)\n";
-    std::cout << "  terrainlayerstats - report layer-page atlas residency/format statistics\n";
-    std::cout << "  terrainlayer stats - report layer-page residency/visibility/budget statistics\n";
-    std::cout << "  terrainlayer capacity N - set layer-page resident page budget\n";
-    std::cout << "  terrainlayer preload - request every layer page (full-preload comparison)\n";
-    std::cout << "  terrainlayer forcemip N - force target layer mip (-1 auto, 0..6)\n";
     std::cout << "  terraincollision stats - report play-mode terrain collision bodies\n";
     std::cout << "  terrainlod stats - report per-chunk terrain LOD level/distance/switches\n";
     std::cout << "  terrainchunk stats - report terrain chunk residency/draw/geometry bytes\n";

@@ -1,0 +1,16 @@
+{
+  "status": "passed",
+  "frozenSha256": "43fba0dd79a60a4a8b740598c7975d743ace9d32215adb35d8cab213e088e0dd",
+  "authority": "independent-subagent-audit",
+  "reviewer": {
+    "name": "Boole",
+    "role": "independent P0 auditor; did not participate in P0 implementation"
+  },
+  "audit": {
+    "path": "documents/rationale/terrain-rvt-p0-independent-audit.md",
+    "sha256": "269f69baf314deb7e200bb0470a880a3766010f8602426d668f794ce815e1fa4",
+    "bytes": 10776
+  },
+  "dateAsiaShanghai": "2026-11-21",
+  "scope": "Independent subagent Boole recomputed the finite P0 evidence and reported PASS in the bound audit document. This receipt neither claims user approval nor changes frozen configuration bytes; it does not certify P1-P5 or final delivery."
+}

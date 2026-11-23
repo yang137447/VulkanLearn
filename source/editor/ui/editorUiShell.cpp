@@ -269,6 +269,7 @@ struct EditorUiShell::Impl final : EditorUi::IMaterialInstanceSceneSelectionSink
     std::string selectedActorIdentity;
     bool pendingSceneSelectionClear = false;
     bool sceneViewportInputActive = false;
+    bool gameFocusCaptured = false;
     bool editorPointerCaptured = false;
     uint64_t blueprintClassesVersion = 0;
     std::optional<MaterialInstanceModelContext> pendingMaterialInstanceModelSelection;
@@ -819,8 +820,8 @@ bool EditorUiShell::RequestModelSelection(
     impl->selectedMaterialSlotIndex.reset();
     impl->pendingMaterialInstanceSelection.reset();
     impl->pendingMaterialInstanceModelSelection = model;
-    impl->selectedActorIdentity = EditorUi::SceneActorIdentity(
-        EditorUi::EditorSceneActorType::Mesh, model.objectIdentity);
+    impl->selectedActorIdentity = EditorUi::ResolveSceneSelectionActorIdentity(
+        model.actorIdentity, model.objectIdentity);
     impl->pendingSceneSelectionClear = false;
     ++impl->outlinerRevision;
     return true;
@@ -841,8 +842,8 @@ bool EditorUiShell::RequestMaterialSelection(
     impl->selectedMaterialSlotIndex = selection.materialSlotIndex;
     impl->pendingMaterialInstanceModelSelection.reset();
     impl->pendingMaterialInstanceSelection = selection;
-    impl->selectedActorIdentity = EditorUi::SceneActorIdentity(
-        EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity);
+    impl->selectedActorIdentity = EditorUi::ResolveSceneSelectionActorIdentity(
+        selection.modelContext.actorIdentity, selection.objectIdentity);
     impl->pendingSceneSelectionClear = false;
     ++impl->outlinerRevision;
     return true;
@@ -899,8 +900,8 @@ bool EditorUiShell::SelectSceneObjectFromPick(
     }
     impl->selectedModelMaterials = std::move(modelSnapshot);
     impl->selectedMaterialSlotIndex = selection.materialSlotIndex;
-    impl->selectedActorIdentity = EditorUi::SceneActorIdentity(
-        EditorUi::EditorSceneActorType::Mesh, selection.objectIdentity);
+    impl->selectedActorIdentity = EditorUi::ResolveSceneSelectionActorIdentity(
+        selection.modelContext.actorIdentity, selection.objectIdentity);
     if (selection.objectIdentity.rfind("__blueprint/", 0) == 0)
     {
         const auto id = selection.objectIdentity.substr(
@@ -1019,6 +1020,21 @@ bool EditorUiShell::IsSceneViewportInputActive() const
 void EditorUiShell::SetSceneViewportInputActive(bool active)
 {
     impl->sceneViewportInputActive = active;
+}
+
+void EditorUiShell::SetGameFocusCaptured(bool captured)
+{
+    if (impl->gameFocusCaptured == captured) return;
+    impl->gameFocusCaptured = captured;
+    if (impl->materialInstanceEditorPanel != nullptr)
+        impl->materialInstanceEditorPanel->SetGameFocusCaptured(captured);
+}
+
+bool EditorUiShell::RequestFrameSelectedActor()
+{
+    if (!impl->visible || impl->materialInstanceEditorPanel == nullptr)
+        return false;
+    return impl->materialInstanceEditorPanel->FrameSelectedActor();
 }
 
 bool EditorUiShell::IsPointerCaptured() const

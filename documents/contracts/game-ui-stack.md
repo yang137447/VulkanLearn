@@ -38,6 +38,15 @@ The former Runtime Debug page, Settings button, F10/gamepad Start entry points
 and runtime-page binding callbacks are removed. Scene selection, actor settings,
 viewport modes and offline controls belong to the editor workspace; runtime
 commands remain available independently of the deleted page.
+Viewport view modes are `0 = Lit`, `1 = Unlit`, `100 = Wireframe`. Wireframe is
+not a material debug-view ID: GT keeps the render UBO debug field at Lit (`0`),
+does not write the view mode into material `u_debugMode`, and only swaps
+tessellation material surface pipelines to `eLine`. Non-tessellation materials
+and shadow/local-shadow passes keep their normal pipelines. Devices
+without `fillModeNonSolid` keep normal rendering and log the fallback once.
+The value `100` is deliberately outside both the buffer-visualization debug IDs
+and `M_terrain.u_debugMode` ranges, so Emissive (`2`) and terrain layer-debug
+requests cannot alias Wireframe.
 Destructive validation workflows remain console/launch operations, not buttons.
 
 `ui/editor-workspace.rml` and `.rcss` define the default workspace:
@@ -73,7 +82,8 @@ shared Scene document and queues formal LoadWorld; callbacks never invoke the ho
 Blueprint assets also use native RmlUi drag/drop into the level viewport; instance
 overrides/reset preserve sparse Scene data. Creating an asset emits a GT request
 with the target path and actor identity; callbacks never read or write files.
-Esc cancels a Blueprint drag before the normal mouse-capture toggle.
+Esc cancels a Blueprint drag; otherwise it stops Play/Pause and returns to editing
+(releasing capture), and falls through to the editor document only when neither applies.
 The Outliner creation form also offers Create Blueprint Asset, emitting a registered class/name/path
 request. GT creates a sparse BP JSON configuration and refreshes the asset catalog.
 It neither creates source files nor requests compilation; C# catalog changes use the assembly reload transaction.
@@ -559,7 +569,8 @@ The editor uses `GameAndUi` with a visible
 cursor; RmlUi hit testing, keyboard focus, drag capture and modal state claim
 panel input. The Viewport image passes through to the game, and clicking it blurs
 editor focus. A dirty-close modal claims the window. No visible UI restores
-the player's requested relative mouse mode.
+the player's requested relative mouse mode; Play and RMB look request it
+explicitly, and Esc/Shift+F1 release it.
 
 `InputSubsystem` drains SDL relative deltas each frame but publishes them only
 when pointer ownership is Game and relative mouse mode is actually enabled.
@@ -583,14 +594,14 @@ claiming keyboard focus. Hiding it transfers focus and stacking order to the
 runtime document; `Show(FocusFlag::None)` alone leaves that transparent document
 above the editor, blocking panel mouse input when returning from immersive mode.
 
-**A scene-viewport hit splits by button.** The **left** button keeps the existing path:
-it is the picking button (`materialInstanceSelection.cpp`), it blurs editor focus, and it
-passes through to the game. The **right** button is consumed by the editor document
-instead, so the workspace's context menu can open over the viewport. That is a deliberate
-asymmetry with a reason: the right button has no runtime binding to break — camera look
-comes from SDL relative deltas rather than a button gesture — while the left button does.
-Everything else on a scene-viewport hit still returns before RmlUi, so a stray event
-cannot leak into the editor DOM.
+**A scene-viewport hit splits by button.** The **left** button is the picking button
+(`materialInstanceSelection.cpp`); it blurs editor focus and passes through to the game.
+The **right** button follows UE viewport navigation: while editing, right-button-down over
+the scene viewport requests relative mouse mode (WASD/QE fly + look) and right-button-up
+releases it; the event is consumed before RmlUi, so the viewport does not open the editor
+context menu. Play captures the pointer automatically (see Input), so RMB look and Play
+never fight over the same gesture. Everything else on a scene-viewport hit still returns
+before RmlUi, so a stray event cannot leak into the editor DOM.
 
 F10/gamepad Start do not open a UI page. F11 toggles immersive mode (F1 remains
 a compatibility alias). Immersive mode hides the editor and HUD in the existing
@@ -598,8 +609,15 @@ window; it does not create a window, change OS fullscreen, or quit. From a model
 tab it first restores the remembered level through LoadWorld and waits for the
 matching committed World snapshot. Rejection or failure leaves the editor visible;
 another toggle while waiting cancels entry. Returning restores the workspace layout.
-The toolbar uses "Immersive Mode"; File / Exit remains Quit. Esc toggles
-requested mouse capture.
+The toolbar uses "Immersive Mode"; File / Exit remains Quit.
+
+Play (and Pause) requests relative mouse mode automatically and releases it on return to
+editing. Esc stops Play/Pause and releases a captured pointer; when neither applies it
+falls through to the editor document so viewport/blueprint/hair Esc cancels still work.
+Shift+F1 toggles PIE focus (releases or recaptures the pointer without leaving Play).
+While the game owns the pointer, editor viewport shortcuts Q/W/E/R (transform tools) and
+F (frame selection) are ignored; F frames the selected actor only while editing and no
+text control has focus.
 Ctrl+S opens save confirmation for the active MI on a material page, or all
 modified files on other pages. Save, dirty-close and About modals claim input.
 RmlUi keyboard/D-pad/analog navigation uses reference-counted press state.
@@ -803,6 +821,15 @@ and `fontFaces`. The developer names now select the RmlUi editor, not a library.
 `--dev-ui` enables it; `--no-dev-ui` skips editor initialization while retaining
 the scene-name HUD. `ui.enabled=false` disables the complete UI subsystem.
 There is no developer-UI CMake switch.
+
+`ui.hotReload=true` polls `ui.assetRoot` every 500 ms. The fingerprint scan
+(`UiSubsystem::BuildAssetFingerprint`, one `stat` per file) runs on a background
+`std::async` task and GT only consumes a finished result; per-file `stat` on a
+large tree is slow enough to be a visible hitch when run inline. Document /
+localization parsing and commit still happen on GT, because they replace RmlUi
+state; a committed reload deliberately marks a `UiMutationKind::HotReload`
+mutation. Re-`Initialize` waits for an in-flight scan before overwriting `desc`.
+Evidence: `documents/rationale/performance-hitches-2026-11-14.md`.
 
 `workerThreadCount=1` renders synchronously; `2` consumes snapshots on RT.
 The normal shader build path produces overlay SPIR-V from `shader/glsl/`.

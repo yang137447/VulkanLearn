@@ -58,6 +58,7 @@ using namespace Panel::Detail;
 MaterialInstanceAssetEditorPanel::MaterialInstanceAssetEditorPanel(IEditorCommandSink* sink)
     : commandSink(sink)
 {
+    terrainAssetEditor.SetMaterialEditSink(this);
 }
 
 MaterialInstanceAssetEditorPanel::~MaterialInstanceAssetEditorPanel()
@@ -250,6 +251,19 @@ void MaterialInstanceAssetEditorPanel::QueueEdit(std::string key, EditorCommandB
         }
     }
     pendingEdits.push_back({std::move(key), std::move(item)});
+}
+
+bool MaterialInstanceAssetEditorPanel::QueueMaterialFloat(
+    const std::string& materialInstancePath,
+    const std::string& parameter,
+    float value)
+{
+    if (!snapshot.activeDocument || parameter.empty()) return false;
+    if (snapshot.activeDocument->assetPath != materialInstancePath) return false;
+    QueueEdit("parameter:" + parameter, {EditorCommandType::SetMaterialParameterOverride,
+        SetMaterialParameterOverridePayload{snapshot.activeDocument->assetPath,
+            parameter, EditorMaterialParameterType::Float, value}});
+    return true;
 }
 
 void MaterialInstanceAssetEditorPanel::FlushPendingEdits(bool save)

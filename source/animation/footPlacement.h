@@ -78,6 +78,11 @@ public:
     void SetEnabled(bool value);
     void SetLockType(FootLockType value);
     FootLockType LockType() const { return lockType; }
+    // 鞋底可以比地面低多少仍允许锁足。视觉位移（TES 层高度/detail）可能把
+    // 地表推到宏高度之上；正向 10 cm 阈值保持不变，负间隙放宽到该值，
+    // 让脚在新表面附近重新锁足并抬回地面，而不是长时间穿模。
+    void SetMaxPenetrationCm(float value);
+    float MaxPenetrationCm() const { return maxPenetrationCm; }
     void Reset(const char* reason);
     static void ValidateComponent(const Eigen::Matrix4f& component);
     LocalPose Solve(const SkeletonMesh& mesh, const LocalPose& locals,
@@ -102,6 +107,7 @@ private:
     std::array<Leg, 2> legs;
     FootPlacementState state;
     FootLockType lockType = FootLockType::Auto;
+    float maxPenetrationCm = 28.0f;
     bool historyValid = false;
     Eigen::Matrix4f previousComponent = Eigen::Matrix4f::Identity();
 };

@@ -160,6 +160,9 @@ std::string SceneActorPropertyControlId(EditorActorProperty property, uint32_t c
 // 下标与大纲里的槽行一一对应，选择仍走原来的 RequestMaterialSelection 路由。
 MaterialInstanceModelSnapshot MeshSceneActorModel(const EditorSceneActorSnapshot& actor);
 
+std::string ResolveSceneSelectionActorIdentity(
+    const std::string& actorIdentity, const std::string& objectIdentity);
+
 // 与面板共用的数值格式：9 位有效数字，保证同一值在只读行与输入控件里写法一致。
 std::string SceneActorNumber(float value);
 

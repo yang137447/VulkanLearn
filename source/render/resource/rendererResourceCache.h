@@ -10,6 +10,7 @@
 #include <set>
 
 #include "render/resource/tressfxGeometryCache.h"
+#include "render/resource/terrainCompositedWorldBindings.h"
 
 class Material;
 class MaterialInstance;
@@ -33,6 +34,9 @@ public:
     {
         uint64_t ownerGeneration = 0;
         std::unordered_map<std::string, std::shared_ptr<Texture>> worldTextures;
+        uint64_t worldTextureRevision = 0;
+        DescriptorBindingSnapshot descriptorBindings;
+        WorldDescriptorBudget descriptorBudget;
         std::unordered_map<std::string, std::shared_ptr<RenderableObject>> renderableObjects;
         std::unordered_map<std::string, std::shared_ptr<Material>> materials;
         std::unordered_map<std::string, std::shared_ptr<MaterialInstance>> materialInstances;
@@ -127,6 +131,11 @@ public:
     std::shared_ptr<Texture> GetGlobalTexture(std::string_view bindingName) const;
     bool HasGlobalTexture(std::string_view bindingName) const;
     std::shared_ptr<Texture> GetWorldTexture(std::string_view bindingName) const;
+    void ConfigureWorldDescriptorBudget(uint64_t generation, WorldDescriptorBudget budget);
+    DescriptorBindingSnapshot CaptureDescriptorBindingVersion() const;
+    PreparedWorldTextureBindings PrepareWorldTextureBindings(
+        uint64_t generation, const DescriptorBindingSnapshot& oldIdentity,
+        const WorldTextureMap& replacements, const WorldDescriptorBudget& budget);
 
     void BindRenderableObject(std::string objectKey, std::shared_ptr<RenderableObject> object);
     std::shared_ptr<RenderableObject> GetRenderableObject(std::string_view objectKey) const;
@@ -168,6 +177,7 @@ public:
     TressfxGeometryCache& GetTressfxGeometryCache() const;
 
 private:
+    friend class PreparedWorldTextureBindings;
     RendererResourceCache();
     RendererResourceCache(
         std::unordered_map<std::string, std::shared_ptr<Texture>>

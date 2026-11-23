@@ -7,6 +7,7 @@ add_executable(editor_ui_tests
     brushTests.cpp
     sceneObjectTypeSupportTests.cpp
     terrainEditSessionTests.cpp
+    terrainCompositedSculptApplyTests.cpp
     terrainAssetEditorTests.cpp
     terrainLayerPreviewTests.cpp
     terrainLodSnapshotTests.cpp
@@ -47,6 +48,8 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/assets/editorThumbnailLibrary.cpp"
     "${PROJECT_SOURCE_DIR}/source/shader/build/contentHash.cpp"
     "${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp"
+    "${PROJECT_SOURCE_DIR}/source/core/runtimeFileTrace.cpp"
+    "${PROJECT_SOURCE_DIR}/source/core/tracingIfstream.cpp"
     "${PROJECT_SOURCE_DIR}/source/resource/image/textureIO.cpp"
     "${PROJECT_SOURCE_DIR}/source/resource/image/hostImage.cpp"
     "${PROJECT_SOURCE_DIR}/source/resource/image/ddsTexture.cpp"
@@ -132,12 +135,17 @@ add_executable(editor_ui_tests
     "${PROJECT_SOURCE_DIR}/source/editor/brush/brushSampler.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/terrain/terrainEditSession.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/terrain/terrainPaintSession.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/terrain/terrainCompositedSculptApply.cpp"
+    "${PROJECT_SOURCE_DIR}/source/editor/terrain/terrainCompositedSculptCommit.cpp"
     "${PROJECT_SOURCE_DIR}/source/editor/terrain/terrainLayerPreview.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmapEditor.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmap.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainMeshBuilder.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerPaint.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintFile.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintManifest.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainPaintSha256.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainLayerRegistry.cpp"
     "${PROJECT_SOURCE_DIR}/source/terrain/terrainHeightmapWriter.cpp"
     "${PROJECT_SOURCE_DIR}/source/sceneNode.cpp")
 target_include_directories(editor_ui_tests PRIVATE "${PROJECT_SOURCE_DIR}/source")
@@ -172,3 +180,19 @@ target_compile_definitions(editor_ui_tests PRIVATE
 target_link_libraries(editor_ui_tests PRIVATE
     vl_editor_widgets vl_hair_assets RmlUi::Core SDL3::SDL3 Eigen3 Vulkan::Vulkan Json vl_offline_core vl_animation_assets vl_debug_draw Threads::Threads stb_image OpenEXR::OpenEXR BLAKE3::blake3)
 vulkanlearn_add_gtest(editor_ui_tests)
+
+add_executable(terrain_loading_cpu_tests
+    terrainLoadingGateTests.cpp
+    terrainCompositedLoadingBudgetTests.cpp
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainRvtBudget.cpp")
+target_include_directories(terrain_loading_cpu_tests PRIVATE
+    "${PROJECT_SOURCE_DIR}/source"
+    "$<TARGET_PROPERTY:Vulkan::Vulkan,INTERFACE_INCLUDE_DIRECTORIES>")
+target_link_libraries(terrain_loading_cpu_tests PRIVATE Eigen3 Json Threads::Threads)
+vulkanlearn_add_gtest(terrain_loading_cpu_tests)
+
+# 地形编辑/Paint 会话登记 dirty 区域，需要 Dirty、邻接图与 VT 布局的定义。
+target_sources(editor_ui_tests PRIVATE
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedDirty.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedAdjacency.cpp"
+    "${PROJECT_SOURCE_DIR}/source/terrain/terrainCompositedVT.cpp")

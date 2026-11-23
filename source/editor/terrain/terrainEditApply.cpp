@@ -207,7 +207,9 @@ bool ApplyTerrainMeshUpdate(
                 chunk.vertices,
                 chunk.indices,
                 backend,
-                chunk.resourceKey);
+                chunk.resourceKey,
+                false,
+                chunk.patchIndices);
             staged.push_back(std::move(object));
         }
     }

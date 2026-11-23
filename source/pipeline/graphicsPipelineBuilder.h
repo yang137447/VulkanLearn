@@ -40,6 +40,7 @@ struct GraphicsPipelineStateDesc
     vk::CompareOp stencilCompareOp = vk::CompareOp::eAlways;
     vk::CullModeFlags cullMode = vk::CullModeFlagBits::eBack;
     GraphicsPipelineBlendMode blendMode = GraphicsPipelineBlendMode::Opaque;
+    bool wireframe = false;
 };
 
 struct GraphicsPipelineBuildDesc
@@ -54,6 +55,9 @@ struct GraphicsPipelineBuildDesc
     uint32_t colorAttachmentCount;
     GraphicsPipelineStateDesc pipelineStateDesc;
     bool bIsShadowPass;
+    // 仅在管线包含 tesc/tese 时生效；quad patch 默认 4 个控制点，
+    // 与 TerrainMeshBuilder 输出的逐四边形 patch 索引一致。
+    uint32_t patchControlPoints = 4;
 };
 
 struct GraphicsPipelineBuildResult

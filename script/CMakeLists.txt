@@ -61,7 +61,11 @@ if(VULKANLEARN_ENABLE_CSHARP_BLUEPRINTS)
     vl_script_xml_text(VL_RUNTIME_PROJECT_XML "${CMAKE_CURRENT_SOURCE_DIR}/VulkanLearn.Runtime/VulkanLearn.Runtime.csproj")
     configure_file(Gameplay/Gameplay.csproj.in "${VULKANLEARN_SCRIPT_GAMEPLAY_PROJECT}" @ONLY)
     set(VULKANLEARN_SCRIPT_RESOURCE_ROOT "${VULKANLEARN_SCRIPT_RESOURCE_ROOT}" PARENT_SCOPE)
-    add_executable(vl_script_sources sourceManifest.cpp "${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp")
+    # atomicFile.cpp 依赖运行期文件追踪；此前该目标只在 C# 关闭时不构建，漏了这两个源。
+    add_executable(vl_script_sources sourceManifest.cpp
+        "${PROJECT_SOURCE_DIR}/source/shader/build/atomicFile.cpp"
+        "${PROJECT_SOURCE_DIR}/source/core/runtimeFileTrace.cpp"
+        "${PROJECT_SOURCE_DIR}/source/core/tracingIfstream.cpp")
     target_include_directories(vl_script_sources PRIVATE "${PROJECT_SOURCE_DIR}/source")
     if(MINGW)
         target_link_options(vl_script_sources PRIVATE -municode)

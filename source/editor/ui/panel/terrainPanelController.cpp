@@ -59,21 +59,221 @@ void MaterialInstanceAssetEditorPanel::RefreshTerrainSummary()
     const EditorSceneActorSnapshot* actor = SelectedActor();
     const bool terrainSelected =
         actor != nullptr && actor->type == EditorSceneActorType::Terrain;
+    // 未选中地形时仍展示第一个 placement 的层球；否则用户看不到任何层材质预览。
+    const EditorSceneActorSnapshot* fallback =
+        terrainSelected ? actor : TerrainMaterialActor();
 
     // 空状态与编辑工作区只随选中地形身份切换；层内容由层库自己的签名缓存。
     const std::string signature = terrainSelected
         ? actor->identity + "|" + std::to_string(actor->worldGeneration)
-        : "empty";
+        : fallback != nullptr ? "fallback|" + fallback->identity + "|" +
+            std::to_string(fallback->worldGeneration) : "empty";
     if (signature != terrainSummarySignature)
     {
         terrainSummarySignature = signature;
-        widgetDocument.SetProperty("terrain-empty", "display", terrainSelected ? "none" : "flex");
+        // 已在浏览回退地形时不再重复空状态提示，把高度留给层材质球。
+        widgetDocument.SetProperty("terrain-empty", "display",
+            terrainSelected || fallback != nullptr ? "none" : "flex");
         // 编辑器工作区始终保留：没有地形时笔刷库仍可选择默认笔刷，
         // 层库只显示显式空状态，不伪造任何地形层。
         widgetDocument.SetProperty("terrain-summary", "display", "flex");
     }
+    RefreshTerrainMaterialPanel();
     RefreshTerrainLayerLibrary();
     RefreshTerrainSurfacePanel(SelectedTerrainActor());
+}
+
+const EditorSceneActorSnapshot*
+MaterialInstanceAssetEditorPanel::TerrainMaterialActor() const
+{
+    if (const EditorSceneActorSnapshot* selected = SelectedTerrainActor())
+        return selected;
+    for (const EditorSceneActorSnapshot& actor : OutlinerActors())
+    {
+        if (actor.type == EditorSceneActorType::Terrain &&
+            actor.terrainPlan != nullptr)
+        {
+            return &actor;
+        }
+    }
+    return nullptr;
+}
+
+std::string MaterialInstanceAssetEditorPanel::TerrainMaterialPath() const
+{
+    if (const EditorSceneActorSnapshot* actor = TerrainMaterialActor();
+        actor != nullptr && actor->terrainPlan != nullptr)
+    {
+        terrainMaterialPathCache = actor->terrainPlan->desc.materialInstancePath;
+        terrainAssetPathCache = actor->terrainAssetPath;
+        return terrainMaterialPathCache;
+    }
+    // 材质预览 World 不含地形 actor；只有当前打开的正是缓存材质时才沿用，
+    // 避免关闭材质后仍把上一关卡的路径当成当前选择。
+    const bool materialOpen = !terrainMaterialPathCache.empty() &&
+        snapshot.activeDocument.has_value() &&
+        snapshot.activeDocument->assetPath == terrainMaterialPathCache;
+    if (!materialOpen)
+    {
+        terrainMaterialPathCache.clear();
+        terrainAssetPathCache.clear();
+    }
+    return terrainMaterialPathCache;
+}
+
+std::string MaterialInstanceAssetEditorPanel::TerrainDetailMaterialPath() const
+{
+    if (const EditorSceneActorSnapshot* actor = TerrainMaterialActor();
+        actor != nullptr && actor->terrainPlan != nullptr)
+    {
+        terrainDetailMaterialPathCache =
+            actor->terrainPlan->desc.detailMaterialInstancePath;
+        return terrainDetailMaterialPathCache;
+    }
+    // detail MI 也只在自己仍打开时保留，避免关闭后继续把上一个关卡当作当前选择。
+    const bool materialOpen = !terrainDetailMaterialPathCache.empty() &&
+        snapshot.activeDocument.has_value() &&
+        snapshot.activeDocument->assetPath == terrainDetailMaterialPathCache;
+    if (!materialOpen)
+    {
+        terrainDetailMaterialPathCache.clear();
+    }
+    return terrainDetailMaterialPathCache;
+}
+
+std::string MaterialInstanceAssetEditorPanel::TerrainAssetPath() const
+{
+    TerrainMaterialPath();
+    return terrainAssetPathCache;
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainMaterialPanel()
+{
+    if (document == nullptr) return;
+    const std::string materialPath = TerrainMaterialPath();
+    const std::string detailMaterialPath = TerrainDetailMaterialPath();
+    // 面板是单行工具条：只显示文件名，完整路径由 Open MI 打开后可见。
+    const std::string displayPath = materialPath.empty()
+        ? std::string("No terrain material")
+        : std::filesystem::path(materialPath).filename().string();
+    const std::string detailDisplayPath = detailMaterialPath.empty()
+        ? std::string("No detail MI")
+        : std::filesystem::path(detailMaterialPath).filename().string();
+    SetMarkup("terrain-material-path",
+        Text(displayPath));
+    SetMarkup("terrain-detail-material-path",
+        Text(detailDisplayPath));
+    SetDisabled("terrain-material-open", materialPath.empty());
+    SetDisabled("terrain-detail-material-open", detailMaterialPath.empty());
+    SetDisabled("terrain-asset-open", TerrainAssetPath().empty());
+
+    const bool materialOpen = !materialPath.empty() &&
+        snapshot.activeDocument.has_value() &&
+        snapshot.activeDocument->assetPath == materialPath;
+    const bool detailOpen = !detailMaterialPath.empty() &&
+        snapshot.activeDocument.has_value() &&
+        snapshot.activeDocument->assetPath == detailMaterialPath;
+    SetDisabled("terrain-material-uv-scale", !materialOpen);
+
+    const auto readFloat = [&](const char* name) -> std::string
+    {
+        if (!snapshot.activeDocument) return {};
+        for (const EditorParameterSnapshot& parameter :
+             snapshot.activeDocument->parameters)
+        {
+            if (parameter.name != name) continue;
+            if (parameter.type != EditorParameterType::Float ||
+                parameter.effectiveValue.values.empty()) return {};
+            return Number(parameter.effectiveValue.values[0]);
+        }
+        return {};
+    };
+
+    SetControlValue("terrain-material-uv-scale",
+        materialOpen ? readFloat("u_uvScale") : "");
+
+    struct TessControl
+    {
+        const char* id;
+        const char* parameter;
+    };
+    const TessControl tessControls[] = {
+        {"terrain-material-tess-max", "u_terrainTessMax"},
+        {"terrain-material-tess-pixels", "u_terrainTessTargetPixels"},
+        {"terrain-material-tess-radius", "u_terrainTessRadiusM"},
+        {"terrain-material-detail-uv", "u_detailUvScale"},
+        {"terrain-material-displacement-scale", "u_layerDisplacementScale"},
+    };
+    for (const TessControl& control : tessControls)
+    {
+        SetDisabled(control.id, !detailOpen);
+        SetControlValue(control.id, detailOpen ? readFloat(control.parameter) : "");
+    }
+
+    if (detailOpen)
+    {
+        SetMarkup("terrain-material-status", "Detail MI open");
+    }
+    else if (materialOpen)
+    {
+        SetMarkup("terrain-material-status",
+            detailMaterialPath.empty()
+                ? "MI open"
+                : "MI open; detail MI controls tessellation.");
+    }
+    else
+    {
+        SetMarkup("terrain-material-status",
+            Text(materialPath.empty()
+                ? "No terrain"
+                : detailMaterialPath.empty()
+                    ? "Open MI to edit tiling."
+                    : "Open Detail MI to edit tessellation."));
+    }
+}
+
+void MaterialInstanceAssetEditorPanel::RefreshTerrainLayerDetails()
+{
+    if (document == nullptr) return;
+    if (!terrainLayerDetailsOpen)
+    {
+        widgetDocument.SetClass("terrain-layer-details", "open", false);
+        return;
+    }
+    const EditorSceneActorSnapshot* actor = TerrainMaterialActor();
+    const TerrainBuildPlan* plan = actor == nullptr ? nullptr : actor->terrainPlan.get();
+    if (plan == nullptr || terrainPaintLayer >= plan->desc.layers.size())
+    {
+        terrainLayerDetailsOpen = false;
+        widgetDocument.SetClass("terrain-layer-details", "open", false);
+        return;
+    }
+    widgetDocument.SetClass("terrain-layer-details", "open", true);
+    // 层字段写回需要 TR 文档 revision；细节面板打开时后台打开文档，
+    // 不切换工作区标签，也不复用资源页的可见性状态。
+    const std::string assetPath = TerrainAssetPath();
+    if (!assetPath.empty() && TerrainDocument(assetPath) == nullptr &&
+        terrainDocumentRequestPath != assetPath)
+    {
+        terrainDocumentRequestPath = assetPath;
+        EditorCommandEnvelope command;
+        command.type = EditorCommandType::GetTerrainDocument;
+        command.payload = MaterialInstanceAssetPathPayload{assetPath};
+        Submit(std::move(command));
+    }
+    const TerrainLayerDesc& layer = plan->desc.layers[terrainPaintLayer];
+    SetMarkup("terrain-layer-details-title",
+        Text(layer.name.empty() ? "Unnamed Layer" : layer.name));
+    SetMarkup("terrain-layer-details-index", Text(std::to_string(terrainPaintLayer)));
+    SetMarkup("terrain-layer-details-source", Text(TerrainLayerSourceLabel(layer.sourceSet)));
+    SetControlValue("terrain-layer-uv-scale", Number(layer.uvScale));
+    SetControlValue("terrain-layer-uv-rotation", Number(layer.uvRotation));
+    SetControlValue("terrain-layer-displacement", Number(layer.displacementM * 100.0f));
+    SetMarkup("terrain-layer-height",
+        Text(TerrainNumber(layer.heightMin) + " - " + TerrainNumber(layer.heightMax)));
+    SetMarkup("terrain-layer-slope",
+        Text(TerrainNumber(layer.slopeMin) + " - " + TerrainNumber(layer.slopeMax) + " deg"));
+    RefreshTerrainMaterialPanel();
 }
 
 void MaterialInstanceAssetEditorPanel::RefreshTerrainSurfacePanel(
@@ -108,7 +308,10 @@ void MaterialInstanceAssetEditorPanel::RefreshTerrainSurfacePanel(
 void MaterialInstanceAssetEditorPanel::RefreshTerrainLayerLibrary()
 {
     if (document == nullptr) return;
-    const EditorSceneActorSnapshot* actor = SelectedTerrainActor();
+    // 细节面板只依赖选择/开关，先于层库签名缓存刷新，避免仅切换面板时被提前返回。
+    RefreshTerrainLayerDetails();
+    // 与 Terrain Material 区一致：没有显式选中时浏览第一个地形 placement。
+    const EditorSceneActorSnapshot* actor = TerrainMaterialActor();
     const TerrainBuildPlan* plan = actor == nullptr ? nullptr : actor->terrainPlan.get();
     const size_t layerCount = plan == nullptr ? 0 : plan->desc.layers.size();
     if (layerCount == 0)
@@ -122,6 +325,42 @@ void MaterialInstanceAssetEditorPanel::RefreshTerrainLayerLibrary()
         terrainPaintLayer = static_cast<uint32_t>(layerCount - 1);
     }
     const bool selectedValid = layerCount != 0 && terrainPaintLayer < layerCount;
+    // 选中只切换卡片 class；整表重建会替换 DOM，双击的第二下就落在旧节点上。
+    auto applySelectionPresentation = [&]()
+    {
+        const std::string selectionSignature =
+            (actor == nullptr ? std::string() :
+                actor->identity + "|" + std::to_string(actor->worldGeneration)) + "|" +
+            std::to_string(terrainPaintLayer) + "|" +
+            std::to_string(layerCount) + "|" + (selectedValid ? "1" : "0");
+        if (selectionSignature == terrainLayerSelectionSignature) return;
+        terrainLayerSelectionSignature = selectionSignature;
+        for (size_t index = 0; index < layerCount; ++index)
+        {
+            Rml::Element* card = document->GetElementById(
+                "terrain-layer-card-" + std::to_string(index));
+            if (card != nullptr)
+                card->SetClass("selected",
+                    selectedValid && terrainPaintLayer == index);
+        }
+        std::string status;
+        if (!selectedValid)
+        {
+            status = "No layer selected | 0 layers";
+        }
+        else
+        {
+            const TerrainLayerDesc& layer = plan->desc.layers[terrainPaintLayer];
+            const std::string name = layer.name.empty() ? "Unnamed Layer" : layer.name;
+            status = "Selected: " + name +
+                " | source set " + std::to_string(layer.sourceSet) +
+                " | uvScale " + TerrainNumber(layer.uvScale) +
+                " | height " + TerrainLayerRange(layer.heightMin, layer.heightMax) +
+                " | slope " + TerrainLayerRange(layer.slopeMin, layer.slopeMax) +
+                " | " + std::to_string(layerCount) + " layers";
+        }
+        SetMarkup("terrain-layer-status", Text(status));
+    };
 
     auto* scroll = document->GetElementById("terrain-layer-scroll");
     std::ostringstream sourceKey;
@@ -240,13 +479,17 @@ void MaterialInstanceAssetEditorPanel::RefreshTerrainLayerLibrary()
 
     // 窗口范围进入签名：滚动到同一行内不重建，跨行才替换卡片 DOM。
     std::ostringstream signature;
-    signature << sourceKey.str() << '|' << terrainPaintLayer << '|'
+    signature << sourceKey.str() << '|'
         << static_cast<int>(terrainPanelMode) << '|' << terrainLayerListView << '|'
         << terrainLayerSearch << '|' << terrainLayerWindow.columns << ','
         << terrainLayerWindow.firstRow << ',' << terrainLayerWindow.endRow << ','
         << static_cast<int>(std::lround(terrainLayerWindow.topSpacerHeight)) << ','
         << static_cast<int>(std::lround(terrainLayerWindow.bottomSpacerHeight));
-    if (signature.str() == terrainLayerLibrarySignature) return;
+    if (signature.str() == terrainLayerLibrarySignature)
+    {
+        applySelectionPresentation();
+        return;
+    }
     terrainLayerLibrarySignature = signature.str();
 
     widgetDocument.SetClass("terrain-layer-cards", "terrain-layer-grid", !terrainLayerListView);
@@ -299,23 +542,7 @@ void MaterialInstanceAssetEditorPanel::RefreshTerrainLayerLibrary()
     widgetDocument.SetProperty("terrain-layer-empty", "display",
         emptyText.empty() ? "none" : "block");
 
-    std::string status;
-    if (!selectedValid)
-    {
-        status = "No layer selected | 0 layers";
-    }
-    else
-    {
-        const TerrainLayerDesc& layer = plan->desc.layers[terrainPaintLayer];
-        const std::string name = layer.name.empty() ? "Unnamed Layer" : layer.name;
-        status = "Selected: " + name +
-            " | source set " + std::to_string(layer.sourceSet) +
-            " | uvScale " + TerrainNumber(layer.uvScale) +
-            " | height " + TerrainLayerRange(layer.heightMin, layer.heightMax) +
-            " | slope " + TerrainLayerRange(layer.slopeMin, layer.slopeMax) +
-            " | " + std::to_string(layerCount) + " layers";
-    }
-    SetMarkup("terrain-layer-status", Text(status));
+    applySelectionPresentation();
     // 选中只改卡片 class；重建后恢复原 scrollTop，不能把用户滚到的位置弹回顶部。
     if (scroll != nullptr)
         scroll->SetScrollTop(scrollTop);
@@ -671,7 +898,8 @@ void MaterialInstanceAssetEditorPanel::RefreshTerrainBrushUi()
     }
     if (actor == nullptr && terrainPanelMode != TerrainPanelMode::Layers)
         terrainPanelMode = TerrainPanelMode::Layers;
-    if (terrainPaintLayer >= layerCount)
+    // 未选中地形时层库仍展示回退 placement；这里不能把层选择清回 0。
+    if (actor != nullptr && terrainPaintLayer >= layerCount)
         terrainPaintLayer = layerCount == 0 ? 0 : static_cast<uint32_t>(layerCount - 1);
 
     const bool sculptMode = terrainPanelMode == TerrainPanelMode::Sculpt;

@@ -12,6 +12,7 @@
 #include "core/logStore.h"
 #include "commonFunction.h"
 #include "particles/particleAsset.h"
+#include "Profiler.h"
 #include <chrono>
 #include <cmath>
 #include <cstdint>
@@ -330,6 +331,8 @@ void ScriptRuntimeSubsystem::ReportTerrainCollisionStatistics() const
         physics->TerrainCollisionPlacementIds();
     std::cout
         << "[TerrainCollision] bodies=" << physics->TerrainCollisionBodyCount()
+        << " proxies=" << physics->TerrainCollisionProxyCount()
+        << " patches=" << physics->TerrainCollisionPatchCount()
         << " placements=" << placements.size()
         << std::endl;
     for (const std::string& placement : placements)
@@ -375,7 +378,8 @@ bool ScriptRuntimeSubsystem::Control(World& world, ScriptPlayState requested, st
                 physics->SetMeshGeometry(BuildScriptPhysicsMeshGeometry(world));
                 // Play 才创建地形静态体；编辑器预览不经过这里。创建失败会抛异常，
                 // 由外层 catch 回滚到 Editing，不留下半套物理世界。
-                physics->SetTerrainCollisions(world.GetTerrainCollisionInstances());
+                physics->SetTerrainCollisions(
+                    world.GetTerrainCollisionInstances());
                 Apply(world, response);
                   world.TickScriptAnimations(0);
                 StepPhysics(world, 0);
@@ -982,6 +986,7 @@ void ScriptRuntimeSubsystem::Tick(const std::shared_ptr<World>& world, float dt,
     if (host) host->ResetMetrics();
     if (world && state == ScriptPlayState::Playing)
     {
+        PROFILE_SCOPE("Script.Tick");
         try
         {
             auto& context = *world->GetScriptContext();
@@ -994,34 +999,50 @@ void ScriptRuntimeSubsystem::Tick(const std::shared_ptr<World>& world, float dt,
             // 每帧一次脚本时间轴：没有 accumulator，也没有 fixed 回调；dt 直接是变帧间隔。
             auto assetResults = std::move(context.assetResults), assetUnloads = std::move(context.assetUnloads);
             context.assetResults = nlohmann::json::array(); context.assetUnloads = nlohmann::json::array();
-            Apply(*world, world->GetScriptContext()->Call("tick", {{"dt", time.delta}, {"time", ContextTime()}, {"input",
-                {int(input.moveRight) - int(input.moveLeft), int(input.moveForward) - int(input.moveBackward),
-                 int(input.moveUp) - int(input.moveDown)}}, {"deferLate", true},
-                 {"inputMap", input.gameplay}, {"animationFeedback", world->ScriptAnimationFeedback()},
-                 {"assetResults", assetResults}, {"assetUnloads", assetUnloads},
-                 {"states", context.TakePhysicsUpdates()},
-                 {"particleTelemetry", BuildParticleTelemetryJson(*world)},
-                 {"particleEvents", BuildParticleEventsJson(
-                     world->TakeParticleRuntimeEvents())},
-                 {"particleDataChannels",
-                     BuildParticleDataChannelsJson(*world)},
-                 {"delta", true}}));
+            {
+                PROFILE_SCOPE("Script.HostTick");
+                Apply(*world, world->GetScriptContext()->Call("tick", {{"dt", time.delta}, {"time", ContextTime()}, {"input",
+                    {int(input.moveRight) - int(input.moveLeft), int(input.moveForward) - int(input.moveBackward),
+                     int(input.moveUp) - int(input.moveDown)}}, {"deferLate", true},
+                     {"inputMap", input.gameplay}, {"animationFeedback", world->ScriptAnimationFeedback()},
+                     {"assetResults", assetResults}, {"assetUnloads", assetUnloads},
+                     {"states", context.TakePhysicsUpdates()},
+                     {"particleTelemetry", BuildParticleTelemetryJson(*world)},
+                     {"particleEvents", BuildParticleEventsJson(
+                         world->TakeParticleRuntimeEvents())},
+                     {"particleDataChannels",
+                         BuildParticleDataChannelsJson(*world)},
+                     {"delta", true}}));
+            }
             // 帧物理：Tick 写入的角色/刚体指令在同一次同步里领取，随后角色按帧 dt 移动、
             // 刚体按内部 1/60 子步推进；Tick 发起的查询在本帧物理位姿上执行。
-            StepPhysics(*world, time.delta);
+            {
+                PROFILE_SCOPE("Script.StepPhysics");
+                StepPhysics(*world, time.delta);
+            }
             auto rayHits = std::move(world->GetScriptContext()->rayHits);
             world->GetScriptContext()->rayHits = nlohmann::json::array();
-            Apply(*world, world->GetScriptContext()->Call("late", {{"dt", time.delta}, {"states", context.TakePhysicsUpdates()},
-                {"delta", true}, {"contacts", physics->Contacts()}, {"triggers", physics->Triggers()}, {"rayHits", rayHits}}));
+            {
+                PROFILE_SCOPE("Script.HostLate");
+                Apply(*world, world->GetScriptContext()->Call("late", {{"dt", time.delta}, {"states", context.TakePhysicsUpdates()},
+                    {"delta", true}, {"contacts", physics->Contacts()}, {"triggers", physics->Triggers()}, {"rayHits", rayHits}}));
+            }
             // LateTick 可能移动根或碰撞体；先用零时步把这些状态同步到 Jolt，
             // 这样动画中的 Foot IK 查询看到的是本帧最终支撑体，而不是旧物理位姿。
             // 零时步只领取一次 LateTick 指令并刷新接触/查询，不推进物理时间。
-            StepPhysics(*world, 0);
+            {
+                PROFILE_SCOPE("Script.StepPhysicsSync");
+                StepPhysics(*world, 0);
+            }
             // 动画使用同一倍率时钟，在最终物理反馈与 LateTick 决策后求值；Pause 没有此路径。
             // 脚探测借用已同步的这一帧物理世界，不持有后端指针。
-            world->TickScriptAnimations(static_cast<float>(time.delta), physics.get());
+            {
+                PROFILE_SCOPE("Script.TickAnimations");
+                world->TickScriptAnimations(static_cast<float>(time.delta), physics.get());
+            }
             if (HasScriptSpringArm(world->GetScriptBlueprintStates()))
             {
+                PROFILE_SCOPE("Script.CameraArm");
                 // 相机臂在最终物理位姿上求值；只执行查询，不再推进物理或重放用户 LateTick。
                 // LateTick 查询结果仍留在 context.rayHits，保持原有下一帧领取语义。
                 Apply(*world, context.Call("camera_prepare", {{"states", context.TakePhysicsUpdates()}, {"delta", true}}));
@@ -1036,7 +1057,10 @@ void ScriptRuntimeSubsystem::Tick(const std::shared_ptr<World>& world, float dt,
             }
             // 摘要与时钟每帧发布，回调明细最多 10 Hz；托管故障/生命周期变化可要求立即刷新。
             performanceDetailElapsed += dt;
-            RefreshPerformance(*world, performanceDetailElapsed + 1e-8 >= 0.1);
+            {
+                PROFILE_SCOPE("Script.RefreshPerformance");
+                RefreshPerformance(*world, performanceDetailElapsed + 1e-8 >= 0.1);
+            }
         }
         catch (const std::exception& exception)
         {

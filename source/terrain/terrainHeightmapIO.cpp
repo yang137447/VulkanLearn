@@ -8,6 +8,7 @@
 #include <stb_image.h>
 
 #include "resource/image/textureIO.h"
+#include "core/tracingIfstream.h"
 
 namespace VL::TerrainHeightmapIO
 {
@@ -29,7 +30,7 @@ bool HasPngSignature(const std::filesystem::path& path)
 {
     static constexpr std::array<uint8_t, 8> Signature = {
         0x89u, 'P', 'N', 'G', 0x0d, 0x0a, 0x1a, 0x0a};
-    std::ifstream stream(path, std::ios::binary);
+    RuntimeFileTrace::TracingIfstream stream(path, std::ios::binary, "TerrainHeightmapIO.Signature");
     if (!stream.is_open())
         return false;
     std::array<uint8_t, Signature.size()> bytes{};

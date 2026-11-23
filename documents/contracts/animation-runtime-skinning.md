@@ -166,11 +166,19 @@ MM 临时观察和实际关节历史只读取这份姿态。
 尊重 owner 双向碰撞层/掩码，最近遮挡若非静态支撑即返回未命中。
 从形状内部起射不伪造可站立法线。每脚探测两个参考点：
 绑定 ball 在绑定根水平面的投影，以及踝下的 heel 代理（骨架没有 heel 骨，
-两者都转换到 foot 局部）；各从参考点上方 30 cm 向下探测 70 cm，
+两者都转换到 foot 局部）；各从参考点上方 40 cm 向下探测 100 cm，
 只接受法线 Y 至少 `cos(45°)` 的静态支撑。
 
 进入锁定要求历史有效、该参考点 pre-IK 世界水平速度不超过 40 cm/s、
-到平面距离不超过 10 cm。超过 80 cm/s、16 cm、锚点偏差 20 cm 或支撑身份改变时释放。
+到平面距离不超过 10 cm **且**不低于 `-maxPenetrationCm`（默认 28 cm）。
+正向 10 cm 阈值保持源节点语义；负间隙放宽用于吸收碰撞代理/采样误差：
+鞋底先进入碰撞表面时仍允许锁足，`anchor` 落在碰撞表面上、由 IK 把脚抬回
+地面形成穿透恢复。超过 80 cm/s、
+正向 16 cm、负向 `maxPenetrationCm`、锚点偏差 20 cm 或支撑身份改变时释放。
+`SkeletalPlayback::SetFootPlacementMaxPenetrationCm` 可在 0..60 cm 内调整该预算。
+地形命中时 `ScriptPhysicsWorld::ProbeGround` 返回 Jolt heightfield（后续为
+0.5 m 宏高度 patch）的高度与表面法线；TES 的 `layerHeight`/detail 只参与
+渲染，不进入脚 IK 或物理碰撞。
 两点共面且都可锁时取更贴近地面的参考点，1 cm 内保留原支点；
 另一参考点低 1 cm 以上时切换支点，跟随 heel→ball 滚动。
 踏面不共面时只取更高/可锁的踏面作单支点，不把台阶连成虚构斜坡；
@@ -212,6 +220,11 @@ Pause/零 delta 冻结求值；自然 Completed 与显式暂停分开记录。
 公共 DrawDebug 显示 probe、法线、pre/post 参考点和锁定锚点；
 `FootPlacement.active` 时 pre/post 连线按红→绿分段插值，即使 Motion 轨迹开关关闭
 也从 `Engine.Motion` publisher 提交，便于单独观察 IK 纠正方向。
+`Animation.SetFootPlacement(enabled, footLock)` / 原生
+`configureFootPlacement` 是独立于 Motion Matching 的后处理配置命令：
+它每帧声明开关与 `Auto|Ball|Ankle` 支点，播放器重建后自动补发。
+Echo 的 clip 状态机走该命令，不依赖 `Match(..., footPlacement=true)`。
+
 实测边界见 [P6 动态质量记录](../rationale/gasp-p6-dynamic-quality-record.md)。
 
 ## 可选惯性化
@@ -626,7 +639,8 @@ HUD 显示当前速率与剩余速度差。原生只对方向一致的地面稳�
   SyncGroup/MarkerSync 数据、曲线条件、Inertialization 标记与单层 pose 输出；
   R4 的 Slot/Montage 动作层由宿主 `PlayAction` + 原生 `PlayMontage` 提供，仍是整身
   `DefaultSlot` 覆盖，不做骨骼 mask 分层。BlendSpace、AimOffset、TurnInPlace、Pivot、
-  LayeredBoneBlend、FootPlacement、additive 仍未实现；SlopeWarping 是图后的
+  LayeredBoneBlend、FootPlacement **图节点**、additive 仍未实现；足部 IK 是图后的
+  独立后处理（可用 `configureFootPlacement` 声明），SlopeWarping 同样是图后的
   原生姿态后处理，不进入图节点。曲线驱动骨骼/AimOffset 仍归后续阶段。
 
 ## 预览与调试

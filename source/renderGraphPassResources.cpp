@@ -9,6 +9,7 @@
 #include "render/backend/rendererDescriptorWriter.h"
 #include "render/rendergraph/renderGraphCompiler.h"
 #include "render/rendergraph/sceneViewportOutputValidation.h"
+#include "render/rendergraph/renderGraphDepthOwner.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/camera/autoExposureCompute.h"
@@ -190,6 +191,8 @@ struct RetiredRenderGraphImageResource
 
 struct RetiredRenderGraphPassResource
 {
+    std::shared_ptr<const VL::WorldBindingRegistryLease> worldBindingRegistryLease;
+    std::vector<VL::WorldBindingImageOwner> worldBindingImageOwners;
     VL::RendererBackendVulkan* rendererBackend = nullptr;
     std::string name;
     std::vector<VL::RHIFramebufferHandle> framebufferHandles;
@@ -322,6 +325,9 @@ void ClearRenderpassResourceFields(Renderpass& renderpass)
     renderpass.descriptorSets.clear();
     renderpass.writeDescriptorSets.clear();
     renderpass.inputDescriptorImageInfos.clear();
+    renderpass.worldBindingImageOwners.clear();
+    renderpass.worldBindingWrites.clear();
+    renderpass.worldBindingRegistryLease.reset();
 }
 
 std::shared_ptr<RetiredRenderGraphPassResource> TakeRenderpassResource(
@@ -331,6 +337,8 @@ std::shared_ptr<RetiredRenderGraphPassResource> TakeRenderpassResource(
     auto retiredPass = std::make_shared<RetiredRenderGraphPassResource>();
     retiredPass->rendererBackend = &rendererBackend;
     retiredPass->name = renderpass.name;
+    retiredPass->worldBindingImageOwners = std::move(renderpass.worldBindingImageOwners);
+    retiredPass->worldBindingRegistryLease = std::move(renderpass.worldBindingRegistryLease);
     retiredPass->framebufferHandles = std::move(renderpass.framebufferHandles);
     retiredPass->framebuffers = std::move(renderpass.framebuffers);
     retiredPass->descriptorSetLayoutHandle = renderpass.descriptorSetLayoutHandle;
@@ -370,6 +378,12 @@ RenderResource RenderGraph::CreateRenderResource(
     try
     {
         resource.name = resourceDesc.name;
+        if (resource.name == "terrainQualityWinner0" || resource.name == "terrainQualityWinner1")
+        {
+            const auto limits = rendererBackend.GetSelectedDeviceLimits();
+            if (limits.maxColorAttachments < 7 || limits.maxFragmentOutputAttachments < 7)
+                throw std::runtime_error("Terrain quality winner requires seven actual device MRT slots");
+        }
         resource.type = resourceDesc.type;
         resource.arrayLayers =
             resourceDesc.arrayLayers;
@@ -521,12 +535,24 @@ RenderResource RenderGraph::CreateRenderResource(
                       .CreateDepthSampler(
                           "Sampler: " +
                           resource.name))
-            : rendererBackend.Create2DSampler(
-                  "Sampler: " +
-                  resource.name);
+            : ((resource.name == "terrainQualityWinner0" || resource.name == "terrainQualityWinner1")
+                ? rendererBackend.Create2DSampler(vk::Filter::eNearest,
+                    vk::SamplerAddressMode::eClampToEdge, false, "Sampler: " + resource.name)
+                : rendererBackend.Create2DSampler("Sampler: " + resource.name));
         resource.samplerHandle =
             rendererBackend.GetSamplerHandle(
                 resource.sampler);
+        if (resource.name == "terrainFeedbackDepth" ||
+            resource.name == "terrainQualityWinner0" || resource.name == "terrainQualityWinner1" ||
+            resource.name.rfind("sceneViewportOutput_", 0) == 0)
+        {
+            auto owner = std::make_shared<RetiredRenderGraphImageResource>();
+            RenderResource borrowed = resource;
+            VL::RegisterRenderGraphDepthOwner(resource.image, owner);
+            owner->rendererBackend = &rendererBackend;
+            owner->resource = std::move(resource);
+            resource = std::move(borrowed);
+        }
         return resource;
     }
     catch (...)
@@ -544,6 +570,16 @@ void RenderGraph::DestroyRenderResource(
     VL::RendererBackendVulkan& rendererBackend,
     VL::RenderGraphReleaseMode releaseMode)
 {
+    auto captureOwner = VL::ReleaseRenderGraphDepthOwner(resource.image);
+    if (captureOwner)
+    {
+        const auto debugName = "RenderGraphResource:" + resource.name;
+        ClearRenderResourceFields(resource);
+        if (releaseMode == VL::RenderGraphReleaseMode::Retire)
+            VL::ResourceRetireQueue::GetInstance().RetireShared(
+                debugName, 0, GetGraphResourceLastUsedEpoch(), std::move(captureOwner));
+        return;
+    }
     if (!HasRenderResourceHandles(resource))
     {
         return;
@@ -802,6 +838,49 @@ Renderpass RenderGraph::CreateRenderpass(
     }
 }
 
+void Renderpass::DestroyPassDescriptors(VL::RendererBackendVulkan& rendererBackend)
+{
+    // 一个 pass 的 descriptor layout / pool / set 属于同一个所有权批次：
+    // pool 销毁会一并释放它分配的 descriptor set，因此这里只需要先销毁两个
+    // layout 和 pool，再清掉 RHI handle 缓存。RenderInitialize 在上一轮中途
+    // 抛异常后可能被同一个 graph 重跑；若重跑直接覆盖 handle，旧批次就再也
+    // 没有 owner 能释放，只能等 vkDestroyDevice 报泄漏。这里的边界是：
+    // 任何一次新的 pass descriptor 初始化之前，旧批次必须已经销毁。
+    if (descriptorSetLayoutHandle.IsValid())
+    {
+        rendererBackend.DestroyDescriptorSetLayout(descriptorSetLayoutHandle);
+        descriptorSetLayout = nullptr;
+    }
+    else
+    {
+        rendererBackend.DestroyDescriptorSetLayout(descriptorSetLayout);
+    }
+
+    if (emptyDescriptorSetLayoutHandle.IsValid())
+    {
+        rendererBackend.DestroyDescriptorSetLayout(emptyDescriptorSetLayoutHandle);
+        emptyDescriptorSetLayout = nullptr;
+    }
+    else
+    {
+        rendererBackend.DestroyDescriptorSetLayout(emptyDescriptorSetLayout);
+    }
+
+    if (descriptorPoolHandle.IsValid())
+    {
+        rendererBackend.DestroyDescriptorPool(descriptorPoolHandle);
+        descriptorPool = nullptr;
+    }
+    else
+    {
+        rendererBackend.DestroyDescriptorPool(descriptorPool);
+    }
+
+    descriptorSetHandles.clear();
+    descriptorSets.clear();
+    writeDescriptorSets.clear();
+}
+
 void RenderGraph::DestroyRenderpass(
     Renderpass& renderpass,
     VL::RendererBackendVulkan& rendererBackend,
@@ -846,35 +925,7 @@ void RenderGraph::DestroyRenderpass(
         rendererBackend.DestroyFramebuffers(renderpass.sceneViewportFramebuffers);
     }
 
-    if (renderpass.descriptorSetLayoutHandle.IsValid())
-    {
-        rendererBackend.DestroyDescriptorSetLayout(renderpass.descriptorSetLayoutHandle);
-        renderpass.descriptorSetLayout = nullptr;
-    }
-    else
-    {
-        rendererBackend.DestroyDescriptorSetLayout(renderpass.descriptorSetLayout);
-    }
-
-    if (renderpass.emptyDescriptorSetLayoutHandle.IsValid())
-    {
-        rendererBackend.DestroyDescriptorSetLayout(renderpass.emptyDescriptorSetLayoutHandle);
-        renderpass.emptyDescriptorSetLayout = nullptr;
-    }
-    else
-    {
-        rendererBackend.DestroyDescriptorSetLayout(renderpass.emptyDescriptorSetLayout);
-    }
-
-    if (renderpass.descriptorPoolHandle.IsValid())
-    {
-        rendererBackend.DestroyDescriptorPool(renderpass.descriptorPoolHandle);
-        renderpass.descriptorPool = nullptr;
-    }
-    else
-    {
-        rendererBackend.DestroyDescriptorPool(renderpass.descriptorPool);
-    }
+    renderpass.DestroyPassDescriptors(rendererBackend);
 
     if (renderpass.renderPassHandle.IsValid())
     {
@@ -894,8 +945,4 @@ void RenderGraph::DestroyRenderpass(
     {
         rendererBackend.DestroyRenderPass(renderpass.sceneViewportRenderPass);
     }
-
-    renderpass.descriptorSetHandles.clear();
-    renderpass.descriptorSets.clear();
-    renderpass.writeDescriptorSets.clear();
 }

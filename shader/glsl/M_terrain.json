@@ -6,8 +6,40 @@
         "renderMode": "Opaque",
         "cullMode": "Back"
     },
-    "macros": {},
+    "macros": {"VL_TERRAIN_TESSELLATION": 0},
     "parameters": {
+        "u_compositedResolution": {
+            "type": "vec2",
+            "default": [1024.0, 1024.0],
+            "channels": {
+                "x": {
+                    "name": "width",
+                    "description": "virtual mip zero width in texels",
+                    "range": {"min": 1.0, "max": 8192.0}
+                },
+                "y": {
+                    "name": "height",
+                    "description": "virtual mip zero height in texels",
+                    "range": {"min": 1.0, "max": 8192.0}
+                }
+            },
+            "description": "virtual mip zero extent of this terrain surface"
+        },
+        "u_compositedMaxMip": {
+            "type": "float",
+            "default": 0.0,
+            "description": "last virtual mip of the composited surface"
+        },
+        "u_compositedRepeat": {
+            "type": "float",
+            "default": 0.0,
+            "description": "surface boundary addressing: zero clamps and one repeats"
+        },
+        "u_compositedNormalRG": {
+            "type": "float",
+            "default": 0.0,
+            "description": "renderer-owned normal encoding"
+        },
         "u_uvScale": {
             "type": "float",
             "default": 64.0,
@@ -42,74 +74,20 @@
                 "min": 0.0,
                 "max": 5.0
             },
-            "description": "0 = shaded terrain, 1 = top-4 weights, 2 = top-4 layer indices, 3 = blended albedo, 4 = VT physical page, 5 = VT mip (4/5 only affect layer-mode 1)"
+            "description": "0 = shaded terrain, 1 = top-4 weights, 2 = top-4 layer indices, 3 = blended albedo, 4 = composite residency, 5 = composite target mip"
         },
-        "u_terrainLayerMode": {
+        "u_layerDisplacementScale": {
             "type": "float",
-            "default": 0.0,
+            "default": 1.0,
             "range": {
                 "min": 0.0,
-                "max": 1.0
+                "max": 8.0
             },
-            "description": "0 = legacy layerAlbedo/Normal/Pbr array fast path, 1 = layer-page-table/atlas virtual-texture path"
-        },
-        "u_layerPageResolution": {
-            "type": "float",
-            "default": 128.0,
-            "range": {
-                "min": 16.0,
-                "max": 512.0
-            },
-            "description": "VT layer page resolution in texels; must match TerrainLayerPageManager::PageResolution"
-        },
-        "u_layerAtlasResolution": {
-            "type": "float",
-            "default": 4096.0,
-            "range": {
-                "min": 1024.0,
-                "max": 8192.0
-            },
-            "description": "VT layer atlas slice side in texels; L2 creates 4096x4096 slices"
-        },
-        "u_layerPagesPerAtlasSlice": {
-            "type": "float",
-            "default": 1024.0,
-            "range": {
-                "min": 1.0,
-                "max": 4096.0
-            },
-            "description": "physical layer pages packed into one atlas array slice (32x32 tiles)"
-        },
-        "u_layerTilesPerAtlasSide": {
-            "type": "float",
-            "default": 32.0,
-            "range": {
-                "min": 1.0,
-                "max": 64.0
-            },
-            "description": "tile count per atlas slice side; physicalPage -> tileX/tileY"
-        },
-        "u_layerMaxMip": {
-            "type": "float",
-            "default": 6.0,
-            "range": {
-                "min": 0.0,
-                "max": 6.0
-            },
-            "description": "maximum VT layer page-table mip; per-layer effective max is derived from catalog pagesPerSide"
-        },
-        "u_layerForceMip": {
-            "type": "float",
-            "default": -1.0,
-            "range": {
-                "min": -1.0,
-                "max": 6.0
-            },
-            "description": "-1 = auto mip from derivatives; 0..6 = console debug override (terrainlayer forcemip) applied to mode 1 only"
+            "description": "每层 displacementM 的全局倍率"
         },
         "u_detailUvScale": {
             "type": "float",
-            "default": 6.0,
+            "default": 12.0,
             "range": {
                 "min": 1.0,
                 "max": 32.0
@@ -142,6 +120,33 @@
                 "max": 1.0
             },
             "description": "near-field detail albedo and normal blend strength"
+        },
+        "u_terrainTessRadiusM": {
+            "type": "float",
+            "default": 60.0,
+            "range": {
+                "min": 0.0,
+                "max": 500.0
+            },
+            "description": "camera radius in metres where tessellation displacement fades to the undivided mesh"
+        },
+        "u_terrainTessMax": {
+            "type": "float",
+            "default": 8.0,
+            "range": {
+                "min": 1.0,
+                "max": 32.0
+            },
+            "description": "maximum quad-patch tessellation factor at the camera; outer factors still match on shared edges"
+        },
+        "u_terrainTessTargetPixels": {
+            "type": "float",
+            "default": 4.0,
+            "range": {
+                "min": 1.0,
+                "max": 16.0
+            },
+            "description": "screen-space target edge length in pixels; larger values reduce distant tessellation"
         },
         "u_macroUvScale": {
             "type": "float",
@@ -270,6 +275,34 @@
         }
     },
     "textures": {
+        "compositedPageTable": {
+            "type": "sampler2DArray",
+            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        },
+        "compositedAlbedo": {
+            "type": "sampler2DArray",
+            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        },
+        "compositedNormal": {
+            "type": "sampler2DArray",
+            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        },
+        "compositedOrm": {
+            "type": "sampler2DArray",
+            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        },
+        "terrainHeightAtlas": {
+            "type": "sampler2DArray",
+            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
+        },
+        "terrainHeightLayerMap": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
+        "terrainLayerSourceMap": {
+            "type": "sampler2D",
+            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
+        },
         "layerTable": {
             "type": "sampler2D",
             "default": null
@@ -297,46 +330,6 @@
         "layerPbr": {
             "type": "sampler2DArray",
             "default": null
-        },
-        "layerPageTable0": {
-            "type": "sampler2D",
-            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
-        },
-        "layerPageTable1": {
-            "type": "sampler2D",
-            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
-        },
-        "layerPageTable2": {
-            "type": "sampler2D",
-            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
-        },
-        "layerPageTable3": {
-            "type": "sampler2D",
-            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
-        },
-        "layerPageTable4": {
-            "type": "sampler2D",
-            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
-        },
-        "layerPageTable5": {
-            "type": "sampler2D",
-            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
-        },
-        "layerPageTable6": {
-            "type": "sampler2D",
-            "default": "Common/Textures/T_TerrainLayerPageTablePlaceholder.json"
-        },
-        "layerAlbedoAtlas": {
-            "type": "sampler2DArray",
-            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
-        },
-        "layerNormalAtlas": {
-            "type": "sampler2DArray",
-            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
-        },
-        "layerPbrAtlas": {
-            "type": "sampler2DArray",
-            "default": "Common/Textures/T_TerrainLayerArrayPlaceholder.json"
         },
         "layerHeight": {
             "type": "sampler2DArray",

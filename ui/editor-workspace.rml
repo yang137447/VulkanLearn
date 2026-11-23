@@ -181,7 +181,7 @@
                           <div class="menu-popup" id="viewport-view-mode">
                             <button class="viewport-tool" id="viewport-view-lit" data-action="viewport-view-mode" data-mode="0" title="Lit: full shading (debug view 0)">Lit</button>
                             <button class="viewport-tool" id="viewport-view-unlit" data-action="viewport-view-mode" data-mode="1" title="Unlit: base color debug view (debug view 1)">Unlit</button>
-                            <button class="viewport-tool disabled" id="viewport-view-wireframe" disabled="disabled" title="Wireframe is not implemented: this renderer has no wireframe raster mode and no wireframe debug view.">Wireframe</button>
+                            <button class="viewport-tool" id="viewport-view-wireframe" data-action="viewport-view-mode" data-mode="100" title="Wireframe: tessellation materials use line rasterization; other materials stay shaded">Wireframe</button>
                             <div class="menu-separator"></div>
                             <div class="menu-entry">
                               <button class="menu-item"><span class="menu-check"></span><span class="menu-label">Buffer Visualization</span><span class="menu-arrow">&gt;</span></button>
@@ -435,8 +435,8 @@
                 </div>
                 <div id="terrain-page-body">
                     <div id="terrain-empty">
-                        <div class="terrain-empty-title">Select a Landscape actor to edit terrain.</div>
-                        <div class="terrain-empty-note">Choose a Terrain actor in the Scene Outliner or the viewport.</div>
+                        <div id="terrain-empty-title" class="terrain-empty-title">Select a Landscape actor to edit terrain.</div>
+                        <div id="terrain-empty-note" class="terrain-empty-note">Choose a Terrain actor in the Scene Outliner or the viewport.</div>
                     </div>
                     <div id="terrain-summary">
                         <div id="terrain-workspace">
@@ -510,6 +510,81 @@
                                     <div id="terrain-layer-cards" class="terrain-layer-grid"></div>
                                     <div id="terrain-layer-bottom-spacer" class="terrain-layer-spacer"></div>
                                     <div id="terrain-layer-empty"></div>
+                                </div>
+                            </div>
+                            <div id="terrain-layer-details">
+                                <div class="terrain-details-head">
+                                    <span id="terrain-layer-details-title">Layer</span>
+                                    <button id="terrain-layer-details-close" data-action="terrain-layer-details-close" title="Close details">&#215;</button>
+                                </div>
+                                <div class="terrain-details-scroll">
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Index</span>
+                                        <span id="terrain-layer-details-index" class="terrain-details-value"></span>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Source</span>
+                                        <span id="terrain-layer-details-source" class="terrain-details-value"></span>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">UV Scale</span>
+                                        <input id="terrain-layer-uv-scale" type="text" data-action="terrain-layer-uv-scale" value="" title="Layer tiling multiplier stored in the TR asset"/>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">UV Rotation</span>
+                                        <input id="terrain-layer-uv-rotation" type="text" data-action="terrain-layer-uv-rotation" value="" title="Layer UV rotation in degrees"/>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Displace cm</span>
+                                        <input id="terrain-layer-displacement" type="text" data-action="terrain-layer-displacement" value="" title="Layer displacementM edited in centimetres; multiplied by the material's u_layerDisplacementScale"/>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Height</span>
+                                        <span id="terrain-layer-height" class="terrain-details-value"></span>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Slope</span>
+                                        <span id="terrain-layer-slope" class="terrain-details-value"></span>
+                                    </div>
+                                    <div class="terrain-details-section">Terrain Material</div>
+                                    <div class="terrain-details-row">
+                                        <span id="terrain-material-path" class="terrain-details-value"></span>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Tiling</span>
+                                        <input id="terrain-material-uv-scale" type="text" data-action="terrain-material-uv-scale" value="" title="Material instance u_uvScale; multiplied by each layer's own uvScale"/>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Detail UV</span>
+                                        <input id="terrain-material-detail-uv" type="text" data-action="terrain-material-detail-uv" value="" title="Detail MI u_detailUvScale: near-field detail tiling multiplier"/>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Disp ×</span>
+                                        <input id="terrain-material-displacement-scale" type="text" data-action="terrain-material-displacement-scale" value="" title="Detail MI u_layerDisplacementScale: multiplier for per-layer displacementM"/>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Detail MI</span>
+                                        <span id="terrain-detail-material-path" class="terrain-details-value"></span>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Tess Max</span>
+                                        <input id="terrain-material-tess-max" type="text" data-action="terrain-material-tess-max" value="" title="Detail MI u_terrainTessMax: maximum tessellation factor (1-32)"/>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Tess Px</span>
+                                        <input id="terrain-material-tess-pixels" type="text" data-action="terrain-material-tess-pixels" value="" title="Detail MI u_terrainTessTargetPixels: target screen-space edge length; larger values reduce distant tessellation"/>
+                                    </div>
+                                    <div class="terrain-details-row">
+                                        <span class="terrain-details-label">Radius m</span>
+                                        <input id="terrain-material-tess-radius" type="text" data-action="terrain-material-tess-radius" value="" title="Detail MI u_terrainTessRadiusM: camera radius where tessellation and displacement fade out"/>
+                                    </div>
+                                    <div class="terrain-details-actions">
+                                        <button id="terrain-material-open" data-action="terrain-material-open">Open MI</button>
+                                        <button id="terrain-detail-material-open" data-action="terrain-detail-material-open">Open Detail MI</button>
+                                        <button id="terrain-asset-open" data-action="terrain-asset-open">Open TR</button>
+                                        <button id="terrain-layer-save" data-action="terrain-layer-save">Save TR</button>
+                                    </div>
+                                    <span id="terrain-material-status" class="terrain-details-status"></span>
                                 </div>
                             </div>
                         </div>

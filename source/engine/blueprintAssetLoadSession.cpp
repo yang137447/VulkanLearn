@@ -291,6 +291,7 @@ void BlueprintAssetLoadSession::Begin(const World& world, uint64_t requestId, co
     request.catalog = classCatalog;
     request.preparation.shaderRoot = impl->factory.GetShaderCompiler().GetShaderRoot();
     request.preparation.supportsDualSourceBlend = impl->backend.SupportsDualSourceBlend();
+    request.preparation.supportsTessellation = impl->backend.SupportsTessellation();
     for (const auto& pair : impl->graph.GetRenderpasses())
     {
         const auto& pass = pair.second;

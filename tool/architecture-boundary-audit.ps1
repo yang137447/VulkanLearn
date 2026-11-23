@@ -1598,6 +1598,69 @@ Test-FilePatternsPresent `
     ) `
     -RuleName "Game shader cache closure"
 
+Test-FilePatternsAbsent `
+    -Failures $failures `
+    -RelativePaths @(
+        "shader/glsl/M_terrain.json",
+        "shader/glsl/pass/M_terrainFeedback.json",
+        "shader/glsl/pass/terrainFeedback.frag",
+        "shader/glsl/materialFunction/mf_terrainLayerBlend.glsl",
+        "source/render/resource/rendererTerrainLoader.cpp",
+        "source/render/terrain/terrainFeedbackRuntime.cpp",
+        "source/engine/runtimeCommand.h",
+        "source/debugConsoleProcessCommand.cpp"
+    ) `
+    -Patterns @(
+        'u_terrainLayerMode',
+        'u_layerForceMip',
+        'u_heightBlendDistanceFade',
+        'AccumulateTerrainLayerVT',
+        'SetTerrainLayerResidentCapacity',
+        'RequestTerrainLayerPreload',
+        'SetTerrainLayerForceMip',
+        '"terrainlayer"'
+    ) `
+    -RuleName "Terrain composited-only cutover"
+
+foreach ($retiredTerrainPath in @(
+    "shader/glsl/materialFunction/mf_terrainLayerVT.glsl",
+    "shader/glsl/materialFunction/terrainLayerVTMath.glsl",
+    "source/terrain/terrainLayerPageManager.h",
+    "source/terrain/terrainLayerPageManager.cpp",
+    "source/terrain/terrainLayerFeedback.h",
+    "source/terrain/terrainLayerFeedback.cpp",
+    "source/terrain/terrainLayerVT.h",
+    "source/terrain/terrainLayerVisibility.h",
+    "source/terrain/terrainLayerVisibility.cpp",
+    "source/terrain/terrainLayerMipBudget.h",
+    "source/terrain/terrainLayerMipBudget.cpp",
+    "source/render/resource/terrain/terrainLayerPageUpload.h",
+    "source/render/resource/terrain/terrainLayerPageUpload.cpp"
+)) {
+    if (Test-Path -LiteralPath (Resolve-RepoPath $retiredTerrainPath)) {
+        Add-Failure $failures "Terrain composited-only cutover: retired source '$retiredTerrainPath' exists."
+    }
+}
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "source/terrain/validation/terrainAssetValidator.h" `
+    -Patterns @(
+        'requires explicit enabled=true',
+        'requires packagePath',
+        'Terrain requires compositedVT'
+    ) `
+    -RuleName "Terrain composited-only cutover"
+
+Test-FilePatternsPresent `
+    -Failures $failures `
+    -RelativePath "tool/game-export/gameExporter.cpp" `
+    -Patterns @(
+        'Terrain export requires',
+        'Packaged terrain requires explicit compositedVT.enabled=true'
+    ) `
+    -RuleName "Terrain composited-only cutover"
+
 Test-VulkanManagerBoundary -Failures $failures
 Test-RendererBackendRawGetterBoundary -Failures $failures
 Test-RendererSubmitBoundary -Failures $failures

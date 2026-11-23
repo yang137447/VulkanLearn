@@ -11,6 +11,7 @@
 #include "render/resource/renderableObjectKey.h"
 #include "render/resource/resourceRetireQueue.h"
 #include "world/worldWind.h"
+#include "render/resource/rendererTerrainLoader.h"
 
 namespace VL
 {
@@ -287,6 +288,12 @@ RendererResourceCache::CommitCandidate(
     std::lock_guard<std::recursive_mutex> lock(mutex);
     globalTextures.swap(candidate.globalTextures);
     worldLocalResources.swap(candidate.worldLocalResources);
+    const auto activeTerrain = worldLocalResources->terrainStreaming;
+    const auto oldTerrain = candidate.worldLocalResources->terrainStreaming;
+    if (oldTerrain && oldTerrain != activeTerrain && oldTerrain->setResourcePhase)
+        oldTerrain->setResourcePhase(TerrainRvtResourcePhase::Retiring);
+    if (activeTerrain && activeTerrain->setResourcePhase)
+        activeTerrain->setResourcePhase(TerrainRvtResourcePhase::Active);
     return std::move(candidate.worldLocalResources);
 }
 
@@ -323,6 +330,8 @@ void RendererResourceCache::RetireWorldLocalResources(
     }
 
     ResourceRetireQueue& retireQueue = ResourceRetireQueue::GetInstance();
+    if (retiredPackage->terrainStreaming && retiredPackage->terrainStreaming->setResourcePhase)
+        retiredPackage->terrainStreaming->setResourcePhase(TerrainRvtResourcePhase::Retiring);
     const uint64_t lastUsedEpoch = retireQueue.GetLastSubmittedEpoch();
     const uint64_t ownerGeneration = retiredPackage->ownerGeneration;
     retireQueue.RetireShared(
@@ -420,6 +429,8 @@ void RendererResourceCache::BindWorldTexture(std::string bindingName, std::share
     std::lock_guard<std::recursive_mutex> lock(mutex);
     WorldLocalResourcePackage& resources =
         GetMutableWorldLocalResources();
+    ++resources.worldTextureRevision;
+    resources.descriptorBindings.reset();
     if (!texture)
     {
         resources.worldTextures.erase(bindingName);
@@ -469,6 +480,31 @@ std::shared_ptr<Texture> RendererResourceCache::GetWorldTexture(std::string_view
     }
 
     return nullptr;
+}
+
+void RendererResourceCache::ConfigureWorldDescriptorBudget(
+    uint64_t generation, WorldDescriptorBudget budget)
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+    if (worldLocalResources->ownerGeneration != generation ||
+        !budget.owner || !budget.gpuMetadataReserve)
+        throw std::runtime_error("Invalid World descriptor budget identity");
+    auto& resources = GetMutableWorldLocalResources();
+    resources.descriptorBudget = PrepareWorldDescriptorBudget(std::move(budget));
+    resources.descriptorBindings.reset();
+    ++resources.worldTextureRevision;
+}
+
+DescriptorBindingSnapshot RendererResourceCache::CaptureDescriptorBindingVersion() const
+{
+    std::lock_guard<std::recursive_mutex> lock(mutex);
+    auto& resources = *worldLocalResources;
+    if (!resources.descriptorBindings ||
+        resources.descriptorBindings->worldGeneration != resources.ownerGeneration)
+        resources.descriptorBindings = PrepareDescriptorBindingVersion(
+            resources.ownerGeneration, resources.worldTextureRevision,
+            resources.worldTextures, resources.descriptorBudget);
+    return resources.descriptorBindings;
 }
 
 

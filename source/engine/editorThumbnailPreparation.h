@@ -26,6 +26,7 @@ struct EditorThumbnailPreparationRequest
     std::filesystem::path shaderRoot;
     std::map<RenderMode, PassPipelineContractKey> surfaceContracts;
     bool supportsDualSourceBlend = false;
+    bool supportsTessellation = false;
     std::unordered_set<std::string> preparedShaderKeys;
 };
 

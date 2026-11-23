@@ -1,6 +1,7 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <stdexcept>
 #include <string>
 #include <thread>
@@ -126,6 +127,34 @@ TEST(MaterialInstanceThreadSafety, NumericAndTextureSemanticsPreserved)
         state.textures.at("albedoWithIdentity").textureAssetIdentity;
     ASSERT_TRUE(identity.has_value());
     EXPECT_EQ(*identity, "Common/T_albedo.png");
+}
+
+TEST(MaterialInstanceThreadSafety, TextureIdentityVersionInvalidatesDescriptorImagesOnlyWhenNeeded)
+{
+    MaterialInstance instance;
+    const auto firstStorage = std::make_shared<int>(1);
+    const auto secondStorage = std::make_shared<int>(2);
+    const std::shared_ptr<Texture> first(
+        firstStorage, reinterpret_cast<Texture*>(firstStorage.get()));
+    const std::shared_ptr<Texture> second(
+        secondStorage, reinterpret_cast<Texture*>(secondStorage.get()));
+    const auto initial = instance.GetTextureBindingVersion();
+    instance.SetTexture("weights", first, "T_weights.json", "first");
+    const auto firstVersion = instance.GetTextureBindingVersion();
+    EXPECT_GT(firstVersion, initial);
+    instance.SetParameter("strength", 0.5f);
+    instance.SetTextureKeepingIdentity("weights", first);
+    EXPECT_EQ(instance.GetTextureBindingVersion(), firstVersion);
+    instance.SetTextureKeepingIdentity("weights", second);
+    EXPECT_GT(instance.GetTextureBindingVersion(), firstVersion);
+    const auto replacement = instance.CaptureStateSnapshot();
+    EXPECT_EQ(replacement.textures.at("weights").texture, second);
+    EXPECT_EQ(replacement.textures.at("weights").textureAssetIdentity, "T_weights.json");
+    const auto secondVersion = instance.GetTextureBindingVersion();
+    instance.SetTexture("weights", second);
+    EXPECT_EQ(instance.GetTextureBindingVersion(), secondVersion);
+    instance.SetTexture("weights", {});
+    EXPECT_GT(instance.GetTextureBindingVersion(), secondVersion);
 }
 
 TEST(MaterialInstanceThreadSafety, CommitNumericParameterValuesStaysTransactional)

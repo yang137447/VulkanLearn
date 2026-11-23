@@ -67,6 +67,48 @@ void RendererBackendVulkan::UnbindBufferHandle(RHIBufferHandle bufferHandle)
     bufferHandlesByMemory.erase(static_cast<VkDeviceMemory>(bufferResource.memory));
 }
 
+vk::MemoryRequirements RendererBackendVulkan::QueryBufferMemoryRequirements(
+    vk::DeviceSize size, vk::BufferUsageFlags usage)
+{
+    if (!rhiDevice || !rhiDevice->IsInitialized() || size == 0)
+        throw std::invalid_argument("Buffer memory query requires an initialized backend and nonzero size");
+    auto& device = rhiDevice->GetDevice();
+    vk::BufferCreateInfo info;
+    info.setSize(size).setUsage(usage).setSharingMode(vk::SharingMode::eExclusive);
+    const auto buffer = device.createBuffer(info);
+    try
+    {
+        const auto requirements = device.getBufferMemoryRequirements(buffer);
+        device.destroyBuffer(buffer);
+        return requirements;
+    }
+    catch (...)
+    {
+        device.destroyBuffer(buffer);
+        throw;
+    }
+}
+
+vk::MemoryRequirements RendererBackendVulkan::QueryImageMemoryRequirements(
+    const vk::ImageCreateInfo& createInfo)
+{
+    if (!rhiDevice || !rhiDevice->IsInitialized())
+        throw std::invalid_argument("Image memory query requires an initialized backend");
+    auto& device = rhiDevice->GetDevice();
+    const auto image = device.createImage(createInfo);
+    try
+    {
+        const auto requirements = device.getImageMemoryRequirements(image);
+        device.destroyImage(image);
+        return requirements;
+    }
+    catch (...)
+    {
+        device.destroyImage(image);
+        throw;
+    }
+}
+
 std::pair<vk::Buffer, vk::DeviceMemory> RendererBackendVulkan::CreateBuffer(
     vk::DeviceSize size,
     vk::BufferUsageFlags usage,
