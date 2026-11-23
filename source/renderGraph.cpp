@@ -27,6 +27,65 @@
 #include <unordered_set>
 #include "profiler.h"
 
+namespace
+{
+// 运行时描述符刷新会为同一 pass 重新创建 pool/layout/set；刷新前必须先释放
+// 旧对象，否则每次刷新都会泄漏一整套 pass 描述符。
+void DestroyPassDescriptorState(
+    Renderpass& renderpass,
+    VL::RendererBackendVulkan& rendererBackend)
+{
+    if (renderpass.descriptorPoolHandle.IsValid() ||
+        static_cast<bool>(renderpass.descriptorPool))
+    {
+        if (renderpass.descriptorPoolHandle.IsValid())
+        {
+            rendererBackend.DestroyDescriptorPool(
+                renderpass.descriptorPoolHandle);
+            renderpass.descriptorPool = nullptr;
+        }
+        else
+        {
+            rendererBackend.DestroyDescriptorPool(
+                renderpass.descriptorPool);
+        }
+    }
+    if (renderpass.descriptorSetLayoutHandle.IsValid() ||
+        static_cast<bool>(renderpass.descriptorSetLayout))
+    {
+        if (renderpass.descriptorSetLayoutHandle.IsValid())
+        {
+            rendererBackend.DestroyDescriptorSetLayout(
+                renderpass.descriptorSetLayoutHandle);
+            renderpass.descriptorSetLayout = nullptr;
+        }
+        else
+        {
+            rendererBackend.DestroyDescriptorSetLayout(
+                renderpass.descriptorSetLayout);
+        }
+    }
+    if (renderpass.emptyDescriptorSetLayoutHandle.IsValid() ||
+        static_cast<bool>(renderpass.emptyDescriptorSetLayout))
+    {
+        if (renderpass.emptyDescriptorSetLayoutHandle.IsValid())
+        {
+            rendererBackend.DestroyDescriptorSetLayout(
+                renderpass.emptyDescriptorSetLayoutHandle);
+            renderpass.emptyDescriptorSetLayout = nullptr;
+        }
+        else
+        {
+            rendererBackend.DestroyDescriptorSetLayout(
+                renderpass.emptyDescriptorSetLayout);
+        }
+    }
+    renderpass.descriptorSetHandles.clear();
+    renderpass.descriptorSets.clear();
+    renderpass.writeDescriptorSets.clear();
+}
+}
+
 vk::ImageView RenderResource::GetShaderDescriptorView() const
 {
     return imageView;
@@ -542,6 +601,17 @@ void RenderGraph::LoadRenderGraph(
         sourceJson = renderGraphJson;
         descriptorPlanCache.Clear();
 
+        // 载入即替换整张图：调用方如果在 Load 前漏掉 Shutdown（例如被取消的
+        // 候选事务），旧 pass 的 descriptor pool/layout/set 会永久泄漏。
+        // 这里在创建新资源前按 Immediate 释放旧状态；所有 Load 调用点都在
+        // 无在途帧的安全点。ownerGeneration 由调用方决定，这里保持不变。
+        if (HasState())
+        {
+            const uint64_t previousOwnerGeneration = ownerGeneration;
+            Shutdown(rendererBackend, VL::RenderGraphReleaseMode::Immediate);
+            ownerGeneration = previousOwnerGeneration;
+        }
+
         uint32_t swapChainImageCount =
             rendererBackend.GetSwapchainImageCount();
         // GPU object creation still happens here; the compiler above now owns
@@ -903,6 +973,7 @@ void RenderGraph::RenderInitialize(
             continue;
         }
         renderpass.CreateUniformBuffers();
+        DestroyPassDescriptorState(renderpass, rendererBackend);
         renderpass.SetupDescriptors(*this, rendererBackend, descriptorContext);
         if (auto passMaterialInstance = renderpass.materialInstance.lock())
         {
