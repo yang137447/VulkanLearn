@@ -140,6 +140,8 @@ struct RodGpuObject
     std::array<RodGpuBuffer, GuideSimulationParamBufferCount> samples;
     std::array<RodGpuBuffer, GuideSimulationParamBufferCount> implicitParams;
     std::array<vk::DescriptorSet, GuideSimulationParamBufferCount> solveSets{};
+    // V3 + SDF 接触用的独立求解集：比 solveSets 多 SdfGridParams/SdfGrid/SdfHistory。
+    std::array<vk::DescriptorSet, GuideSimulationParamBufferCount> solveSdfSets{};
     std::array<vk::DescriptorSet, GuideSimulationParamBufferCount> followSets{};
     std::array<vk::DescriptorSet, GuideSimulationParamBufferCount> sdfHistorySets{};
     std::array<RodGpuBuffer, GuideSimulationParamBufferCount> readback;

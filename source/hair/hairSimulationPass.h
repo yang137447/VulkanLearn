@@ -300,7 +300,10 @@ private:
     RendererBackendVulkan* backend = nullptr;
     std::array<std::shared_ptr<ComputePipeline>, GuideSimulationPassCount> pipelines{};
     std::shared_ptr<ComputePipeline> skinningPipeline;
-    std::array<std::shared_ptr<ComputePipeline>, 6> rodPipelines;
+    // [0] rodSolve、[1] rodSolveSdf、[2] rodFollow、[3] rodStoreSdf、
+    // [4] rodV3ImplicitCrCompensated（胶囊 + 轴限的 10 分量 KKT）、
+    // [5] rodV3Follow、[6] rodV3ImplicitSdf（额外声明 SDF 三个绑定）。
+    std::array<std::shared_ptr<ComputePipeline>, 7> rodPipelines;
     std::unordered_map<const RenderableObject*, std::shared_ptr<RodGpuObject>> rodObjects;
     // 最后一条池链供独立蒙皮；源 guide solver 的九阶段枚举与调度保持不变。
     std::array<std::vector<DescriptorPoolBudget>, GuideSimulationPassCount + 1> descriptorPools;

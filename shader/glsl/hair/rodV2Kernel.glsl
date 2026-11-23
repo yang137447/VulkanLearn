@@ -83,6 +83,15 @@ shared uint v3CompletedLoadStages;
 shared uint v3BacktrackCount;
 shared float v3CubicStiffness[32];
 
+// 牛顿更新预算。无约束的 6 分量系统 12 轮足够。带上接触活跃集后逐轮重选活跃集、
+// 建立接触力需要更多轮：16-guide 胶囊场景实测 24 轮仍有 1/16 guide 停在 1.6 mm 穿透，
+// 64 轮 16/16 收敛到 4.3e-5。预算只在难帧上真正用满（稳态 0 轮即退出）。
+#ifdef VL_ROD_V3_KKT10_SOLVE
+const uint RodV2IterationBudget = 64u;
+#else
+const uint RodV2IterationBudget = 12u;
+#endif
+
 mat3 RodV2JrInverse(vec3 angle)
 {
     float squared = dot(angle, angle);
@@ -567,6 +576,22 @@ void RodV2Measure(uint lane, bool incrementValid)
     barrier();
 }
 
+#ifdef VL_ROD_V3_KKT10_SOLVE
+// 10 分量活跃集 KKT 求解。必须放在 RodV2Tangent / RodV2Residual / RodV2Measure 之后：
+// 装配要复用同一套切线，测量要复用同一套 metric 共享量。
+#include "rodKkt10BandSolve.glsl"
+#endif
+
+// 单一测量入口：带接触 / 上拉伸约束时用 10 分量 KKT merit，否则沿用 6 分量 merit。
+void RodActiveMeasure(uint lane, bool incrementValid)
+{
+#ifdef VL_ROD_V3_KKT10_SOLVE
+    RodKkt10Measure(lane, incrementValid);
+#else
+    RodV2Measure(lane, incrementValid);
+#endif
+}
+
 #ifdef VL_ROD_V2_FAILURE_EXPORT
 void RodV2ExportLate(uint lane, uint slot)
 {
@@ -677,8 +702,6 @@ void main()
         v3CompletedLoadStages = 0u;
         v3BacktrackCount = 0u;
         simulatedSeconds = rod.flags.x != 0u ? 0.0 : rodState.guides[slot].timing.x;
-        if (params.counts.w != 0u)
-            failure = 1u;
     }
     barrier();
     if (failure != 0u && rod.flags.x == 0u)
@@ -882,41 +905,87 @@ void main()
                 barrier();
             }
 #endif
-        for (uint iteration = 0u; iteration <= 12u; ++iteration)
+#ifdef VL_ROD_V3_KKT10_SOLVE
+        // 每个 substep 的活跃集从空集开始（与 CPU SolveStage 一致：乘子归零、
+        // excluded 位清零）。乘子只在本 substep 内连续迭代。
+        if (lane == 0u)
+            rodKktSubstep = substep;
+        barrier();
+        // 深重叠先做一步位置投影修复（对应 CPU RepairInitialContactOverlap），
+        // 否则隐式牛顿的 merit 线搜索只能退到极小步。
+        RodKkt10RepairOverlap(lane);
+        for (uint contactSlot = 0u; contactSlot < 3u; ++contactSlot)
+            rodKktContacts[contactSlot] = vec4(-1, 0, 0, 0);
+        rodKktExcludedContacts = 0u;
+        rodKktAxialExcluded = false;
+        rodKktAxial[lane] = vec4(0);
+        barrier();
+#endif
+        for (uint iteration = 0u; iteration <= RodV2IterationBudget; ++iteration)
         {
-            RodV2Measure(lane, true);
+            RodV2Vector direction;
+#ifdef VL_ROD_V3_KKT10_SOLVE
+            // 活跃集每轮重选：保留正乘子身份 + 按几何 gap 补足新穿透的接触。
+            RodKkt10UpdateActiveSet(lane);
+            RodKkt10UpdateAxial(lane);
+            barrier();
+            RodActiveMeasure(lane, true);
+#else
+            RodActiveMeasure(lane, true);
+#endif
             if (v2DomainValid == 0u)
                 RodFail(2u);
             barrier();
+#ifdef VL_ROD_V3_KKT10_SOLVE
+            // 带约束时额外要求存在负乘子时不宣告收敛（互补量已由 merit 的 gap 分量承担）。
+            if (failure != 0u || (v2Maximum <= implicitControls.originTolerance.w &&
+                rodKktFeasible != 0u))
+                break;
+#else
             if (failure != 0u || v2Maximum <= implicitControls.originTolerance.w)
                 break;
-            if (iteration == 12u)
+#endif
+            if (iteration == RodV2IterationBudget)
             {
                 RodFail(3u);
                 barrier();
                 break;
             }
+#ifdef VL_ROD_V3_KKT10_SOLVE
+            uint bandStatus = RodKkt10SolveBand(32u);
+            if (bandStatus != 0u)
+            {
+                RodFail(4u);
+                barrier();
+                break;
+            }
+            direction = RodV2Vector(
+                vec3(rodKktDirection[lane].values[0u], rodKktDirection[lane].values[1u],
+                    rodKktDirection[lane].values[2u]),
+                vec3(rodKktDirection[lane].values[3u], rodKktDirection[lane].values[4u],
+                    rodKktDirection[lane].values[5u]));
+#else
             RodV2Vector residual = RodV2Residual(lane);
             RodV2Matrix lower = lane > 0u ? RodV2Tangent(lane, lane - 1u) : RodV2Zero();
             RodV2Matrix diagonal = RodV2Tangent(lane, lane);
             RodV2Matrix upper = lane < 31u ? RodV2Tangent(lane, lane + 1u) : RodV2Zero();
 #ifdef VL_ROD_V3_CR_SOLVE
-            RodV2Vector direction;
             bool linearSuccess = RodCrSolveBand32(lane, lower, diagonal, upper,
                 RodV2Vector(-residual.linear, -residual.angular), direction);
             if (!linearSuccess)
                 RodFail(4u);
 #else
 #ifdef VL_ROD_V2_THOMAS_SOLVE
-            RodV2Vector direction = RodV2Thomas(lane, lower, diagonal, upper,
+            direction = RodV2Thomas(lane, lower, diagonal, upper,
 #else
-            RodV2Vector direction = RodV2Pcr(lane, lower, diagonal, upper,
+            direction = RodV2Pcr(lane, lower, diagonal, upper,
 #endif
                 RodV2Vector(-residual.linear, -residual.angular));
 #endif
 #ifndef VL_ROD_V3_CR_SOLVE
             if (rodV2LinearStatus != 0u)
                 RodFail(4u);
+#endif
 #endif
             v2BasePositions[lane] = v2Positions[lane];
 #ifdef VL_ROD_V3_COMPENSATED_STATE
@@ -930,6 +999,14 @@ void main()
             if (lane < 31u)
                 v2BaseOrientations[lane] = v2Orientations[lane];
             float merit = v2Merit;
+#ifdef VL_ROD_V3_KKT10_SOLVE
+            // 乘子的基线：每个 trial 都从「本轮起点」重新延拓 α·F·dλ，
+            // 回溯不累积。contact 是私有状态，axial 是共享状态（邻点要读）。
+            vec4 contactBase[3];
+            for (uint contactSlot = 0u; contactSlot < 3u; ++contactSlot)
+                contactBase[contactSlot] = rodKktContacts[contactSlot];
+            vec4 axialBase = rodKktAxial[lane];
+#endif
             if (lane == 0u)
             {
                 v2Accepted = 0u;
@@ -957,8 +1034,22 @@ void main()
                         RodExp(v2Alpha * direction.angular), v2Orientations[lane],
                         v3CandidateQuaternionLow[lane]);
 #endif
+#ifdef VL_ROD_V3_KKT10_SOLVE
+                for (uint contactSlot = 0u; contactSlot < 3u; ++contactSlot)
+                {
+                    rodKktContacts[contactSlot] = contactBase[contactSlot];
+                    if (contactBase[contactSlot].w != 0.0)
+                        rodKktContacts[contactSlot].z += v2Alpha * v2ForceScale *
+                            rodKktDirection[lane].values[6u + contactSlot];
+                }
+                rodKktAxial[lane] = axialBase;
+                if (axialBase.z != 0.0)
+                    rodKktAxial[lane].x += v2Alpha * v2ForceScale *
+                        rodKktDirection[lane].values[9u];
+#endif
                 barrier();
-                RodV2Measure(lane, lane >= 31u || length(v2Alpha * direction.angular) < RodRotationLimit);
+                RodActiveMeasure(lane, lane >= 31u ||
+                    length(v2Alpha * direction.angular) < RodRotationLimit);
                 if (lane == 0u && v2DomainValid != 0u &&
                     v2Merit <= (1.0 - 1.0e-4 * v2Alpha) * merit)
                     v2Accepted = 1u;
@@ -1077,6 +1168,18 @@ void main()
 #ifdef VL_ROD_V3_CONTINUATION
         rodState.guides[slot].energies = vec4(float(v3ContinuationUsed),
             float(v3CompletedLoadStages), float(v3BacktrackCount), 0);
+#endif
+#ifdef VL_ROD_KKT10_DEBUG
+        // 诊断：活跃 contact 槽数 / contact 分量残差 / 位置分量残差 / max |lambda|/F。
+        rodState.guides[slot].residuals = vec4(float(rodKktDebug.x),
+            uintBitsToFloat(rodKktDebug.y), uintBitsToFloat(rodKktDebug.z),
+            uintBitsToFloat(rodKktDebug.w));
+#ifndef VL_ROD_V3_CONTINUATION
+        // energies.x = 本帧累计的回溯减半次数，y = 重叠修复触发次数，
+        // z = 修复前的最深重叠（米），w 保留。
+        rodState.guides[slot].energies = vec4(float(v3BacktrackCount),
+            float(rodKktRepairCount), uintBitsToFloat(rodKktRepairDepthBits), 0);
+#endif
 #endif
         rodState.guides[slot].timing = vec4(failure == 0u ? simulatedSeconds :
             (rod.flags.x != 0u ? 0.0 : rodState.guides[slot].timing.x),

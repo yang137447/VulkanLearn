@@ -61,6 +61,9 @@ void HairSimulationPass::Initialize(PipelineFactory& factory,
     rodPipelines[3] = factory.CreateComputePipelineCandidate("hair/rodStoreSdf");
     rodPipelines[4] = factory.CreateComputePipelineCandidate("hair/rodV3ImplicitCrCompensated");
     rodPipelines[5] = factory.CreateComputePipelineCandidate("hair/rodV3Follow");
+    // V3 + SDF 接触单独一条 pipeline：SDF 绑定（8/11/26）只有声明了
+    // hairCollision.mesh 的对象才有对应 buffer，不能塞进上面那条。
+    rodPipelines[6] = factory.CreateComputePipelineCandidate("hair/rodV3ImplicitSdf");
     initialized = true;
 }
 

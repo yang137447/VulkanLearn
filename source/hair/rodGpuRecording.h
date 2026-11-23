@@ -26,9 +26,15 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     const uint32_t profileMathVersion = TressfxSupportProfileMathVersion(solverConfig.solver);
     const uint32_t kineticMathVersion = progressive ? Rod::SectionInertiaKineticMathVersion : 1;
     const uint32_t numericEncodingVersion = progressive ? 3 : 1;
-    if (progressive && (!solverConfig.capsules.empty() || object->HasTressfxSdfCollision()))
+    // V3 的 10 分量 KKT 活跃集只放行胶囊接触。SDF 代理场的 path 已实现（独立 pipeline
+    // rodV3ImplicitSdf + rodKkt10BandSolve 的 SDF 分支），但在 16-guide 胶囊+SDF 场景上
+    // 仍不收敛：首次 post-reset 瞬态里 16/16 guide 失败（gpuStatus=4 局部秩亏，或
+    // 64 轮预算耗尽且回溯 744 次只接受极小步，merit 停在 1.4e4）。在它通过同一套
+    // 证据门禁之前，这里保持显式边界，避免场景静默拿到一个坏 solver。
+    if (progressive && object->HasTressfxSdfCollision())
         throw std::runtime_error(
-            "cosseratImplicitV3 contact active set is not yet implemented; author a collision-free numerical probe");
+            "cosseratImplicitV3 SDF contact does not converge yet; author capsules only "
+            "(see documents/rationale/hair-rod-gpu-v3-contact-20261123.md)");
     ObjectDescriptors& tressfx = EnsureObjectDescriptors(*object);
     if (tressfx.simulationOwner.HasConflict())
         return;
@@ -94,10 +100,10 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
                 128 + static_cast<vk::DeviceSize>(object->GetTressfxSdfCellCount()) * 4,
                 false, "RodSdfHistory");
         const std::array<vk::DescriptorPoolSize, 2> sizes{{
-            {vk::DescriptorType::eUniformBuffer, 16},
-            {vk::DescriptorType::eStorageBuffer, 80}}};
+            {vk::DescriptorType::eUniformBuffer, 40},
+            {vk::DescriptorType::eStorageBuffer, 160}}};
         vk::DescriptorPoolCreateInfo poolInfo;
-        poolInfo.setPoolSizes(sizes).setMaxSets(6);
+        poolInfo.setPoolSizes(sizes).setMaxSets(8);
         candidate->pool = backend->CreateDescriptorPool(poolInfo, "RodDescriptors");
         std::cout << "[RodGPU] create descriptor pool=0x" << std::hex <<
             reinterpret_cast<uintptr_t>(static_cast<VkDescriptorPool>(candidate->pool)) <<
@@ -140,22 +146,27 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
             infos[27] = candidate->implicitParams[slot].Info();
             infos[31] = candidate->references.Info();
             infos[32] = candidate->frameDeltas.Info();
-            for (uint32_t kind = 0; kind < 3; ++kind)
+            for (uint32_t kind = 0; kind < 4; ++kind)
             {
+                const bool sdf = object->HasTressfxSdfCollision();
                 if (kind == 1 && !object->HasTressfxFollowBinding())
                     continue;
-                if (kind == 2 && !object->HasTressfxSdfCollision())
+                if (kind == 2 && !sdf)
                     continue;
-                auto& pipeline = rodPipelines[kind == 2 ? 3 : kind == 1 ?
-                    (progressive ? 5 : 2) : progressive ? 4 :
-                    (object->HasTressfxSdfCollision() ? 1 : 0)];
+                // kind 3 只服务 V3：非 V3 的 SDF 求解由 rodSolveSdf 走 kind 0。
+                if (kind == 3 && !(progressive && sdf))
+                    continue;
+                auto& pipeline = rodPipelines[kind == 3 ? 6 : kind == 2 ? 3 : kind == 1 ?
+                    (progressive ? 5 : 2) : progressive ? 4 : (sdf ? 1 : 0)];
                 const auto layout = pipeline->GetDescriptorSetLayouts().at(0);
                 vk::DescriptorSetAllocateInfo allocation;
                 allocation.setDescriptorPool(candidate->pool).setSetLayouts(layout);
                 std::vector<vk::DescriptorSet> allocated(1);
                 backend->AllocateDescriptorSets(allocation, allocated);
-                (kind == 0 ? candidate->solveSets[slot] : kind == 1 ?
-                    candidate->followSets[slot] : candidate->sdfHistorySets[slot]) = allocated.front();
+                (kind == 0 ? candidate->solveSets[slot] : kind == 3 ?
+                    candidate->solveSdfSets[slot] : kind == 1 ?
+                    candidate->followSets[slot] : candidate->sdfHistorySets[slot]) =
+                    allocated.front();
                 std::vector<vk::WriteDescriptorSet> writes;
                 for (const auto& reflected : pipeline->GetShaderBindings())
                 {
@@ -458,10 +469,15 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     std::memcpy(state.params[frameSlot].mapped, &params, sizeof(params));
     if (anyDispatch)
         RecordInterPassBarrier(commandBuffer);
-    auto& solver = rodPipelines[progressive ? 4 : object->HasTressfxSdfCollision() ? 1 : 0];
+    // 有 SDF 代理场时 V3 走声明了 SDF 绑定的那条 pipeline（kind 3 的 descriptor set）；
+    // 该帧 SDF 域无效时只是 flags.w 的 bit0 不置位，shader 内不做 SDF 查询。
+    const bool sdfSolve = object->HasTressfxSdfCollision();
+    auto& solver = rodPipelines[progressive ? (sdfSolve ? 6 : 4) :
+        (sdfSolve ? 1 : 0)];
     solver->Bind(commandBuffer);
     commandBuffer.bindDescriptorSets(vk::PipelineBindPoint::eCompute,
-        solver->GetPipelineLayout(), 0, state.solveSets[frameSlot], nullptr);
+        solver->GetPipelineLayout(), 0, progressive && sdfSolve ?
+            state.solveSdfSets[frameSlot] : state.solveSets[frameSlot], nullptr);
     solver->Dispatch(commandBuffer, state.guides, 1, 1);
     anyDispatch = true;
     if (object->HasTressfxFollowBinding())
