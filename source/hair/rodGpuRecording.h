@@ -310,9 +310,20 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     const uint32_t substepBudget = progressive &&
         state.maxIterationsLastFence > RodGpuV3HardFrameIterations ?
         RodGpuV3HardFrameSteps : RodGpuMaxSteps;
-    const uint32_t steps = newFrame && delta > 0.0f &&
+    uint32_t steps = newFrame && delta > 0.0f &&
         !(progressive && state.reset) ? std::min(substepBudget,
         static_cast<uint32_t>(std::floor((state.debtSeconds + 1.0e-9) / RodGpuStepSeconds))) : 0;
+    // 成本测量的诊断开关：固定每帧 substep 数，绕开自适应上限与债务的耦合。
+    // 自适应上限会在 guide 变多时把硬帧压到 1 substep、把省下的工作量记成 debt，
+    // 于是「成本随 guide 数缩放」的读数会假性次线性——那是仿真在慢放，不是变快。
+    // 打开这个开关后，每 substep 成本 = hairSimulation / substeps 才是可比量的。
+    // 只在设置环境变量时生效，正常路径零影响。
+    if (const char* fixed = std::getenv("VL_ROD_FIXED_SUBSTEPS"))
+    {
+        const long requested = std::strtol(fixed, nullptr, 10);
+        if (requested > 0 && steps != 0u)
+            steps = std::min(static_cast<uint32_t>(requested), RodGpuMaxSteps);
+    }
     RodGpuParams params;
     params.hairToWorld = draw.model;
     params.worldToHair = draw.model.inverse();
