@@ -310,6 +310,52 @@ validation 0 条消息，没有退化。
    这是第一轮就量过的硬约束，需要改数据布局（例如把因子放 global 并把 2000 guide 的
    工作集压在 L2 内）或缩小活跃集宽度。
 
+## 第四轮：单帧预算与 6x6 压缩求解的尝试
+
+### 单帧 substep 预算（已落地，必要但不充分）
+
+`RodGpuV3HardFrameIterations = 12` / `RodGpuV3HardFrameSteps = 1`：用上一批读回里
+单 guide 的最大牛顿轮数当“硬帧”信号，硬帧只派发 1 个 substep，稳态仍是 8 个。
+实测 16-guide 两次运行（胶囊 / SDF）仍是 `gpuStatus=0`、0 失败、残差 5.805e-05，
+而 `received 8.3 s / dispatched 6.45 s` 说明限制确实生效。
+
+但它**不足以救 2000 规模**：`SC_rod_v3_capsules_2000` 在 `dispatched=0.00417`
+（正好 1 个 substep）时仍然 `vk::DeviceLostError`。也就是说单个 substep 的
+2000-guide dispatch 本身就超过 OS 提交上限，瓶颈必须从“每帧派发多少”转到
+“每个 substep 多贵”。
+
+### 6x6 压缩求解：推导对、GPU 实现没复现（已回退）
+
+思路：10x10 的 KKT 块是 `[A  -G; G^T 0]`，轴限关闭时乘子无跨点耦合，把 m<=3 个
+局部乘子消掉后**仍是块三对角**，可以复用 `rodCrBand.glsl` 的分布式块循环约化，
+把「32 个点顺序求解 + 全 lane 冗余执行」换成「每 lane 一个块」：
+
+```text
+A dx_p + (Q_p L_p) dx_{p-1} + (Q_p U_p) dx_{p+1} = Q_p b_p + G_p S_p^-1 h_p
+S_p = G_p^T A_p^-1 G_p,   Q_p = I - G_p S_p^-1 G_p^T A_p^-1
+dlambda_p = S_p^-1 G_p^T A_p^-1 (A_p dx_p + L_p dx_{p-1} + U_p dx_{p+1} - b_p)
+```
+
+恒等式先用 Python 对 10n 维直接解校验：n=1..8、m=1..3、**A 取非对称**
+（`RodV2Tangent` 的 6x6 块本来就不对称），相对误差 < 5e-15，全部 OK。
+（第一版校验用了对称 A，掩盖了 `Q` 的右因子必须是 `G^T A^-1`、即需要 `A^-T g` 而不是
+`A^-1 g` 这个坑；换成非对称 A 后才覆盖到。）
+
+但 GLSL 实现没有复现旧路径的收敛：同一 16-guide 场景从 0 失败变成 6 失败，
+`maxLam/F` 从工作路径的 ≤76 涨到 296，位置残差 0.92（工作路径 0.022），
+16 个 guide 里 11 个仍收敛。症状是“方向不算下降方向”而不是发散到 NaN，
+说明压缩后的系统与实测残差不自洽，但**没有定位到具体项**——按项对照 Python 与 GLSL
+（S、Q、extra、乘子恢复的 index 顺序与列主序约定）都一致。
+
+因此本轮**回退**到已证的 10x10 顺序求解（两个 shader 文件 `git checkout` 回 HEAD），
+16-guide 胶囊/SDF 两条路径重新跑通：`gpuStatus=0`、0 失败、残差 5.805e-05、
+validation 0 条消息。
+
+下一轮重试这条路线前必须先有**离线的压缩系统对照**（把 `RodKkt10Condense` 的
+六个输出写进 buffer，用 CPU 复算 `A dx + L dx- + U dx+ - G dlambda - b` 的范数），
+而不是靠整场景收敛与否来反推——这一轮的教训就是整场景信号无法区分
+“压缩错”和“CR 用错”。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
