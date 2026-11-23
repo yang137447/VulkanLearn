@@ -891,6 +891,60 @@ kernel 第 1028–1091 行与 `merit` 的定义（它是不是每个 lane 各自
 是否在 trial 之间被改写），以及 `v2DomainValid` 是否走了
 `isnan(v2Merit) || isinf(v2Merit)` 那条置零分支——那是唯一不依赖 lane 合法性的置零路径。
 
+## 第十九轮：拒绝步长的不是 merit，是 `v2DomainValid`
+
+上一轮的矛盾（merit 比 0.004 却仍 `v2Accepted == 0`）本轮读代码读清楚了。
+逐个查过接受判定的输入之后，第 1096 行只有两个条件，而我把**唯一没直接测过的那一个**
+测了：
+
+```text
+if (lane == 0u && v2DomainValid != 0u && v2Merit <= (1 - 1e-4*alpha) * merit)
+    v2Accepted = 1u;
+```
+
+把 `v2DomainValid` 直接写进 `diagnostic.z`（已自证的通道）后，失败 guide 的读数是
+**`v2DomainValid = 0`，同时 merit 比是 0.03 / 0.06 / 0.11 …**（都远小于 1）。
+所以：**步长是被「域不合法」拒掉的，不是被 merit 拒掉的。** 前几轮我在 merit 上
+找原因，方向一直是错的。
+
+顺带澄清两个读数陷阱：
+
+1. `v2Iterations` 只在**接受**一次迭代时自增（第 1111 行），所以失败 guide 读到的
+   `iters = 9/12/14` 是「接受了几次」，不是「尝试了几次」。我此前把它当尝试次数用过。
+2. 探针变量在「试算循环根本没进」的 guide 上会留上一次的残值（读到的 7835 / 26 / 70
+   就是这种残值），所以只看**失败 guide 且非残值**的行才有意义。
+
+### 为什么域会不合法（下一个待验证点）
+
+`v2DomainValid` 在归约里只有两条置零路径（`rodKkt10BandSolve.glsl:733-742`）：
+某个 `v2Metric[point].w == 0`，或者 `v2Merit` 是 NaN/Inf。
+
+而 `v2Metric.w == 0` 的判据之一（`RodKkt10Measure`）是
+
+```text
+length(RodLog(conj(oldOrientations[lane]) * v2Orientations[lane])) < RodRotationLimit
+```
+
+关键事实：**`oldOrientations` 每个 substep 只刷新一次**（`rodV2Kernel.glsl:871`
+`oldOrientations[lane] = orientations[lane];`，在牛顿循环之前）。所以这个判据是
+**相对子步起点的累积转角**，不是相对上一次迭代。一个 guide 在一个 substep 内
+累积转过 `RodRotationLimit` 之后，无论 α 多小，试算都不可能合法——这正好解释了
+「merit 明明下降了却一律被拒」。
+
+### 下一轮
+
+先用已自证的通道把「是不是累积转角这一条」确认掉（把 validity 的具体分支编码进
+`diagnostic`），再决定修法。方向上有两个候选：
+
+- 把转角判据改成相对**上一次被接受的状态**的增量，而不是相对子步起点；
+- 或者把「累积转角超限」当成「本子步到这里为止」的合法终止条件（保留当前状态、
+  不算失败），而不是「域不合法 → 全部拒绝 → RodFail(3)」。
+
+后者更保守，也更符合该判据本来想表达的「安全上限」语义：触发上限时应当停下，
+而不是把整个 guide 判失败。
+
+当前代码已回退到上一次验证过的状态：runtime 120 帧 exit 0、validation 0 条消息。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
