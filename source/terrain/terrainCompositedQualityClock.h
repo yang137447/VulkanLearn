@@ -67,6 +67,19 @@ public:
         return failed;
     }
 
+    // 互动运行时：一次姿态超时后重新开始预算窗口，而不是把 failed 永久锁死。
+    // 返回 true 表示确实清掉了一次超时（调用方据此记录一次非致命证据）。
+    bool ResetAfterTimeout(double nowMs) noexcept
+    {
+        std::lock_guard<std::mutex> lock(mutex);
+        if (!failed || !started || !std::isfinite(nowMs))
+            return false;
+        failed = false;
+        ready = false;
+        deadline = nowMs + poseLimit;
+        return true;
+    }
+
     double DeadlineMs() const
     {
         std::lock_guard<std::mutex> lock(mutex);

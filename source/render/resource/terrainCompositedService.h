@@ -49,6 +49,8 @@ public:
 
     static void SetCookMode(bool enabled);
     static bool CookMode();
+    static void SetQualityLenient(bool enabled);
+    static bool QualityLenient();
     static void SetAuthoringMode(bool enabled);
     static bool IsAuthoringMode();
     static void SetFrozenConfig(TerrainCompositedFrozenConfig config);

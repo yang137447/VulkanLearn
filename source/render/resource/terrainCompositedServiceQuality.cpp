@@ -200,7 +200,25 @@ bool TerrainCompositedService::ObserveQuality(const TerrainCompositedQualityRead
     const bool ready = CookMode() ? quality :
         impl->qualityClock.Observe(readback.completedMonotonicMs, quality);
     if (!CookMode() && impl->qualityClock.Failed(QualityMonotonicMs()))
-        impl->qualityConvergenceFailed.store(true, std::memory_order_release);
+    {
+        if (QualityLenient())
+        {
+            // 互动模式：连续移动可能一直追不上 10 s 收敛预算。只记录一次超时证据并
+            // 重开预算窗口，保持 arrival gate 可用；验收默认仍锁存失败。
+            if (impl->qualityClock.ResetAfterTimeout(QualityMonotonicMs()))
+            {
+                ServiceEvidence("RVT_QUALITY_TIMEOUT", "[RVT_QUALITY_TIMEOUT] ", nlohmann::json{
+                    {"worldGeneration", impl->worldGeneration},
+                    {"poseId", impl->qualityPose},
+                    {"elapsedMs", elapsedMs},
+                    {"interactive", false}});
+            }
+        }
+        else
+        {
+            impl->qualityConvergenceFailed.store(true, std::memory_order_release);
+        }
+    }
     impl->interactiveReady.store(ready, std::memory_order_release);
     ServiceEvidence("RVT_QUALITY_STATE", "[RVT_QUALITY_STATE] ", nlohmann::json{
         {"worldGeneration", impl->worldGeneration}, {"poseId", impl->qualityPose},

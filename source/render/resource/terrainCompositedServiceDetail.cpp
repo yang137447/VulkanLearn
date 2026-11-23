@@ -6,6 +6,8 @@ namespace TerrainServiceDetail
 {
 std::atomic<bool> GlobalCookMode{false};
 
+std::atomic<bool> GlobalQualityLenient{false};
+
 std::atomic<bool> GlobalAuthoringMode{false};
 
 std::atomic<uint64_t> NextGeneration{0};
