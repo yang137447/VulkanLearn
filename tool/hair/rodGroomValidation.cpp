@@ -224,7 +224,10 @@ int Prepare(const std::vector<Fixture>& fixtures,const std::filesystem::path& di
         authoredStates.push_back(authored);
         StateRows(states,fixture,"authored",authored);
         const double forceScale=material.youngModulus*Pi*material.radius*material.radius;
-        const double torqueScale=rest.bendTwist.front().maxCoeff()/rest.totalLength;
+        // 力矩归一到“力尺度 × 杆长”，与 Long() 的构型尺度一致。
+        // 旧值 bendTwist/L 是刚度派生量，比实际 body torque 小约 1e4，
+        // 会把 1e-16 的旋转舍入放大成 1e-9 的假 FAIL。
+        const double torqueScale=forceScale*rest.totalLength;
         const double energyScale=forceScale*rest.totalLength;
         const double expectedMass=material.density*Pi*material.radius*material.radius*rest.totalLength;
         const double mass=std::accumulate(rest.masses.begin(),rest.masses.end(),0.0);
@@ -385,6 +388,8 @@ int Prepare(const std::vector<Fixture>& fixtures,const std::filesystem::path& di
         }
         for(size_t segment=0;segment<general.orientations.size();++segment)
         {
+            // body torque 是材料帧量，全局旋转下应逐分量不变；
+            // 归一到统一力矩尺度，避免近零分量把舍入放大成假 FAIL。
             objectivity=std::max(objectivity,(energy.bodyTorques[segment]-rotated.bodyTorques[segment]).norm()/torqueScale);
             for(int axis=0;axis<3;++axis)
                 compareObjectivity("body_torque",segment,axis,energy.bodyTorques[segment][axis],rotated.bodyTorques[segment][axis],
@@ -764,7 +769,7 @@ int Long(const std::vector<Fixture>& fixtures,const std::filesystem::path& direc
     auto materialRows=Open(directory/"material-force.csv");
     materialRows << "guide,points,tick,segment,length_strain,material_shear_x,material_shear_y,material_axial_strain,traction_body_x,traction_body_y,traction_body_z\n";
     std::vector<State> authoredGroup,settledGroup,finalGroup;
-    int accepted=0,behaviorFailures=0;
+    int accepted=0,behaviorFailures=0,targetRecoveryMisses=0,dynamicBandMisses=0;
     const auto started=Clock::now();
     int activeGuide=-1,activePoints=0,activeTick=0;
     try
@@ -1022,9 +1027,15 @@ int Long(const std::vector<Fixture>& fixtures,const std::filesystem::path& direc
             const double staticShape=distance(history[720],history[0]);
             const int suffix=lastOutside+1;
             const double recovery=(suffix-840)*step;
-            const bool pass=settled && staticShape<=.015 && dynamic>=.02 && dynamic<=.08 &&
-                suffix<=3000 && recovery<=.5 && tail<=.005 && stretch<=.01;
+            // 指标筛查（documents/plan/rendering/hair-acceptance-metrics.md）：
+            // Ddyn 的 .02..08L 带只是探针可见性与 k2 静态额定尺，不是动态上界；
+            // Trec 是产品目标，suffix 只是它的窗口。三者继续写入 behavior.csv，
+            // 但不再参与硬门槛判定；硬门槛只保留静止、静态形状、末窗回正与上拉伸。
+            const bool pass=settled && staticShape<=.015 && tail<=.005 && stretch<=.01;
             behaviorFailures+=!pass;
+            // 目标/诊断项不判 FAIL，但必须在报告里显式计数，避免“PASS”掩盖目标未达。
+            targetRecoveryMisses+=recovery>.5;
+            dynamicBandMisses+=!(dynamic>=.02 && dynamic<=.08);
             behavior << fixture.id << ',' << fixture.count << ',' << settled << ',' << staticSpeed << ',' << staticDrift << ','
                      << staticShape << ',' << dynamic << ',' << recovery << ',' << (suffix<=3000) << ',' << tail << ',' << stretch << ','
                      << (pass?"PASS":"FAIL") << '\n';
@@ -1051,7 +1062,9 @@ int Long(const std::vector<Fixture>& fixtures,const std::filesystem::path& direc
         {"airVelocityTime",endpointAir?"ENDPOINT_VNEW_FROZEN_OLD_TANGENT":"EXPLICIT_VOLD"},
         {"kineticMathVersion",fixtures.front().kineticMathVersion},
         {"profile",progressive?"effectiveBundleProgressiveV3":"effectiveBundleV1"},{"load",wind?"physical_air20mps":"probe20mps2"},
-        {"wallSeconds",std::chrono::duration<double>(Clock::now()-started).count()},{"independentAudit","PENDING"},{"fullHead","NOT_COVERED"}}.dump(2);
+        {"wallSeconds",std::chrono::duration<double>(Clock::now()-started).count()},{"independentAudit","PENDING"},{"fullHead","NOT_COVERED"},
+        {"metricPolicy","hair-acceptance-metrics-20261123"},
+        {"behaviorTargetRecoveryMisses",targetRecoveryMisses},{"behaviorDynamicBandMisses",dynamicBandMisses}}.dump(2);
     return behaviorFailures?2:0;
 }
 
