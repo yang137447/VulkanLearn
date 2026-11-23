@@ -977,6 +977,7 @@ void main()
                     rodKktDirection[lane].values[5u]));
 #ifdef VL_ROD_KKT10_CONDENSE_PROBE
             RodKkt10ProbeCondensed(lane, rodKktDirection[lane]);
+            RodKkt10ProbeCompare(lane, rodKktDirection[lane]);
 #endif
 #else
             RodV2Vector residual = RodV2Residual(lane);
@@ -1204,8 +1205,8 @@ void main()
 #ifdef VL_ROD_KKT10_CONDENSE_PROBE
         // 探针：压缩代数对照（A = 乘子反推误差，B = 压缩方程残差）。
         rodState.guides[slot].energies = vec4(float(v3BacktrackCount),
-            float(rodKktRepairCount), uintBitsToFloat(rodKktProbeA),
-            uintBitsToFloat(rodKktProbeB));
+            float(rodKktRepairCount), uintBitsToFloat(rodKktProbeD),
+            uintBitsToFloat(rodKktProbeE));
 #endif
 #endif
 #endif

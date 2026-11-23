@@ -1204,7 +1204,7 @@ RodKkt6Condensed RodKkt10Condense(uint point)
             if (weight == 0.0)
                 continue;
             update = RodV2Add(update,
-                RodKktOuter(result.gradient[row], appliedTransposed[column]));
+                RodKktOuter(result.gradient[row], applied[column]));
         }
     RodV2Matrix q = RodV2Add(RodV2Identity(), RodV2Negative(update));
     result.q = q;
@@ -1319,6 +1319,233 @@ void RodKkt10ProbeCondensed(uint lane, RodKkt10Vector working)
     atomicMax(rodKktProbeC, floatBitsToUint(scaledResidual));
     atomicMax(rodKktProbeA, floatBitsToUint(checkA));
     atomicMax(rodKktProbeB, floatBitsToUint(checkB));
+}
+
+// 6 宽探针槽：压缩后的块与解。只有探针编译时存在（约 1.7 KB shared）。
+struct RodKkt6Band
+{
+    float lower[36];
+    float diagonal[36];
+    float upper[36];
+    float right[6];
+};
+shared RodKkt6Band rodKktProbeBand[2];
+shared float rodKktProbeDirection[32 * 6];
+shared uint rodKktProbeFactorNext[32];
+
+// 行列主序扁平 6x6 与 RodV2Matrix 互转。
+void RodKkt6Store(out float values6[36], RodV2Matrix matrix)
+{
+    for (uint row = 0u; row < 6u; ++row)
+        for (uint column = 0u; column < 6u; ++column)
+            values6[row * 6u + column] = RodV2Entry(matrix, row, column);
+}
+
+RodV2Matrix RodKkt6Load(float values6[36])
+{
+    RodV2Matrix matrix = RodV2Zero();
+    for (uint row = 0u; row < 6u; ++row)
+        for (uint column = 0u; column < 6u; ++column)
+            RodV2Set(matrix, row, column, values6[row * 6u + column]);
+    return matrix;
+}
+
+// 单点 6x6 主元分解，工作区沿用 10 宽那套（dimension 6 时右端只有 7 列有效：
+// 0..5 是上块，第 6 列是残差；RodKktEquilibratedPivot 照样缩放/求解 11 列，多余的
+// 列无副作用）。
+bool RodKktProbeFactor6(float diagonal[36], float upper[36], float residual[6])
+{
+    for (uint row = 0u; row < 6u; ++row)
+    {
+        for (uint column = 0u; column < 6u; ++column)
+        {
+            rodKktWorkMatrix[row * 20u + column] = diagonal[row * 6u + column];
+            rodKktWorkRight[row * 11u + column] = upper[row * 6u + column];
+        }
+        rodKktWorkRight[row * 11u + 6u] = residual[row];
+    }
+    float pivotRatio;
+    return RodKktEquilibratedPivot(6u, pivotRatio);
+}
+
+// 用顺序块 Thomas 解压缩后的 6x6 系统（和 10 宽路径同一套结构，只是块宽不同）。
+// 返回 0 成功。结果写进 rodKktProbeDirection。
+uint RodKkt10ProbeSolveCondensed(uint lane)
+{
+    uint status = 0u;
+    uint point = 0u;
+    while (point < 32u)
+    {
+        if (lane == point)
+        {
+            RodKkt6Condensed condensed = RodKkt10Condense(point);
+            if (!condensed.valid)
+                status = 1u;
+            else
+            {
+                RodKkt6Store(rodKktProbeBand[0].lower, condensed.lower);
+                RodKkt6Store(rodKktProbeBand[0].diagonal, condensed.diagonal);
+                RodKkt6Store(rodKktProbeBand[0].upper, condensed.upper);
+                for (uint row = 0u; row < 6u; ++row)
+                    rodKktProbeBand[0].right[row] =
+                        row < 3u ? condensed.right.linear[row] :
+                            condensed.right.angular[row - 3u];
+            }
+        }
+        barrier();
+        if (status != 0u)
+            return status;
+        float diagonal[36];
+        float upper[36];
+        float residual[6];
+        for (uint entry = 0u; entry < 36u; ++entry)
+        {
+            diagonal[entry] = rodKktProbeBand[0].diagonal[entry];
+            upper[entry] = rodKktProbeBand[0].upper[entry];
+        }
+        for (uint row = 0u; row < 6u; ++row)
+            residual[row] = -rodKktProbeBand[0].right[row];
+        if (point > 0u)
+            for (uint row = 0u; row < 6u; ++row)
+                for (uint inner = 0u; inner < 6u; ++inner)
+                {
+                    residual[row] -= rodKktProbeBand[0].lower[row * 6u + inner] *
+                        rodKktFactorRight[point - 1u].values[inner];
+                    for (uint column = 0u; column < 6u; ++column)
+                        diagonal[row * 6u + column] -=
+                            rodKktProbeBand[0].lower[row * 6u + inner] *
+                                rodKktFactorUpper[point - 1u].values[inner * 10u + column];
+                }
+        if (!RodKktProbeFactor6(diagonal, upper, residual))
+            return 2u;
+        rodKktProbeFactorNext[point] = point + 1u;
+        for (uint row = 0u; row < 6u; ++row)
+        {
+            rodKktFactorRight[point].values[row] = rodKktWorkRight[row * 11u + 6u];
+            for (uint column = 0u; column < 6u; ++column)
+                rodKktFactorUpper[point].values[row * 10u + column] =
+                    rodKktWorkRight[row * 11u + column];
+        }
+        barrier();
+        ++point;
+    }
+    for (int index = 31; index >= 0; --index)
+    {
+        for (uint row = 0u; row < 6u; ++row)
+        {
+            float value = rodKktFactorRight[index].values[row];
+            if (index + 1 < 32)
+                for (uint column = 0u; column < 6u; ++column)
+                    value -= rodKktFactorUpper[index].values[row * 10u + column] *
+                        rodKktProbeDirection[(index + 1) * 6u + column];
+            rodKktProbeDirection[index * 6u + row] = value;
+        }
+        barrier();
+    }
+    return 0u;
+}
+
+// 从压缩解恢复乘子：dlambda = S^-1 G^T A^-1 (A dx + L dx- + U dx+ - b)。
+// 第五轮的探针已验证这个恒等式在真实状态上成立（checkA <= 7.6e-6）。
+vec3 RodKkt10RecoverMultipliersFromCondensed(uint lane, RodKkt6Condensed condensed,
+    RodV2Vector direction)
+{
+    if (!condensed.valid || condensed.count == 0u)
+        return vec3(0);
+    RodV2Vector value = RodV2Multiply(condensed.diagonal, direction);
+    if (lane > 0u)
+        value = RodV2Add(value, RodV2Multiply(condensed.baseLower,
+            RodV2Vector(vec3(rodKktProbeDirection[(lane - 1u) * 6u + 0u],
+                rodKktProbeDirection[(lane - 1u) * 6u + 1u],
+                rodKktProbeDirection[(lane - 1u) * 6u + 2u]),
+                vec3(rodKktProbeDirection[(lane - 1u) * 6u + 3u],
+                    rodKktProbeDirection[(lane - 1u) * 6u + 4u],
+                    rodKktProbeDirection[(lane - 1u) * 6u + 5u]))));
+    if (lane < 31u)
+        value = RodV2Add(value, RodV2Multiply(condensed.baseUpper,
+            RodV2Vector(vec3(rodKktProbeDirection[(lane + 1u) * 6u + 0u],
+                rodKktProbeDirection[(lane + 1u) * 6u + 1u],
+                rodKktProbeDirection[(lane + 1u) * 6u + 2u]),
+                vec3(rodKktProbeDirection[(lane + 1u) * 6u + 3u],
+                    rodKktProbeDirection[(lane + 1u) * 6u + 4u],
+                    rodKktProbeDirection[(lane + 1u) * 6u + 5u]))));
+    value = RodV2Add(value, RodV2Vector(-condensed.baseRight.linear,
+        -condensed.baseRight.angular));
+    RodV2Vector applied = RodV2Multiply(condensed.inverseA, value);
+    vec3 projected;
+    for (uint row = 0u; row < 3u; ++row)
+        projected[row] = RodKktDot(condensed.gradient[row], applied);
+    return condensed.inverseS * projected;
+}
+
+// 对照：同一状态上 10 宽解 vs 压缩后 6 宽 Thomas 解。
+// checkD = max |dx_condensed - dx_10wide|，checkE = max |dlambda_condensed - dlambda_10wide|。
+shared uint rodKktProbeD;
+shared uint rodKktProbeE;
+
+void RodKkt10ProbeCompare(uint lane, RodKkt10Vector working)
+{
+    if (lane == 0u)
+    {
+        rodKktProbeD = 0u;
+        rodKktProbeE = 0u;
+    }
+    barrier();
+    uint status = RodKkt10ProbeSolveCondensed(lane);
+    if (status != 0u)
+    {
+        if (lane == 0u)
+        {
+            rodKktProbeD = floatBitsToUint(1.0e30);
+            rodKktProbeE = floatBitsToUint(1.0e30);
+        }
+        return;
+    }
+    float positionDifference = 0.0;
+    for (uint entry = 0u; entry < 6u; ++entry)
+        positionDifference = max(positionDifference,
+            abs(rodKktProbeDirection[lane * 6u + entry] - working.values[entry]));
+    RodKkt6Condensed condensed = RodKkt10Condense(lane);
+    RodV2Vector direction = RodV2Vector(
+        vec3(rodKktProbeDirection[lane * 6u + 0u], rodKktProbeDirection[lane * 6u + 1u],
+            rodKktProbeDirection[lane * 6u + 2u]),
+        vec3(rodKktProbeDirection[lane * 6u + 3u], rodKktProbeDirection[lane * 6u + 4u],
+            rodKktProbeDirection[lane * 6u + 5u]));
+    vec3 multiplier = RodKkt10RecoverMultipliersFromCondensed(lane, condensed, direction);
+    float multiplierDifference = 0.0;
+    if (condensed.count > 0u)
+        for (uint entry = 0u; entry < 3u; ++entry)
+            multiplierDifference = max(multiplierDifference,
+                abs(multiplier[entry] - working.values[6u + entry]));
+    // checkF：Q 必须把 G 的列空间清零（Q G = 0）。这是 checkA/checkB 都没覆盖的一项：
+    // 它们只用到 S、A^-1、G、b，不涉及 Q。
+    RodV2Vector applied = RodV2Multiply(condensed.inverseA, condensed.gradient[0]);
+    vec3 probeMultiplier = vec3(1.0, 1.0, 1.0);
+    RodV2Vector contactSum = RodV2Vector(
+        condensed.gradient[0].linear * probeMultiplier.x +
+            condensed.gradient[1].linear * probeMultiplier.y +
+            condensed.gradient[2].linear * probeMultiplier.z,
+        condensed.gradient[0].angular * probeMultiplier.x +
+            condensed.gradient[1].angular * probeMultiplier.y +
+            condensed.gradient[2].angular * probeMultiplier.z);
+    RodV2Vector qg = RodV2Multiply(condensed.q, contactSum);
+    float checkF = max(max(max(abs(qg.linear.x), abs(qg.linear.y)), abs(qg.linear.z)),
+        max(max(abs(qg.angular.x), abs(qg.angular.y)), abs(qg.angular.z)));
+    // 同一乘法按 RodV2Entry 逐项算一遍：与 RodV2Multiply 不一致就说明矩阵/向量
+    // 的 index 约定在某处错位（那也会让压缩系统整求解错）。
+    vec3 manual = vec3(0);
+    vec3 manualAngular = vec3(0);
+    for (uint row = 0u; row < 3u; ++row)
+        for (uint column = 0u; column < 3u; ++column)
+        {
+            manual[row] += RodV2Entry(condensed.q, row, column) * contactSum.linear[column];
+            manualAngular[row] += RodV2Entry(condensed.q, row + 3u, column) *
+                contactSum.linear[column];
+        }
+    float conventionGap = max(max(max(abs(manual.x - qg.linear.x), abs(manual.y - qg.linear.y)),
+        abs(manual.z - qg.linear.z)), max(max(abs(manualAngular.x - qg.angular.x),
+        abs(manualAngular.y - qg.angular.y)), abs(manualAngular.z - qg.angular.z)));
+    float manualNorm = max(max(abs(manual.x), abs(manual.y)), abs(manual.z));
 }
 #endif // VL_ROD_KKT10_CONDENSE_PROBE
 
