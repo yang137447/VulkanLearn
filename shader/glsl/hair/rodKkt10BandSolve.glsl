@@ -1610,53 +1610,52 @@ void RodKkt10ProbeCompare(uint lane, RodKkt10Vector working)
         }
         return;
     }
-    float positionDifference = 0.0;
-    for (uint entry = 0u; entry < 6u; ++entry)
-        positionDifference = max(positionDifference,
-            abs(rodKktProbeDirection[lane * 6u + entry] - working.values[entry]));
     RodKkt6Condensed condensed = RodKkt10Condense(lane);
     RodV2Vector direction = RodV2Vector(
         vec3(rodKktProbeDirection[lane * 6u + 0u], rodKktProbeDirection[lane * 6u + 1u],
             rodKktProbeDirection[lane * 6u + 2u]),
         vec3(rodKktProbeDirection[lane * 6u + 3u], rodKktProbeDirection[lane * 6u + 4u],
             rodKktProbeDirection[lane * 6u + 5u]));
-    vec3 multiplier = RodKkt10RecoverMultipliersFromCondensed(lane, condensed, direction);
-    float multiplierDifference = 0.0;
-    if (condensed.count > 0u)
-        for (uint entry = 0u; entry < 3u; ++entry)
-            multiplierDifference = max(multiplierDifference,
-                abs(multiplier[entry] - working.values[6u + entry]));
-    // checkF：Q 必须把 G 的列空间清零（Q G = 0）。这是 checkA/checkB 都没覆盖的一项：
-    // 它们只用到 S、A^-1、G、b，不涉及 Q。
-    RodV2Vector applied = RodV2Multiply(condensed.inverseA, condensed.gradient[0]);
-    vec3 probeMultiplier = vec3(1.0, 1.0, 1.0);
-    RodV2Vector contactSum = RodV2Vector(
-        condensed.gradient[0].linear * probeMultiplier.x +
-            condensed.gradient[1].linear * probeMultiplier.y +
-            condensed.gradient[2].linear * probeMultiplier.z,
-        condensed.gradient[0].angular * probeMultiplier.x +
-            condensed.gradient[1].angular * probeMultiplier.y +
-            condensed.gradient[2].angular * probeMultiplier.z);
+    RodV2Vector neighbour = RodV2Vector(vec3(0), vec3(0));
+    if (lane > 0u)
+        neighbour = RodV2Add(neighbour, RodV2Multiply(condensed.lower,
+            RodV2Vector(vec3(rodKktProbeDirection[(lane - 1u) * 6u + 0u],
+                rodKktProbeDirection[(lane - 1u) * 6u + 1u],
+                rodKktProbeDirection[(lane - 1u) * 6u + 2u]),
+                vec3(rodKktProbeDirection[(lane - 1u) * 6u + 3u],
+                    rodKktProbeDirection[(lane - 1u) * 6u + 4u],
+                    rodKktProbeDirection[(lane - 1u) * 6u + 5u]))));
+    if (lane < 31u)
+        neighbour = RodV2Add(neighbour, RodV2Multiply(condensed.upper,
+            RodV2Vector(vec3(rodKktProbeDirection[(lane + 1u) * 6u + 0u],
+                rodKktProbeDirection[(lane + 1u) * 6u + 1u],
+                rodKktProbeDirection[(lane + 1u) * 6u + 2u]),
+                vec3(rodKktProbeDirection[(lane + 1u) * 6u + 3u],
+                    rodKktProbeDirection[(lane + 1u) * 6u + 4u],
+                    rodKktProbeDirection[(lane + 1u) * 6u + 5u]))));
+    // 非空指标：压缩系统的**求解残差** |M d - b_right|。与是否收敛无关。
+    RodV2Vector lhs = RodV2Add(RodV2Multiply(condensed.diagonal, direction), neighbour);
+    RodV2Vector difference = RodV2Add(lhs, RodV2Vector(-condensed.right.linear,
+        -condensed.right.angular));
+    float solveResidual = max(max(max(abs(difference.linear.x), abs(difference.linear.y)),
+        abs(difference.linear.z)), max(max(abs(difference.angular.x),
+        abs(difference.angular.y)), abs(difference.angular.z)));
+    // 参考量：右端自身的量级，用来判断残差是绝对大还是相对大。
+    float rightScale = max(max(abs(condensed.right.linear.x), abs(condensed.right.linear.y)),
+        max(abs(condensed.right.linear.z), max(abs(condensed.right.angular.x),
+        max(abs(condensed.right.angular.y), abs(condensed.right.angular.z)))));
+    // 合成量检验仍在：Q G 必须为 0。
+    RodV2Vector contactSum = RodV2Add(RodV2Add(condensed.gradient[0], condensed.gradient[1]),
+        condensed.gradient[2]);
     RodV2Vector qg = RodV2Multiply(condensed.q, contactSum);
-    float checkF = max(max(max(abs(qg.linear.x), abs(qg.linear.y)), abs(qg.linear.z)),
+    float checkQ = max(max(max(abs(qg.linear.x), abs(qg.linear.y)), abs(qg.linear.z)),
         max(max(abs(qg.angular.x), abs(qg.angular.y)), abs(qg.angular.z)));
-    // 同一乘法按 RodV2Entry 逐项算一遍：与 RodV2Multiply 不一致就说明矩阵/向量
-    // 的 index 约定在某处错位（那也会让压缩系统整求解错）。
-    vec3 manual = vec3(0);
-    vec3 manualAngular = vec3(0);
-    for (uint row = 0u; row < 3u; ++row)
-        for (uint column = 0u; column < 3u; ++column)
-        {
-            manual[row] += RodV2Entry(condensed.q, row, column) * contactSum.linear[column];
-            manualAngular[row] += RodV2Entry(condensed.q, row + 3u, column) *
-                contactSum.linear[column];
-        }
-    float conventionGap = max(max(max(abs(manual.x - qg.linear.x), abs(manual.y - qg.linear.y)),
-        abs(manual.z - qg.linear.z)), max(max(abs(manualAngular.x - qg.angular.x),
-        abs(manualAngular.y - qg.angular.y)), abs(manualAngular.z - qg.angular.z)));
-    float manualNorm = max(max(abs(manual.x), abs(manual.y)), abs(manual.z));
+    // 无活跃接触时 M 就是原系统，残差应当接近 0；把两类分开编码：
+    //   rodKktProbeD = solveResidual / max(rightScale, 1)
+    //   rodKktProbeE = checkQ
+    atomicMax(rodKktProbeD, floatBitsToUint(solveResidual / max(rightScale, 1.0)));
+    atomicMax(rodKktProbeE, floatBitsToUint(checkQ));
 }
-
 #endif // VL_ROD_KKT10_CONDENSE_PROBE
 
 #endif

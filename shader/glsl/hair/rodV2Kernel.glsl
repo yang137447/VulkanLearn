@@ -975,6 +975,9 @@ void main()
                 break;
             }
             kktDirection = rodKktDirection[lane];
+#ifdef VL_ROD_KKT10_CONDENSE_PROBE
+            RodKkt10ProbeCompare(lane, rodKktDirection[lane]);
+#endif
             direction = RodV2Vector(
                 vec3(kktDirection.values[0u], kktDirection.values[1u],
                     kktDirection.values[2u]),
