@@ -51,7 +51,9 @@ Current implemented areas include:
   filters editor sources from `vl_runtime` and rejects editor includes at
   configure time. See `documents/contracts/vulkanlearn-architecture.html`.
 - Optional Windows x64/.NET 11 C# Blueprint hosting, scene placement and Play/Pause/Stop;
-  implemented subset and limits: `documents/contracts/csharp-blueprint-runtime.md`
+  implemented subset and limits: `documents/contracts/csharp-blueprint-runtime.md`.
+  The UE Third Person Template replication lives in `Maps/SC_third_person` (native pose
+  graph runtime, State Alias and 1D/2D BlendSpace); it needs the C# build and `--autoplay`.
 - Runtime fracture verticals: `balloon` soft-body burst and `glassPane` impact fracture
   with Jolt shards, secondary glass split, support islands, asset-backed WAV audio
   with procedural fallback and a shared 320-shard global budget; current limits:
