@@ -1025,10 +1025,35 @@ void main()
                 contactBase[contactSlot] = rodKktContacts[contactSlot];
             vec4 axialBase = rodKktAxial[lane];
 #endif
+#ifdef VL_ROD_V3_KKT10_SOLVE
+            // 信任域：把回溯的起点限制在一个安全步长以内，而不是永远从 alpha = 1 开始。
+            // 否则「第一步过大 -> 一路回溯到 2^-20 -> 这一小步在 fp32 位置精度里根本
+            // 不存在 -> Armijo 永远不满足」会退化成一整类失败。缩放的是 alpha 而不是
+            // 方向，所以 10 个分量（含乘子）仍然彼此一致。
+            {
+                float positionStep = length(direction.linear) * v2LengthScale;
+                float positionLimit = RodKktStepFraction * restStrains[lane].w;
+                float angularStep = length(direction.angular);
+                float laneScale = 1.0;
+                if (positionStep > positionLimit && positionStep > 0.0)
+                    laneScale = min(laneScale, positionLimit / positionStep);
+                if (angularStep > RodKktAngularStepLimit && angularStep > 0.0)
+                    laneScale = min(laneScale, RodKktAngularStepLimit / angularStep);
+                if (lane == 0u)
+                    v2StepScaleBits = floatBitsToUint(1.0);
+                barrier();
+                atomicMin(v2StepScaleBits, floatBitsToUint(clamp(laneScale, 1.0e-6, 1.0)));
+                barrier();
+            }
+#endif
             if (lane == 0u)
             {
                 v2Accepted = 0u;
+#ifdef VL_ROD_V3_KKT10_SOLVE
+                v2Alpha = min(1.0, uintBitsToFloat(v2StepScaleBits));
+#else
                 v2Alpha = 1.0;
+#endif
             }
             barrier();
             for (uint trial = 0u; trial <= 20u; ++trial)

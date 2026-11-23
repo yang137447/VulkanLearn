@@ -55,6 +55,11 @@ shared float rodKktSolution[220];
 shared float rodKktColumnScale[20];
 shared uint rodKktPermutation[20];
 // 当前 substep 的胶囊场采样维（rod.capsules 的第一维 = substep 或 substep+1）。
+// 信任域：位置步不超过段长的这个比例，旋转步不超过这个弧度。
+const float RodKktStepFraction = 0.25;
+const float RodKktAngularStepLimit = 0.125;
+shared uint v2StepScaleBits;
+
 shared uint rodKktSubstep;
 // 每个点的 incoming axial 约束共享副本：(multiplier, gap, active, 保留位)。
 // 点 p 的 outgoing 边就是点 p+1 的 incoming 边，因此只需要一份。
