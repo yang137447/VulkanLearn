@@ -800,3 +800,27 @@ validation layer，也没有性能/预算结论。
 - 与冻结包的关系：这次包是**全新资产身份 + 新 Release 二进制**，R16/R17 的
   checkpoint/收据（P5/P6、性能、故障注入）都不适用；冻结与正式验收仍按上节延期表
   处理，不改判为通过。
+
+### 追加：交互加载闸门修复——转身/走动不再闪黑（2026-11-23 晚）
+
+- 现象：第三人称在 RVT 地形上跑图，转动视角或走过几米画面会周期性黑一下，并闪出
+  “Loading terrain...”，同时 WASD/鼠标短暂失效；快速转身近似连续闪烁。
+- 根因：`TerrainQualityValidation::Begin` 把“视角离开已验证域（>15° 或 >5.12 m）”
+  当成新到达，直接 `Invalidate`（poseId++、`ready=false`）。而加载闸门
+  （`terrainLoadingGate`）与加载黑帧（`RecordLoading`）都读同一个逐视角 `Ready`，
+  于是每次转动都重新进入 Loading，直到下一张质量快照通过（约 1–2 s）；
+  `terrainLoading` 同时清输入，所以表现为“黑屏 + 操作失灵”。
+- 修复：把“到达收敛”和“逐视角证据”拆开。
+  - `TerrainQualityValidation` 增加 `arrivalReady` 与 `ArrivalConverged`：
+    `Invalidate`（World 换代 / 资源变化 / 显式 `pose_arrived`）才清除，
+    `Observe` 一次达标后保持；视角漂移改走 `Relocate`，只清逐视角 `ready`、递增 poseId。
+  - 新增 `TerrainCompositedArrivalReady`（只看到达收敛），加载闸门与黑帧改用它；
+    `TerrainCompositedQualityReady` 保持逐视角语义，继续供诊断/验收工具
+    （`tool/validation/terrain/editor_s4_main.cpp` 仍按逐视角判定）。
+  - 新增 `terrain_quality_readiness_tests`（5 项）：到达需一次达标、转身保持到达但撤销
+    逐视角、显式到达撤销、World 换代撤销、失败快照不算达标。
+- 验证：`terrain_quality_readiness_tests` 5/5、`terrain_loading_cpu_tests`
+  10/10；`main_game` 播放场景 240 帧 exit 0，`RVT_QUALITY_STATE` 仍 interactive；
+  黑帧/输入闸门只在初始加载与显式传送时出现。
+- 仍开放：这是运行时交互修复，不改冻结核对表；`interactive` 统计仍按逐视角捕获
+  更新，转身时数值会短暂回落，属预期。

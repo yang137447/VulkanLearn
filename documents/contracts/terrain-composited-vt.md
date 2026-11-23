@@ -291,6 +291,15 @@ shader 显式虚拟 floor/ceil mip 采样、最多 8 主轴 tap、各级重算 U
 工作集压力最多按冻结 target+1 报有效目标和 budgetInsufficient；
 队列空、CPU estimated fallback 或根 Ready 不等于真实可见画质就绪。
 
+运行时加载闸门与逐视角画质证据是两件事：`Loading terrain...`、加载黑帧和输入禁用
+只在**到达未收敛**时生效——World 换代、资源身份变化或显式
+`TerrainQualityInvalidation`（loadscene/相机传送）之后，直到该次到达至少一次质量
+快照达标为止。普通走动/转头造成的视角漂移只撤销逐视角证据（`poseId` 增加、
+`Ready` 转 false），不会重新进入 Loading，也不禁用输入。
+`TerrainQualityValidation::ArrivalConverged` 记录到达收敛，
+`TerrainCompositedArrivalReady` 供加载闸门与黑帧绘制使用；
+`TerrainCompositedQualityReady` 保留逐视角（15°/512 cm 域）语义供诊断与验收工具。
+
 ## 7. 验证边界
 
 显式原生 lit 诊断通过 `native_terrain_lit_capture_game` 单独入口注册，
