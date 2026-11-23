@@ -11,7 +11,11 @@ public readonly record struct AnimationState(string Clip, float Time, float Dura
     string SyncMarker = "", float SyncMarkerAlpha = 0, bool SyncActive = false,
     string SyncLeader = "", string SyncRole = "", string SyncMethod = "",
     string SyncEffectiveMethod = "", string SyncScope = "", string SyncDiagnostic = "",
-    int MontageSegment = 0, string MontageSegmentId = "");
+    int MontageSegment = 0, string MontageSegmentId = "", string BlendClip = "", float BlendWeight = 0,
+    string AdditiveClip = "", float AdditiveAlpha = 0, string CachedPose = "",
+    string LayerClip = "", float LayerAlpha = 0, int LayerMaskCount = 0,
+    string SlotMontageClip = "", float SlotMontageAlpha = 0, int SlotMontageMaskCount = 0,
+    bool SlotMontageCompleted = false, IReadOnlyDictionary<string, float>? Curves = null);
 public readonly record struct AnimationSyncMarker(string Name, float Time);
 public readonly record struct AnimationPlayerInfo(string SyncGroup, string SyncRole, string SyncMethod,
     float StartPosition, bool Loop, string SyncGroupScope = "Local");
@@ -33,6 +37,17 @@ public readonly record struct MontageNotifyInfo(string Kind, string Track, strin
 // 与旧 3 分量调用等价，原生不会把默认单位四元数当成目标朝向。
 public readonly record struct WarpTarget(Vector3 Location, Quaternion? Rotation = null);
 public readonly record struct MontageWindowInfo(string Target, float Start, float End);
+// BS_*.json 展开后的 BlendSpace；C# 图在创建时把它解析成运行期 BlendSamples。
+public readonly record struct AnimationBlendSpaceSample(string Clip, float Threshold,
+    float Rate = 1, string SyncGroup = "", float X = 0, float Y = 0);
+public sealed record AnimationBlendSpaceDefinition(string Name, float WeightSpeedPerSec,
+    string Interpolation, IReadOnlyList<AnimationBlendSpaceSample> Samples,
+    string Type = "blendSpace1D", string AxisX = "Speed", string AxisY = "",
+    float? AxisXMin = null, float? AxisXMax = null,
+    float? AxisYMin = null, float? AxisYMax = null);
+// BP_*.json 的逐骨白名单；未列出的骨骼权重 0。
+public readonly record struct AnimationBoneWeight(string Bone, float Weight);
+public sealed record AnimationBlendProfile(string Name, IReadOnlyList<AnimationBoneWeight> Bones);
 // 多 AnimSegment Montage 的一段；Start/End 是 Montage 时间轴，ClipStart/ClipEnd 是
 // sidecar 本地时间。C# 只读 catalog/feedback，不维护第二份段时钟。
 public readonly record struct MontageSegmentInfo(int Index, string SegmentId, string SequencePath,
@@ -86,6 +101,49 @@ internal sealed record FootPlacementCommand(bool Enabled, string FootLock);
 internal sealed record PoseDriverCommand(bool Enabled, string Asset);
 internal sealed record PostProcessCommand(bool Enabled, string Asset);
 internal sealed record BonePhysicsCommand(bool Enabled, string Asset, bool Debug);
+// BlendSpace1D 是播放命令之后的附加候选：只更新第二片段与权重，不推进第二时钟。
+internal sealed record BlendSpaceCommand(bool Enabled, string ClipA, string ClipB, float Weight,
+    float Rate = 1, string SyncGroup = "")
+{
+    public static readonly BlendSpaceCommand Disabled = new(false, "", "", 0);
+}
+// ApplyAdditive（LocalSpaceBase）与 Save/UseCachedPose 的附加候选。
+internal sealed record AdditiveCommand(bool Enabled, string Clip, float Alpha, bool Loop)
+{
+    public static readonly AdditiveCommand Disabled = new(false, "", 0, false);
+}
+internal sealed record CachedPoseCommand(bool Enabled, bool Capture, string Name, float BlendSeconds = 0)
+{
+    public static readonly CachedPoseCommand Disabled = new(false, false, "", 0);
+}
+// LayeredBoneBlend：overlay 片段按骨骼 mask 混合到当前姿态。
+internal sealed record LayeredPoseCommand(bool Enabled, string Clip, float Alpha, bool Loop,
+    string[] Mask, AnimationBoneWeight[] Weights)
+{
+    public static readonly LayeredPoseCommand Disabled =
+        new(false, "", 0, false, Array.Empty<string>(), Array.Empty<AnimationBoneWeight>());
+}
+// 图级命名 pose 分支：每帧在主状态之前求值，UseCachedPose 同帧读取。
+public readonly record struct CachedPoseBranchSample(string Clip, float Threshold);
+public sealed record CachedPoseBranchDefinition(string Name,
+    IReadOnlyList<CachedPoseBranchSample> Samples, float Rate, bool Loop,
+    string IdleClip = "", float IdleThreshold = 0);
+// 原生 Pose Graph（B1）：节点定义一次性下发，参数每帧下发。
+public readonly record struct PoseGraphSampleDefinition(string Clip, float Threshold,
+    float Rate, string SyncGroup, float X = 0, float Y = 0);
+public sealed record PoseGraphNodeDefinition(string Id, string Kind, string[] Inputs,
+    string Clip, PoseGraphSampleDefinition[] Samples, float Rate, bool Loop,
+    float StartPosition, float Alpha, AnimationBoneWeight[] Weights,
+    string CacheName, string SlotName, string RootSource, string MontageId = "",
+    float WeightSpeedPerSec = 5);
+internal sealed record PoseGraphCommand(PoseGraphNodeDefinition[] Nodes);
+internal sealed record PoseGraphValueCommand(string Id, float Value, float? ValueY = null,
+    string Axis = "");
+internal sealed record PoseGraphInPlaceCommand(bool InPlace);
+internal sealed record PoseGraphMontageTargetsCommand(string Id,
+    IReadOnlyDictionary<string, WarpTarget> Targets);
+internal sealed record PoseGraphEntryCommand(string Id, float StartPosition, float BlendSeconds);
+internal sealed record CachedPoseBranchesCommand(CachedPoseBranchDefinition[] Branches);
 
 // catalog 曲线键：times/values 等长且已按时间排序；C# 只在本地做线性 clamp 采样。
 internal sealed class AnimationCurve(float[] times, float[] values)
@@ -123,11 +181,32 @@ public sealed class AnimationPlayback
     internal BonePhysicsState BonePhysicsFeedback = default;
     internal BonePhysicsCommand? PendingBonePhysics;
     internal BonePhysicsCommand? ActiveBonePhysics;
+    internal BlendSpaceCommand? PendingBlendSpace;
+    internal AdditiveCommand? PendingAdditive;
+    internal CachedPoseCommand? PendingCachedPose;
+    internal CachedPoseBranchesCommand? PendingCachedPoseBranches;
+    internal PoseGraphCommand? PendingPoseGraph;
+    internal readonly List<PoseGraphValueCommand> PendingPoseGraphValues = [];
+    internal PoseGraphInPlaceCommand? PendingPoseGraphInPlace;
+    internal readonly List<PoseGraphMontageTargetsCommand> PendingPoseGraphMontageTargets = [];
+    internal PoseGraphEntryCommand? PendingPoseGraphEntry;
+    internal readonly Dictionary<string, float> PendingCachedPoseAxes = new(StringComparer.Ordinal);
+    internal LayeredPoseCommand? PendingLayeredPose;
+    internal string[] MontageSlotMask = [];
+    internal AnimationBoneWeight[] MontageSlotWeights = [];
+    internal float MontageSlotAlpha = 1;
     internal bool BonePhysicsDebugRequested;
     internal readonly Dictionary<string, MontageInfo> Montages = new(StringComparer.Ordinal);
+    internal readonly Dictionary<string, AnimationBlendSpaceDefinition> BlendSpaces = new(StringComparer.Ordinal);
+    internal readonly Dictionary<string, AnimationBlendProfile> BlendProfiles = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationPlayerInfo[]> ClipPlayers = new(StringComparer.Ordinal);
     internal readonly Dictionary<string, AnimationSyncMarker[]> ClipSyncMarkers = new(StringComparer.Ordinal);
     public IReadOnlyList<string> Clips { get { CheckAccess(); return Array.AsReadOnly(ClipIds); } }
+    public AnimationBlendSpaceDefinition? FindBlendSpace(string name)
+    {
+        CheckAccess();
+        return BlendSpaces.GetValueOrDefault(name);
+    }
     public AnimationState State { get { CheckAccess(); return Feedback; } }
     public MotionMatchingState Motion { get { CheckAccess(); return MotionFeedback; } }
     public FootPlacementState FootPlacement { get { CheckAccess(); return FootPlacementFeedback; } }
@@ -291,6 +370,319 @@ public sealed class AnimationPlayback
         Pending = new(clip, loop, rate, inPlace, Inertialization: inertialization,
             Transition: true, TransitionStartTime: startTime, BlendSeconds: blendSeconds,
             SyncGroup: syncGroup, SyncPhase: syncPhase);
+    }
+
+    // UE BlendSpace1D：A 是唯一时钟片段，B 按 A 的归一化相位采样后加权混合。
+    // 权重越界按 [0,1] 夹紧；A/B 必须是 catalog 里的片段，A 必须等于本帧已播放的片段。
+    public void SetBlendSpace(string clipA, string clipB, float weight,
+        float rate = 1, string syncGroup = "")
+    {
+        CheckRequest();
+        if (!ClipIds.Contains(clipA, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown animation clip: {clipA}", nameof(clipA));
+        if (!ClipIds.Contains(clipB, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown animation clip: {clipB}", nameof(clipB));
+        if (!float.IsFinite(weight)) throw new ArgumentOutOfRangeException(nameof(weight));
+        if (!float.IsFinite(rate) || rate <= 0 || rate > 4)
+            throw new ArgumentOutOfRangeException(nameof(rate));
+        if (syncGroup.Length > 64 || syncGroup.Contains('\0'))
+            throw new ArgumentException("Blend sync group is invalid.", nameof(syncGroup));
+        if (string.Equals(clipA, clipB, StringComparison.Ordinal))
+        {
+            ClearBlendSpace();
+            return;
+        }
+        PendingBlendSpace = new(true, clipA, clipB, Math.Clamp(weight, 0, 1), rate, syncGroup);
+    }
+
+    public void ClearBlendSpace()
+    {
+        CheckRequest();
+        PendingBlendSpace = BlendSpaceCommand.Disabled;
+    }
+
+    // UE ApplyAdditive（LocalSpaceBase）：clip 必须是 LocalSpaceBase 片段，原生负责
+    // 增量数学与独立时钟；alpha 夹到 [0,1]，loop 决定叠加片段是否循环。
+    public void SetAdditive(string clip, float alpha, bool loop = false)
+    {
+        CheckRequest();
+        if (!ClipIds.Contains(clip, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown animation clip: {clip}", nameof(clip));
+        if (!float.IsFinite(alpha)) throw new ArgumentOutOfRangeException(nameof(alpha));
+        PendingAdditive = new(true, clip, Math.Clamp(alpha, 0, 1), loop);
+    }
+
+    public void ClearAdditive()
+    {
+        CheckRequest();
+        PendingAdditive = AdditiveCommand.Disabled;
+    }
+
+    // 缓存姿态：capture 保存当前最终姿态，use 以该快照为 Base；名字为空由调用方拒绝。
+    public void CaptureCachedPose(string name)
+    {
+        CheckRequest();
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 128 || name.Contains('\0'))
+            throw new ArgumentException("Cached pose name is invalid.", nameof(name));
+        PendingCachedPose = new(true, true, name);
+    }
+
+    public void UseCachedPose(string name, float blendSeconds = 0)
+    {
+        CheckRequest();
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 128 || name.Contains('\0'))
+            throw new ArgumentException("Cached pose name is invalid.", nameof(name));
+        if (!float.IsFinite(blendSeconds) || blendSeconds < 0 || blendSeconds > 10)
+            throw new ArgumentOutOfRangeException(nameof(blendSeconds));
+        PendingCachedPose = new(true, false, name, blendSeconds);
+    }
+
+    public void ClearCachedPose()
+    {
+        CheckRequest();
+        PendingCachedPose = CachedPoseCommand.Disabled;
+    }
+
+    // 命名分支配置只在变化时提交一次；轴值每帧由图宿主下发。
+    public void SetCachedPoseBranches(IReadOnlyList<CachedPoseBranchDefinition> branches)
+    {
+        CheckRequest();
+        ArgumentNullException.ThrowIfNull(branches);
+        if (branches.Count > 16)
+            throw new ArgumentException("Cached pose branch budget exceeded.", nameof(branches));
+        foreach (var branch in branches)
+        {
+            if (string.IsNullOrWhiteSpace(branch.Name) || branch.Name.Length > 128 ||
+                branch.Name.Contains('\0'))
+                throw new ArgumentException("Cached pose branch name is invalid.", nameof(branches));
+            if (branch.Samples is null || branch.Samples.Count is < 1 or > 3)
+                throw new ArgumentException("Cached pose branch requires 1..3 samples.", nameof(branches));
+            if (!float.IsFinite(branch.Rate) || branch.Rate <= 0 || branch.Rate > 4)
+                throw new ArgumentException("Cached pose branch rate is invalid.", nameof(branches));
+            foreach (var sample in branch.Samples)
+                if (string.IsNullOrWhiteSpace(sample.Clip) ||
+                    !ClipIds.Contains(sample.Clip, StringComparer.Ordinal))
+                    throw new ArgumentException($"Unknown cached pose branch clip: {sample.Clip}.",
+                        nameof(branches));
+        }
+        PendingCachedPoseBranches = new(branches.ToArray());
+    }
+
+    public void ClearCachedPoseBranches()
+    {
+        CheckRequest();
+        PendingCachedPoseBranches = new(Array.Empty<CachedPoseBranchDefinition>());
+    }
+
+    // 原生多播放器 Pose Graph：节点定义一次性注册，参数用 SetPoseGraphValue 每帧下发。
+    public void SetPoseGraph(IReadOnlyList<PoseGraphNodeDefinition> nodes)
+    {
+        CheckRequest();
+        ArgumentNullException.ThrowIfNull(nodes);
+        if (nodes.Count == 0 || nodes.Count > 128)
+            throw new ArgumentException("Pose graph node budget exceeded.", nameof(nodes));
+        PendingPoseGraph = new(nodes.ToArray());
+    }
+
+    public void ClearPoseGraph()
+    {
+        CheckRequest();
+        PendingPoseGraph = new(Array.Empty<PoseGraphNodeDefinition>());
+        PendingPoseGraphValues.Clear();
+        PendingPoseGraphMontageTargets.Clear();
+        PendingPoseGraphInPlace = null;
+        PendingPoseGraphEntry = null;
+    }
+
+    // 原生图绕过 Play() 的 inPlace 参数；这里显式提交根消费策略。
+    public void SetPoseGraphInPlace(bool inPlace)
+    {
+        CheckRequest();
+        PendingPoseGraphInPlace = new(inPlace);
+    }
+
+    public void SetPoseGraphValue(string id, float value)
+    {
+        CheckRequest();
+        if (string.IsNullOrWhiteSpace(id) || id.Length > 128 || id.Contains('\0'))
+            throw new ArgumentException("Pose graph node id is invalid.", nameof(id));
+        if (!float.IsFinite(value)) throw new ArgumentOutOfRangeException(nameof(value));
+        PendingPoseGraphValues.Add(new(id, value));
+    }
+
+    // 2D BlendSpace 的双轴值；X/Y 同批提交。
+    public void SetPoseGraphValue(string id, float valueX, float valueY)
+    {
+        CheckRequest();
+        if (string.IsNullOrWhiteSpace(id) || id.Length > 128 || id.Contains('\0'))
+            throw new ArgumentException("Pose graph node id is invalid.", nameof(id));
+        if (!float.IsFinite(valueX)) throw new ArgumentOutOfRangeException(nameof(valueX));
+        if (!float.IsFinite(valueY)) throw new ArgumentOutOfRangeException(nameof(valueY));
+        PendingPoseGraphValues.Add(new(id, valueX, valueY, ""));
+    }
+
+    // 单轴更新；axis 只接受 X/Y，由原生 2D 节点校验。
+    public void SetPoseGraphAxisValue(string id, string axis, float value)
+    {
+        CheckRequest();
+        if (string.IsNullOrWhiteSpace(id) || id.Length > 128 || id.Contains('\0'))
+            throw new ArgumentException("Pose graph node id is invalid.", nameof(id));
+        if (axis is not ("X" or "Y" or "x" or "y"))
+            throw new ArgumentException("Pose graph axis must be X or Y.", nameof(axis));
+        if (!float.IsFinite(value)) throw new ArgumentOutOfRangeException(nameof(value));
+        PendingPoseGraphValues.Add(new(id, value, null, axis));
+    }
+
+    // 图内 MontagePlayer 的 warp targets；键集合由原生按 Montage 资产做完全匹配校验。
+    public void SetPoseGraphMontageTargets(string id,
+        IReadOnlyDictionary<string, WarpTarget> targets)
+    {
+        CheckRequest();
+        ArgumentNullException.ThrowIfNull(targets);
+        if (string.IsNullOrWhiteSpace(id) || id.Length > 128 || id.Contains('\0'))
+            throw new ArgumentException("Pose graph node id is invalid.", nameof(id));
+        var copy = new Dictionary<string, WarpTarget>(StringComparer.Ordinal);
+        foreach (var (name, target) in targets)
+        {
+            if (string.IsNullOrWhiteSpace(name) || name.Length > 64 || name.Contains('\0'))
+                throw new ArgumentException("Pose graph warp target name is invalid.", nameof(targets));
+            if (!float.IsFinite(target.Location.X) || !float.IsFinite(target.Location.Y) ||
+                !float.IsFinite(target.Location.Z))
+                throw new ArgumentException("Pose graph warp target location is invalid.",
+                    nameof(targets));
+            copy.Add(name, target);
+        }
+        PendingPoseGraphMontageTargets.Add(new(id, copy));
+    }
+
+    // 入口切换同时提交目标起始时间与 Crossfade 时长；重复提交同一入口不会重置时钟。
+    public void SetPoseGraphEntry(string id, float startPosition = 0, float blendSeconds = 0)
+    {
+        CheckRequest();
+        id ??= "";
+        if (id.Length > 128 || id.Contains('\0'))
+            throw new ArgumentException("Pose graph entry id is invalid.", nameof(id));
+        if (!float.IsFinite(startPosition) || startPosition < 0)
+            throw new ArgumentOutOfRangeException(nameof(startPosition));
+        if (!float.IsFinite(blendSeconds) || blendSeconds < 0 || blendSeconds > 10)
+            throw new ArgumentOutOfRangeException(nameof(blendSeconds));
+        PendingPoseGraphEntry = new(id, startPosition, blendSeconds);
+    }
+
+    public void SetCachedPoseBranchAxis(string name, float value)
+    {
+        CheckRequest();
+        if (string.IsNullOrWhiteSpace(name) || name.Length > 128 || name.Contains('\0'))
+            throw new ArgumentException("Cached pose branch name is invalid.", nameof(name));
+        if (!float.IsFinite(value)) throw new ArgumentOutOfRangeException(nameof(value));
+        PendingCachedPoseAxes[name] = value;
+    }
+
+    // LayeredBoneBlend：mask 为空表示全身；未知骨骼名由原生拒绝。
+    public void SetLayeredPose(string clip, float alpha, bool loop, IReadOnlyList<string>? mask)
+    {
+        CheckRequest();
+        if (!ClipIds.Contains(clip, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown animation clip: {clip}", nameof(clip));
+        if (!float.IsFinite(alpha)) throw new ArgumentOutOfRangeException(nameof(alpha));
+        var bones = mask is null ? Array.Empty<string>() : mask.ToArray();
+        if (bones.Length > 64)
+            throw new ArgumentException("Layer mask exceeds 64 bones.", nameof(mask));
+        foreach (var bone in bones)
+            if (string.IsNullOrWhiteSpace(bone) || bone.Length > 128 || bone.Contains('\0'))
+                throw new ArgumentException("Layer mask contains an invalid bone name.", nameof(mask));
+        PendingLayeredPose = new(true, clip, Math.Clamp(alpha, 0, 1), loop, bones,
+            Array.Empty<AnimationBoneWeight>());
+    }
+
+    // BlendProfile 重载：未列出的骨骼按白名单 0；未知骨骼由原生拒绝。
+    public void SetLayeredPose(string clip, float alpha, bool loop,
+        IReadOnlyList<AnimationBoneWeight>? weights)
+    {
+        CheckRequest();
+        if (!ClipIds.Contains(clip, StringComparer.Ordinal))
+            throw new ArgumentException($"Unknown animation clip: {clip}", nameof(clip));
+        if (!float.IsFinite(alpha)) throw new ArgumentOutOfRangeException(nameof(alpha));
+        var bones = weights is null ? Array.Empty<AnimationBoneWeight>() : weights.ToArray();
+        if (bones.Length > 256)
+            throw new ArgumentException("Layer blend profile exceeds 256 bones.", nameof(weights));
+        foreach (var bone in bones)
+        {
+            if (string.IsNullOrWhiteSpace(bone.Bone) || bone.Bone.Length > 128 || bone.Bone.Contains('\0'))
+                throw new ArgumentException(
+                    "Layer blend profile contains an invalid bone name.", nameof(weights));
+            if (!float.IsFinite(bone.Weight) || bone.Weight < 0 || bone.Weight > 1)
+                throw new ArgumentException(
+                    "Layer blend profile weight must be in [0,1].", nameof(weights));
+        }
+        PendingLayeredPose = new(true, clip, Math.Clamp(alpha, 0, 1), loop,
+            Array.Empty<string>(), bones);
+    }
+
+    public void ClearLayeredPose()
+    {
+        CheckRequest();
+        PendingLayeredPose = LayeredPoseCommand.Disabled;
+    }
+
+    // Slot montage 的骨骼 mask：非空时，后续 PlayMontage 以 overlay 方式只覆盖
+    // mask 命中的关节；空 mask = 全身（等价旧行为）。alpha 在播放开始时固化。
+    public void SetMontageSlotMask(IReadOnlyList<string>? mask, float alpha = 1)
+    {
+        CheckRequest();
+        if (!float.IsFinite(alpha)) throw new ArgumentOutOfRangeException(nameof(alpha));
+        var bones = mask is null ? Array.Empty<string>() : mask.ToArray();
+        if (bones.Length == 0)
+        {
+            MontageSlotMask = [];
+            MontageSlotWeights = [];
+            MontageSlotAlpha = 1;
+            return;
+        }
+        if (bones.Length > 64)
+            throw new ArgumentException("Slot mask exceeds 64 bones.", nameof(mask));
+        foreach (var bone in bones)
+            if (string.IsNullOrWhiteSpace(bone) || bone.Length > 128 || bone.Contains('\0'))
+                throw new ArgumentException("Slot mask contains an invalid bone name.", nameof(mask));
+        MontageSlotMask = bones;
+        MontageSlotWeights = [];
+        MontageSlotAlpha = Math.Clamp(alpha, 0, 1);
+    }
+
+    public void SetMontageSlotWeights(IReadOnlyList<AnimationBoneWeight>? weights, float alpha = 1)
+    {
+        CheckRequest();
+        if (!float.IsFinite(alpha)) throw new ArgumentOutOfRangeException(nameof(alpha));
+        var bones = weights is null ? Array.Empty<AnimationBoneWeight>() : weights.ToArray();
+        if (bones.Length == 0)
+        {
+            MontageSlotWeights = [];
+            MontageSlotMask = [];
+            MontageSlotAlpha = 1;
+            return;
+        }
+        if (bones.Length > 256)
+            throw new ArgumentException("Slot blend profile exceeds 256 bones.", nameof(weights));
+        foreach (var bone in bones)
+        {
+            if (string.IsNullOrWhiteSpace(bone.Bone) || bone.Bone.Length > 128 || bone.Bone.Contains('\0'))
+                throw new ArgumentException(
+                    "Slot blend profile contains an invalid bone name.", nameof(weights));
+            if (!float.IsFinite(bone.Weight) || bone.Weight < 0 || bone.Weight > 1)
+                throw new ArgumentException(
+                    "Slot blend profile weight must be in [0,1].", nameof(weights));
+        }
+        MontageSlotWeights = bones;
+        MontageSlotMask = [];
+        MontageSlotAlpha = Math.Clamp(alpha, 0, 1);
+    }
+
+    public void ClearMontageSlotMask()
+    {
+        CheckRequest();
+        MontageSlotMask = [];
+        MontageSlotWeights = [];
+        MontageSlotAlpha = 1;
     }
 
     // 任意时刻曲线采样：秒、clip-local、键间线性、区间外 clamp 到首/末值、单键常量。
@@ -610,6 +1002,8 @@ public static partial class NativeBridge
         animation.ClipIds = context.AnimationCatalog.GetValueOrDefault(path) ?? [];
         animation.CurveData.Clear();
         animation.Montages.Clear();
+        animation.BlendSpaces.Clear();
+        animation.BlendProfiles.Clear();
         animation.ClipPlayers.Clear();
         animation.ClipSyncMarkers.Clear();
         if (!context.AnimationAssets.TryGetValue(path, out var assets) ||
@@ -650,6 +1044,50 @@ public static partial class NativeBridge
             {
                 var info = ReadMontage(montage);
                 animation.Montages[info.Id] = info;
+            }
+        if (assets.TryGetProperty("blendSpaces", out var blendSpaces) &&
+            blendSpaces.ValueKind == JsonValueKind.Object)
+            foreach (var space in blendSpaces.EnumerateObject())
+            {
+                var samples = space.Value.GetProperty("samples").EnumerateArray()
+                    .Select(sample => new AnimationBlendSpaceSample(
+                        sample.GetProperty("clip").GetString()!,
+                        sample.TryGetProperty("threshold", out var threshold)
+                            ? threshold.GetSingle() : 0,
+                        sample.TryGetProperty("rate", out var rate) ? rate.GetSingle() : 1,
+                        sample.TryGetProperty("syncGroup", out var group)
+                            ? group.GetString() ?? "" : "",
+                        sample.TryGetProperty("x", out var x) ? x.GetSingle() : 0,
+                        sample.TryGetProperty("y", out var y) ? y.GetSingle() : 0)).ToArray();
+                animation.BlendSpaces[space.Name] = new AnimationBlendSpaceDefinition(
+                    space.Name,
+                    space.Value.TryGetProperty("weightSpeedPerSec", out var speed) ? speed.GetSingle() : 5,
+                    space.Value.TryGetProperty("interpolation", out var interpolation)
+                        ? interpolation.GetString() ?? "EaseInOut" : "EaseInOut",
+                    samples,
+                    space.Value.TryGetProperty("type", out var type)
+                        ? type.GetString() ?? "blendSpace1D" : "blendSpace1D",
+                    space.Value.TryGetProperty("axisX", out var axisX)
+                        ? axisX.GetString() ?? "Speed" : "Speed",
+                    space.Value.TryGetProperty("axisY", out var axisY)
+                        ? axisY.GetString() ?? "" : "",
+                    space.Value.TryGetProperty("axisXMin", out var axisXMin)
+                        ? axisXMin.GetSingle() : null,
+                    space.Value.TryGetProperty("axisXMax", out var axisXMax)
+                        ? axisXMax.GetSingle() : null,
+                    space.Value.TryGetProperty("axisYMin", out var axisYMin)
+                        ? axisYMin.GetSingle() : null,
+                    space.Value.TryGetProperty("axisYMax", out var axisYMax)
+                        ? axisYMax.GetSingle() : null);
+            }
+        if (assets.TryGetProperty("blendProfiles", out var blendProfiles) &&
+            blendProfiles.ValueKind == JsonValueKind.Object)
+            foreach (var profile in blendProfiles.EnumerateObject())
+            {
+                var bones = profile.Value.GetProperty("bones").EnumerateObject()
+                    .Select(bone => new AnimationBoneWeight(bone.Name, bone.Value.GetSingle()))
+                    .ToArray();
+                animation.BlendProfiles[profile.Name] = new AnimationBlendProfile(profile.Name, bones);
             }
     }
 
@@ -763,6 +1201,76 @@ public static partial class NativeBridge
                 var range = montage.GetProperty("range");
                 montageRange = new(range[0].GetSingle(), range[1].GetSingle());
             }
+            var blendClip = "";
+            var blendWeight = 0.0f;
+            if (value.TryGetProperty("blendSpace", out var blendSpace) &&
+                blendSpace.ValueKind == JsonValueKind.Object)
+            {
+                if (blendSpace.TryGetProperty("clip", out var blendClipNode))
+                    blendClip = blendClipNode.GetString()!;
+                if (blendSpace.TryGetProperty("weight", out var blendWeightNode))
+                    blendWeight = blendWeightNode.GetSingle();
+            }
+            var additiveClip = "";
+            var additiveAlpha = 0.0f;
+            if (value.TryGetProperty("additive", out var additiveNode) &&
+                additiveNode.ValueKind == JsonValueKind.Object &&
+                additiveNode.TryGetProperty("active", out var additiveActive) &&
+                additiveActive.GetBoolean())
+            {
+                if (additiveNode.TryGetProperty("clip", out var additiveClipNode))
+                    additiveClip = additiveClipNode.GetString()!;
+                if (additiveNode.TryGetProperty("alpha", out var additiveAlphaNode))
+                    additiveAlpha = additiveAlphaNode.GetSingle();
+            }
+            var cachedPoseName = "";
+            if (value.TryGetProperty("cachedPose", out var cachedPoseNode) &&
+                cachedPoseNode.ValueKind == JsonValueKind.Object &&
+                cachedPoseNode.TryGetProperty("active", out var cachedActive) &&
+                cachedActive.GetBoolean() &&
+                cachedPoseNode.TryGetProperty("name", out var cachedNameNode))
+                cachedPoseName = cachedNameNode.GetString()!;
+            var layerClip = "";
+            var layerAlpha = 0.0f;
+            var layerMaskCount = 0;
+            if (value.TryGetProperty("layered", out var layeredNode) &&
+                layeredNode.ValueKind == JsonValueKind.Object &&
+                layeredNode.TryGetProperty("active", out var layeredActive) &&
+                layeredActive.GetBoolean())
+            {
+                if (layeredNode.TryGetProperty("clip", out var layerClipNode))
+                    layerClip = layerClipNode.GetString()!;
+                if (layeredNode.TryGetProperty("alpha", out var layerAlphaNode))
+                    layerAlpha = layerAlphaNode.GetSingle();
+                if (layeredNode.TryGetProperty("maskCount", out var layerMaskNode))
+                    layerMaskCount = layerMaskNode.GetInt32();
+            }
+            var slotClip = "";
+            var slotAlpha = 0.0f;
+            var slotMaskCount = 0;
+            var slotCompleted = false;
+            Dictionary<string, float>? feedbackCurves = null;
+            if (value.TryGetProperty("curves", out var curveNode) &&
+                curveNode.ValueKind == JsonValueKind.Object)
+            {
+                feedbackCurves = new Dictionary<string, float>(StringComparer.Ordinal);
+                foreach (var curve in curveNode.EnumerateObject())
+                    feedbackCurves[curve.Name] = curve.Value.GetSingle();
+            }
+            if (value.TryGetProperty("slotMontage", out var slotNode) &&
+                slotNode.ValueKind == JsonValueKind.Object &&
+                slotNode.TryGetProperty("active", out var slotActive) &&
+                slotActive.GetBoolean())
+            {
+                if (slotNode.TryGetProperty("clip", out var slotClipNode))
+                    slotClip = slotClipNode.GetString()!;
+                if (slotNode.TryGetProperty("alpha", out var slotAlphaNode))
+                    slotAlpha = slotAlphaNode.GetSingle();
+                if (slotNode.TryGetProperty("maskCount", out var slotMaskNode))
+                    slotMaskCount = slotMaskNode.GetInt32();
+                if (slotNode.TryGetProperty("completed", out var slotCompletedNode))
+                    slotCompleted = slotCompletedNode.GetBoolean();
+            }
             component.Animation.Feedback = new(value.GetProperty("clip").GetString()!,
                 value.GetProperty("time").GetSingle(), value.GetProperty("duration").GetSingle(),
                 value.GetProperty("completed").GetBoolean(), value.GetProperty("playing").GetBoolean(),
@@ -786,7 +1294,10 @@ public static partial class NativeBridge
                 value.TryGetProperty("syncScope", out var syncScope) ? syncScope.GetString()! : "",
                 value.TryGetProperty("syncDiagnostic", out var syncDiagnostic) ?
                     syncDiagnostic.GetString()! : "",
-                montageSegment, montageSegmentId);
+                montageSegment, montageSegmentId, blendClip, blendWeight,
+                additiveClip, additiveAlpha, cachedPoseName,
+                layerClip, layerAlpha, layerMaskCount,
+                slotClip, slotAlpha, slotMaskCount, slotCompleted, feedbackCurves);
             component.Animation.FootPlacementFeedback = value.TryGetProperty("footPlacement", out var placement)
                 ? new(placement.GetProperty("enabled").GetBoolean(), placement.GetProperty("active").GetBoolean(),
                     placement.GetProperty("pelvisOffset").GetSingle(), ReadFootPlacementFoot(placement.GetProperty("feet")[0]),
@@ -919,12 +1430,32 @@ public static partial class NativeBridge
                         inertialization = request.Inertialization, rootOffset = request.RootOffset,
                         footLock = request.FootLock });
                 else if (request.Montage.Length > 0)
-                    commands.Add(new { component = mesh.Id, mode = "playMontage", montage = request.Montage,
-                        loop = request.Loop, rate = request.Rate, inPlace = request.InPlace,
-                        startTime = request.MontageStartTime,
-                        targets = request.MontageTargets?.ToDictionary(pair => pair.Key,
+                {
+                    // 当前状态声明了 SlotMask 时，montage 以 overlay 方式播放，
+                    // 基础时钟/根位移继续由图状态拥有。
+                    var command = new Dictionary<string, object?>
+                    {
+                        ["component"] = mesh.Id, ["mode"] = "playMontage",
+                        ["montage"] = request.Montage, ["loop"] = request.Loop,
+                        ["rate"] = request.Rate, ["inPlace"] = request.InPlace,
+                        ["startTime"] = request.MontageStartTime,
+                        ["targets"] = request.MontageTargets?.ToDictionary(pair => pair.Key,
                             pair => DescribeWarpTarget(pair.Value),
-                            StringComparer.Ordinal) ?? new Dictionary<string, float[]>() });
+                            StringComparer.Ordinal) ?? new Dictionary<string, float[]>()
+                    };
+                    if (mesh.Animation.MontageSlotMask.Length > 0)
+                    {
+                        command["slotMask"] = mesh.Animation.MontageSlotMask;
+                        command["slotAlpha"] = mesh.Animation.MontageSlotAlpha;
+                    }
+                    else if (mesh.Animation.MontageSlotWeights.Length > 0)
+                    {
+                        command["slotWeights"] = mesh.Animation.MontageSlotWeights
+                            .Select(bone => new { bone = bone.Bone, weight = bone.Weight }).ToArray();
+                        command["slotAlpha"] = mesh.Animation.MontageSlotAlpha;
+                    }
+                    commands.Add(command);
+                }
                 else if (request.Transition)
                     commands.Add(new { component = mesh.Id, mode = "transitionTo", clip = request.Clip,
                         startTime = request.TransitionStartTime, loop = request.Loop, rate = request.Rate,
@@ -935,6 +1466,126 @@ public static partial class NativeBridge
                     commands.Add(new { component = mesh.Id, clip = request.Clip, loop = request.Loop,
                         rate = request.Rate, inPlace = request.InPlace });
                 mesh.Animation.Pending = null;
+            }
+            // BlendSpace1D 必须紧跟播放命令提交：A 由同批 play/transitionTo 选定，
+            // 原生只在这个候选上更新第二片段与权重。
+            if (mesh.Animation.PendingBlendSpace is { } blendSpace)
+            {
+                commands.Add(new { component = mesh.Id, mode = "blendSpace",
+                    enabled = blendSpace.Enabled, clipA = blendSpace.ClipA,
+                    clipB = blendSpace.ClipB, weight = blendSpace.Weight,
+                    rate = blendSpace.Rate, syncGroup = blendSpace.SyncGroup });
+                mesh.Animation.PendingBlendSpace = null;
+            }
+            if (mesh.Animation.PendingAdditive is { } additive)
+            {
+                commands.Add(new { component = mesh.Id, mode = "additive",
+                    enabled = additive.Enabled, clip = additive.Clip,
+                    alpha = additive.Alpha, loop = additive.Loop });
+                mesh.Animation.PendingAdditive = null;
+            }
+            // 分支注册必须先于 UseCachedPose：同一 batch 里 use 会校验名字是否存在。
+            if (mesh.Animation.PendingCachedPoseBranches is { } cachedBranches)
+            {
+                commands.Add(new { component = mesh.Id, mode = "cachedPoseBranches",
+                    branches = cachedBranches.Branches.Select(branch => new
+                    {
+                        name = branch.Name,
+                        idleClip = branch.IdleClip,
+                        idleThreshold = branch.IdleThreshold,
+                        samples = branch.Samples.Select(sample => new
+                        {
+                            clip = sample.Clip, threshold = sample.Threshold
+                        }).ToArray(),
+                        rate = branch.Rate, loop = branch.Loop
+                    }).ToArray() });
+                mesh.Animation.PendingCachedPoseBranches = null;
+            }
+            foreach (var axis in mesh.Animation.PendingCachedPoseAxes.ToArray())
+                commands.Add(new { component = mesh.Id, mode = "cachedPoseBranchAxis",
+                    name = axis.Key, value = axis.Value });
+            mesh.Animation.PendingCachedPoseAxes.Clear();
+            if (mesh.Animation.PendingCachedPose is { } cachedPose)
+            {
+                commands.Add(new { component = mesh.Id, mode = "cachedPose",
+                    enabled = cachedPose.Enabled, capture = cachedPose.Capture,
+                    name = cachedPose.Name, blend = cachedPose.BlendSeconds });
+                mesh.Animation.PendingCachedPose = null;
+            }
+            if (mesh.Animation.PendingPoseGraph is { } poseGraph)
+            {
+                commands.Add(new
+                {
+                    component = mesh.Id, mode = "poseGraph",
+                    nodes = poseGraph.Nodes.Select(node => new
+                    {
+                        id = node.Id, kind = node.Kind, inputs = node.Inputs,
+                        clip = node.Clip, rate = node.Rate, loop = node.Loop,
+                        weightSpeedPerSec = node.WeightSpeedPerSec,
+                        startPosition = node.StartPosition, alpha = node.Alpha,
+                        montage = node.MontageId,
+                        cacheName = node.CacheName, slotName = node.SlotName,
+                        rootSource = node.RootSource,
+                        samples = node.Samples.Select(sample => new
+                        {
+                            clip = sample.Clip, threshold = sample.Threshold,
+                            x = sample.X, y = sample.Y,
+                            rate = sample.Rate, syncGroup = sample.SyncGroup
+                        }).ToArray(),
+                        weights = node.Weights.Select(weight => new
+                        {
+                            bone = weight.Bone, weight = weight.Weight
+                        }).ToArray()
+                    }).ToArray()
+                });
+                mesh.Animation.PendingPoseGraph = null;
+            }
+            if (mesh.Animation.PendingPoseGraphInPlace is { } poseGraphInPlace)
+            {
+                commands.Add(new { component = mesh.Id, mode = "poseGraphInPlace",
+                    enabled = poseGraphInPlace.InPlace });
+                mesh.Animation.PendingPoseGraphInPlace = null;
+            }
+            foreach (var value in mesh.Animation.PendingPoseGraphValues)
+            {
+                if (!string.IsNullOrEmpty(value.Axis))
+                    commands.Add(new { component = mesh.Id, mode = "poseGraphValue",
+                        id = value.Id, value = value.Value, axis = value.Axis });
+                else if (value.ValueY is { } valueY)
+                    commands.Add(new { component = mesh.Id, mode = "poseGraphValue",
+                        id = value.Id, value = value.Value, valueY });
+                else
+                    commands.Add(new { component = mesh.Id, mode = "poseGraphValue",
+                        id = value.Id, value = value.Value });
+            }
+            mesh.Animation.PendingPoseGraphValues.Clear();
+            foreach (var targets in mesh.Animation.PendingPoseGraphMontageTargets)
+            {
+                commands.Add(new { component = mesh.Id, mode = "poseGraphMontageTargets",
+                    id = targets.Id, targets = targets.Targets.ToDictionary(pair => pair.Key,
+                        pair => pair.Value.Rotation is { } rotation
+                            ? new[] { pair.Value.Location.X, pair.Value.Location.Y,
+                                pair.Value.Location.Z, rotation.X, rotation.Y, rotation.Z,
+                                rotation.W }
+                            : new[] { pair.Value.Location.X, pair.Value.Location.Y,
+                                pair.Value.Location.Z }) });
+            }
+            mesh.Animation.PendingPoseGraphMontageTargets.Clear();
+            if (mesh.Animation.PendingPoseGraphEntry is { } entry)
+            {
+                commands.Add(new { component = mesh.Id, mode = "poseGraphEntry", id = entry.Id,
+                    startPosition = entry.StartPosition, blendSeconds = entry.BlendSeconds });
+                mesh.Animation.PendingPoseGraphEntry = null;
+            }
+            if (mesh.Animation.PendingLayeredPose is { } layered)
+            {
+                commands.Add(new { component = mesh.Id, mode = "layeredPose",
+                    enabled = layered.Enabled, clip = layered.Clip,
+                    alpha = layered.Alpha, loop = layered.Loop, mask = layered.Mask,
+                    weights = layered.Weights.Length > 0
+                        ? layered.Weights.Select(bone => new { bone = bone.Bone, weight = bone.Weight }).ToArray()
+                        : null });
+                mesh.Animation.PendingLayeredPose = null;
             }
             // 斜率配置放在主命令之后：非 slope 命令仍保持“同一 batch 只允许一条”的
             // 旧边界，slope 作为后续候选组合应用到刚提交的播放状态上。

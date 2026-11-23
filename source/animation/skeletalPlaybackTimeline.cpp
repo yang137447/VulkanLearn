@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <cmath>
 #include <optional>
+#include <set>
 #include <stdexcept>
 #include <string>
 #include <utility>
@@ -265,11 +266,417 @@ void SkeletalPlayback::Stop()
     EndActiveNotifyStates(time, true, true);
     playing = false;
     explicitlyPaused = false;
+    ClearBlendSpace();
+    ClearCachedPose();
     ClearSyncSourceClock();
     syncDecisionValid = false;
     syncLeader.clear();
     syncPendingValid = false;
     syncPendingHasTime = false;
+}
+
+void SkeletalPlayback::SetBlendSpace1D(const std::string& clipA, const std::string& clipB,
+    float weight, float rate, const std::string& syncGroup)
+{
+    const auto& animation = asset->AnimationAsset();
+    if (animation.clips.empty())
+        throw std::invalid_argument("Blend space requires animation clips");
+    if (!std::isfinite(weight))
+        throw std::invalid_argument("Blend space weight must be finite");
+    if (!std::isfinite(rate) || rate <= 0 || rate > 4)
+        throw std::invalid_argument("Blend space rate must be in (0,4]");
+    if (syncGroup.size() > 64 || syncGroup.find('\0') != std::string::npos)
+        throw std::invalid_argument("Blend space sync group is invalid");
+    if (clipB.empty() || clipB.size() > 256)
+        throw std::invalid_argument("Blend space target clip is invalid");
+    if (clipA != SelectedClipId())
+        throw std::invalid_argument("Blend space source clip must match the selected clip");
+    size_t index = 0;
+    while (index < animation.clips.size() && animation.clips[index].id != clipB) ++index;
+    if (index == animation.clips.size())
+        throw std::invalid_argument("Unknown animation blend clip: " + clipB);
+    // 同片段没有混合意义；显式清空可让调用方用同一入口退回单片段。
+    if (index == selected)
+    {
+        ClearBlendSpace();
+        return;
+    }
+    // 先完成全部校验再改状态；失败时保持上一帧的姿态输出。
+    blendSpaceClip = index;
+    blendSpaceWeight = std::clamp(weight, 0.0f, 1.0f);
+    blendSpaceRate = rate;
+    blendSpaceSyncGroup = syncGroup;
+    blendSpaceActive = true;
+}
+
+void SkeletalPlayback::ClearBlendSpace()
+{
+    blendSpaceActive = false;
+    blendSpaceWeight = 0;
+    blendSpaceRate = 1;
+    blendSpaceSyncGroup.clear();
+}
+
+std::string SkeletalPlayback::BlendSpaceClipId() const
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!blendSpaceActive || blendSpaceClip >= animation.clips.size()) return {};
+    return animation.clips[blendSpaceClip].id;
+}
+
+void SkeletalPlayback::SetAdditive(const std::string& clipId, float alpha, bool loop)
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!std::isfinite(alpha))
+        throw std::invalid_argument("Additive alpha must be finite");
+    size_t index = 0;
+    while (index < animation.clips.size() && animation.clips[index].id != clipId) ++index;
+    if (index == animation.clips.size())
+        throw std::invalid_argument("Unknown animation additive clip: " + clipId);
+    const auto& clip = animation.clips[index];
+    // 只有 LocalSpaceBase 增量能按 UE 的局部 TRS 复合执行；MeshSpace/RotationOffset
+    // 需要另一套数学，显式拒绝而不是静默降级。
+    if (clip.sequence.additiveAnimType != "LocalSpaceBase" &&
+        clip.sequence.additiveAnimType != "RotationOffsetMeshSpace")
+        throw std::invalid_argument(
+            "Additive clip must be LocalSpaceBase or RotationOffsetMeshSpace: " + clipId);
+    // 同一片段保持自己的时钟（权重/循环可在不重启的情况下更新）。
+    if (!additiveActive || additiveClip != index)
+    {
+        additiveTime = 0;
+        additiveClip = index;
+    }
+    additiveAlpha = std::clamp(alpha, 0.0f, 1.0f);
+    additiveLoop = loop;
+    additiveActive = true;
+}
+
+void SkeletalPlayback::ClearAdditive()
+{
+    additiveActive = false;
+    additiveAlpha = 0;
+    additiveTime = 0;
+}
+
+std::string SkeletalPlayback::AdditiveClipId() const
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!additiveActive || additiveClip >= animation.clips.size()) return {};
+    return animation.clips[additiveClip].id;
+}
+
+void SkeletalPlayback::SetLayeredPose(const std::string& clipId, float alpha, bool loop,
+    const std::vector<std::string>& boneMask)
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!std::isfinite(alpha))
+        throw std::invalid_argument("Layered alpha must be finite");
+    if (boneMask.size() > 64)
+        throw std::invalid_argument("Layered bone mask exceeds 64 names");
+    size_t index = 0;
+    while (index < animation.clips.size() && animation.clips[index].id != clipId) ++index;
+    if (index == animation.clips.size())
+        throw std::invalid_argument("Unknown animation layered clip: " + clipId);
+    const auto jointCount = asset->mesh.joints.size();
+    std::vector<uint8_t> mask(jointCount, 0);
+    if (boneMask.empty())
+        std::fill(mask.begin(), mask.end(), static_cast<uint8_t>(1));
+    else
+    {
+        for (const auto& name : boneMask)
+        {
+            size_t joint = 0;
+            while (joint < jointCount && asset->mesh.joints[joint].name != name) ++joint;
+            if (joint == jointCount)
+                throw std::invalid_argument("Unknown layered bone: " + name);
+            mask[joint] = 1;
+        }
+    }
+    // 同一片段保留自己的时钟；权重/mask 可在不重启的情况下更新。
+    if (!layeredActive || layeredClip != index)
+    {
+        layeredTime = 0;
+        layeredClip = index;
+    }
+    layeredAlpha = std::clamp(alpha, 0.0f, 1.0f);
+    layeredLoop = loop;
+    layeredMask = std::move(mask);
+    layeredMaskBones = boneMask.empty() ? jointCount : boneMask.size();
+    layeredWeights.clear();
+    layeredActive = true;
+}
+
+void SkeletalPlayback::SetLayeredPoseWeights(const std::string& clipId, float alpha, bool loop,
+    const std::vector<BlendProfileBone>& boneWeights)
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!std::isfinite(alpha))
+        throw std::invalid_argument("Layered alpha must be finite");
+    if (boneWeights.size() > 256)
+        throw std::invalid_argument("Layered blend profile exceeds 256 bones");
+    size_t index = 0;
+    while (index < animation.clips.size() && animation.clips[index].id != clipId) ++index;
+    if (index == animation.clips.size())
+        throw std::invalid_argument("Unknown animation layered clip: " + clipId);
+    const auto jointCount = asset->mesh.joints.size();
+    // VL 白名单语义：未列出的骨骼权重 0（UE BlendProfile 未列出按 1.0；这里更接近
+    // mask，避免局部动作意外覆盖全身）。契约写明这一有意差异。
+    std::vector<float> weights(jointCount, 0.0f);
+    for (const BlendProfileBone& bone : boneWeights)
+    {
+        if (!std::isfinite(bone.weight))
+            throw std::invalid_argument("Layered blend profile weight must be finite");
+        size_t joint = 0;
+        while (joint < jointCount && asset->mesh.joints[joint].name != bone.name) ++joint;
+        if (joint == jointCount)
+            throw std::invalid_argument("Unknown layered bone: " + bone.name);
+        weights[joint] = std::clamp(bone.weight, 0.0f, 1.0f);
+    }
+    if (!layeredActive || layeredClip != index)
+    {
+        layeredTime = 0;
+        layeredClip = index;
+    }
+    layeredAlpha = std::clamp(alpha, 0.0f, 1.0f);
+    layeredLoop = loop;
+    layeredMask.clear();
+    layeredMaskBones = boneWeights.size();
+    layeredWeights = std::move(weights);
+    layeredActive = true;
+}
+
+void SkeletalPlayback::ClearLayeredPose()
+{
+    layeredActive = false;
+    layeredAlpha = 0;
+    layeredTime = 0;
+    layeredMask.clear();
+    layeredMaskBones = 0;
+    layeredWeights.clear();
+}
+
+std::string SkeletalPlayback::LayeredClipId() const
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!layeredActive || layeredClip >= animation.clips.size()) return {};
+    return animation.clips[layeredClip].id;
+}
+
+void SkeletalPlayback::PlaySlotMontage(const std::string& clipId, float alpha, bool loop,
+    float rate, const std::vector<std::string>& boneMask)
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!std::isfinite(alpha) || !std::isfinite(rate) || rate <= 0 || rate > 4)
+        throw std::invalid_argument("Slot montage alpha/rate is invalid");
+    if (boneMask.size() > 64)
+        throw std::invalid_argument("Slot montage bone mask exceeds 64 names");
+    size_t index = 0;
+    while (index < animation.clips.size() && animation.clips[index].id != clipId) ++index;
+    if (index == animation.clips.size())
+        throw std::invalid_argument("Unknown slot montage clip: " + clipId);
+    const auto jointCount = asset->mesh.joints.size();
+    std::vector<uint8_t> mask(jointCount, 0);
+    if (boneMask.empty())
+        std::fill(mask.begin(), mask.end(), static_cast<uint8_t>(1));
+    else
+        for (const auto& name : boneMask)
+        {
+            size_t joint = 0;
+            while (joint < jointCount && asset->mesh.joints[joint].name != name) ++joint;
+            if (joint == jointCount)
+                throw std::invalid_argument("Unknown slot montage bone: " + name);
+            mask[joint] = 1;
+        }
+    slotMontageClip = index;
+    slotMontageAlpha = std::clamp(alpha, 0.0f, 1.0f);
+    slotMontageLoop = loop;
+    slotMontageRate = rate;
+    slotMontageTime = 0;
+    slotMontageCompleted = false;
+    slotMontageMask = std::move(mask);
+    slotMontageMaskBones = boneMask.empty() ? jointCount : boneMask.size();
+    slotMontageWeights.clear();
+    // 换 overlay 片段前结束上一段的 notifyState，再按新片段重建事件表。
+    EndActiveSlotNotifyStates(slotMontageTime, true);
+    slotMontageActive = true;
+    RebuildSlotNotifyEvents();
+}
+
+void SkeletalPlayback::PlaySlotMontageWeights(const std::string& clipId, float alpha, bool loop,
+    float rate, const std::vector<BlendProfileBone>& boneWeights)
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!std::isfinite(alpha) || !std::isfinite(rate) || rate <= 0 || rate > 4)
+        throw std::invalid_argument("Slot montage alpha/rate is invalid");
+    if (boneWeights.size() > 256)
+        throw std::invalid_argument("Slot montage blend profile exceeds 256 bones");
+    size_t index = 0;
+    while (index < animation.clips.size() && animation.clips[index].id != clipId) ++index;
+    if (index == animation.clips.size())
+        throw std::invalid_argument("Unknown slot montage clip: " + clipId);
+    const auto jointCount = asset->mesh.joints.size();
+    std::vector<float> weights(jointCount, 0.0f);
+    for (const BlendProfileBone& bone : boneWeights)
+    {
+        if (!std::isfinite(bone.weight))
+            throw std::invalid_argument("Slot montage blend profile weight must be finite");
+        size_t joint = 0;
+        while (joint < jointCount && asset->mesh.joints[joint].name != bone.name) ++joint;
+        if (joint == jointCount)
+            throw std::invalid_argument("Unknown slot montage bone: " + bone.name);
+        weights[joint] = std::clamp(bone.weight, 0.0f, 1.0f);
+    }
+    slotMontageClip = index;
+    slotMontageAlpha = std::clamp(alpha, 0.0f, 1.0f);
+    slotMontageLoop = loop;
+    slotMontageRate = rate;
+    slotMontageTime = 0;
+    slotMontageCompleted = false;
+    slotMontageMask.clear();
+    slotMontageMaskBones = boneWeights.size();
+    slotMontageWeights = std::move(weights);
+    EndActiveSlotNotifyStates(slotMontageTime, true);
+    slotMontageActive = true;
+    RebuildSlotNotifyEvents();
+}
+
+void SkeletalPlayback::StopSlotMontage()
+{
+    EndActiveSlotNotifyStates(slotMontageTime, true);
+    slotMontageActive = false;
+    slotMontageAlpha = 0;
+    slotMontageTime = 0;
+    slotMontageCompleted = false;
+    slotMontageMask.clear();
+    slotMontageMaskBones = 0;
+    slotMontageWeights.clear();
+    slotNotifyEvents.clear();
+    slotNotifyActive.clear();
+}
+
+std::string SkeletalPlayback::SlotMontageClipId() const
+{
+    const auto& animation = asset->AnimationAsset();
+    if (!slotMontageActive || slotMontageClip >= animation.clips.size()) return {};
+    return animation.clips[slotMontageClip].id;
+}
+
+void SkeletalPlayback::CaptureCachedPose(const std::string& name)
+{
+    if (name.empty() || name.size() > 128)
+        throw std::invalid_argument("Cached pose name is invalid");
+    // 首帧尚未求值：UE 的 SaveCachedPose 也只在有 pose 后才有内容；静默跳过，
+    // 不能让一条捕获命令把同一批播放命令整体作废。
+    if (displayedLocals.empty())
+        return;
+    // 缓存态下 displayedLocals 已包含 additive；若继续写回缓存，下一帧会把它
+    // 当成 Base 再次叠加（缩放/位移会逐帧累积）。Land 期间缓存必须保持冻结。
+    if (useCachedPoseActive)
+        return;
+    cachedPoses[name] = displayedLocals;
+}
+
+void SkeletalPlayback::UseCachedPose(const std::string& name, float blendSeconds)
+{
+    if (name.empty() || name.size() > 128)
+        throw std::invalid_argument("Cached pose name is invalid");
+    if (!std::isfinite(blendSeconds) || blendSeconds < 0 || blendSeconds > 10)
+        throw std::invalid_argument("Cached pose blend must be in [0,10]");
+    // 宿主每帧都会重复提交 UseCachedPose；同一状态只允许初始化一次混合。
+    if (useCachedPoseActive && useCachedPoseName == name) return;
+    const bool isBranch = std::any_of(cachedPoseBranches.begin(), cachedPoseBranches.end(),
+        [&](const CachedPoseBranchState& branch) { return branch.definition.name == name; });
+    if (!isBranch && cachedPoses.find(name) == cachedPoses.end())
+        throw std::invalid_argument("Unknown cached pose: " + name);
+    useCachedPoseName = name;
+    useCachedPoseActive = true;
+    // 进入缓存姿态（如 Fall→Land）必须能把当前姿态作为混合源，否则会硬切。
+    if (blendSeconds > 0 && !displayedLocals.empty())
+    {
+        blendSource = displayedLocals;
+        blendDuration = blendSeconds;
+        blendElapsed = 0;
+        inertialization.Clear();
+    }
+    else
+    {
+        blendSource.clear();
+        inertialization.Clear();
+    }
+}
+
+void SkeletalPlayback::ClearCachedPose()
+{
+    useCachedPoseActive = false;
+    useCachedPoseName.clear();
+}
+
+void SkeletalPlayback::SetCachedPoseBranches(std::vector<CachedPoseBranch> branches)
+{
+    const auto& animation = asset->AnimationAsset();
+    std::vector<CachedPoseBranchState> next;
+    next.reserve(branches.size());
+    std::set<std::string> names;
+    for (CachedPoseBranch& branch : branches)
+    {
+        if (branch.name.empty() || branch.name.size() > 128)
+            throw std::invalid_argument("Cached pose branch name is invalid");
+        if (!names.insert(branch.name).second)
+            throw std::invalid_argument("Duplicate cached pose branch: " + branch.name);
+        if (branch.samples.empty() || branch.samples.size() > 3)
+            throw std::invalid_argument(
+                "Cached pose branch requires 1..3 samples: " + branch.name);
+        if (!std::isfinite(branch.rate) || branch.rate <= 0 || branch.rate > 4)
+            throw std::invalid_argument("Cached pose branch rate is invalid: " + branch.name);
+        if (!std::isfinite(branch.idleThreshold) || branch.idleThreshold < 0)
+            throw std::invalid_argument("Cached pose branch idle threshold is invalid: " + branch.name);
+        CachedPoseBranchState state;
+        state.definition = std::move(branch);
+        if (!state.definition.idleClip.empty())
+        {
+            size_t idle = 0;
+            while (idle < animation.clips.size() &&
+                animation.clips[idle].id != state.definition.idleClip)
+                ++idle;
+            if (idle == animation.clips.size())
+                throw std::invalid_argument(
+                    "Unknown cached pose branch idle clip: " + state.definition.idleClip);
+            state.idleClipIndex = idle;
+        }
+        for (const CachedPoseBranchSample& sample : state.definition.samples)
+        {
+            size_t index = 0;
+            while (index < animation.clips.size() && animation.clips[index].id != sample.clip)
+                ++index;
+            if (index == animation.clips.size())
+                throw std::invalid_argument(
+                    "Unknown cached pose branch clip: " + sample.clip);
+            state.clipIndices.push_back(index);
+        }
+        for (size_t index = 1; index < state.definition.samples.size(); ++index)
+            if (!(state.definition.samples[index].threshold >
+                state.definition.samples[index - 1].threshold))
+                throw std::invalid_argument(
+                    "Cached pose branch thresholds must increase: " + state.definition.name);
+        next.push_back(std::move(state));
+    }
+    cachedPoseBranches = std::move(next);
+    frameCachedPoses.clear();
+}
+
+void SkeletalPlayback::ClearCachedPoseBranches()
+{
+    cachedPoseBranches.clear();
+    frameCachedPoses.clear();
+}
+
+void SkeletalPlayback::SetCachedPoseBranchAxis(const std::string& name, float value)
+{
+    if (name.empty() || name.size() > 128)
+        throw std::invalid_argument("Cached pose branch name is invalid");
+    if (!std::isfinite(value))
+        throw std::invalid_argument("Cached pose branch axis must be finite");
+    cachedPoseBranchAxes[name] = value;
 }
 
 LocalPose SkeletalPlayback::Sample(size_t clipIndex, float sampleTime) const
@@ -310,8 +717,34 @@ LocalPose SkeletalPlayback::Sample(size_t clipIndex, float sampleTime) const
     return locals;
 }
 
+LocalPose SkeletalPlayback::AdditiveReferencePose(size_t clipIndex) const
+{
+    const auto& animation = asset->AnimationAsset();
+    const auto rest = asset->mesh.runtime->joint_rest_poses();
+    LocalPose fallback(rest.begin(), rest.end());
+    if (clipIndex >= animation.clips.size()) return fallback;
+    const SequenceData& sequence = animation.clips.at(clipIndex).sequence;
+    if (sequence.additiveReferencePoseType != "LocalAnimFrame") return fallback;
+    if (sequence.additiveReferenceFrame < 0) return fallback;
+    const float duration = animation.clips.at(clipIndex).runtime
+        ? animation.clips.at(clipIndex).runtime->duration() : 0.0f;
+    if (duration <= 0) return fallback;
+    // UE UAnimSequence::GetSequencePose 用
+    // FrameIndex / GetNumberOfSampledKeys() * PlayLength() 取参考帧，而不是
+    // FrameIndex / frameRate。两者在末尾参考帧上会相差一整个采样区间。
+    const int sampledKeys = sequence.numKeys > 0
+        ? sequence.numKeys : std::max(1, sequence.numFrames + 1);
+    const float fraction = std::clamp(
+        float(sequence.additiveReferenceFrame) / float(sampledKeys), 0.0f, 1.0f);
+    const float referenceTime = duration * fraction;
+    return Sample(clipIndex, referenceTime);
+}
+
 LocalPose SkeletalPlayback::PreviewPose(float aheadSeconds) const
 {
+    // 缓存姿态没有自己的片段时钟：离开 Land 时若仍按旧片段采样，会把“缓存姿态 vs
+    // 旧片段”的差异当成巨大速度，惯性化导致落地后骨骼单帧乱飞。
+    if (useCachedPoseActive) return displayedLocals;
     if (!playing || Duration() == 0) return displayedLocals;
     const float rangeStart = PlaybackRangeStart();
     const float rangeEnd = PlaybackRangeEnd();
@@ -333,6 +766,23 @@ LocalPose SkeletalPlayback::PreviewPose(float aheadSeconds) const
         clipSampleTime = sample.clipTime;
     }
     auto locals = Sample(sampleClip, clipSampleTime);
+    // 惯性化源速度必须沿“实际输出姿态曲线”估计；BlendSpace 的 B 片段也属于该曲线，
+    // 否则从 Walk/Run 混合态停下时会把 A/B 差异误当成巨大速度，导致骨骼单帧乱飞。
+    if (blendSpaceActive && blendSpaceClip < asset->AnimationAsset().clips.size())
+    {
+        const auto& blendClip = asset->AnimationAsset().clips[blendSpaceClip].runtime;
+        const float phase = rangeEnd > rangeStart
+            ? std::clamp((sampleTime - rangeStart) / (rangeEnd - rangeStart), 0.0f, 1.0f)
+            : 0.0f;
+        const float blendDurationSeconds = blendClip ? blendClip->duration() : 0.0f;
+        float blendTime = phase * blendDurationSeconds;
+        if (!looping)
+            blendTime = std::min(blendTime, std::max(0.0f, blendDurationSeconds - 1e-4f));
+        LocalPose blendPose = Sample(blendSpaceClip, blendTime);
+        if (blendSpaceWeight >= 1.0f) locals = std::move(blendPose);
+        else if (blendSpaceWeight > 0.0f)
+            locals = Crossfade(locals, std::move(blendPose), blendSpaceWeight, asset->mesh);
+    }
     const float elapsed = std::min(blendElapsed + aheadSeconds, blendDuration);
     if (!inertialization.Empty() && elapsed < blendDuration)
     {
@@ -355,6 +805,8 @@ void SkeletalPlayback::TransitionTo(const std::string& clipId, float seconds, bo
         throw std::invalid_argument("Transition time must be inside the clip");
     if (!std::isfinite(blendSeconds) || blendSeconds < 0)
         throw std::invalid_argument("Transition duration must be finite and nonnegative");
+    // 首帧尚无 displayed 姿态：任何混合/速度估计都没有源，退化为硬切。
+    if (displayedLocals.empty()) blendSeconds = 0;
     // 根消费策略属于位移所有权边界。平滑过渡不能同时保证首帧连续和立即移除旧根，
     // 因而策略切换必须由调用方显式选零时长硬切；普通 MM 的 in-place 策略保持不变。
     if (blendSeconds > 0 && removeRoot != inPlace)
@@ -381,6 +833,9 @@ void SkeletalPlayback::TransitionTo(const std::string& clipId, float seconds, bo
     candidate.ClearMontageSegments();
     candidate.blendElapsed = 0;
     candidate.blendDuration = blendSeconds;
+    // 过渡开启新的目标片段；旧的混合源属于上一播放段，不能带到新时钟上。
+    candidate.ClearBlendSpace();
+    candidate.ClearCachedPose();
     auto target = candidate.Sample(index, seconds);
     std::shared_ptr<const std::vector<Eigen::Matrix4f>> targetModels;
     auto targetPoses = candidate.Evaluate(target, discontinuity + (blendSeconds == 0), targetModels);
@@ -551,6 +1006,8 @@ void SkeletalPlayback::Seek(float seconds)
     displayedLocals.swap(locals);
     blendSource.clear();
     inertialization.Clear();
+    ClearBlendSpace();
+    ClearCachedPose();
     time = seconds;
     selected = sampleClip;
     montageSegment = segmentIndex;
@@ -594,6 +1051,8 @@ void SkeletalPlayback::Select(size_t clipIndex)
     displayedLocals.swap(locals);
     blendSource.clear();
     inertialization.Clear();
+    ClearBlendSpace();
+    ClearCachedPose();
     selected = clipIndex;
     time = 0;
     activeSyncGroup.clear();

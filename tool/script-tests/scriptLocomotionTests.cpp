@@ -416,8 +416,207 @@ TEST_F(ScriptLocomotionTest, AnimationGraphValidationRejectsInvalidDefinitions)
     Play(); Tick();
     EXPECT_FALSE(State()["failed"].get<bool>());
     // 1 duplicate, 2 unknown target, 4 nested cycle, 8 unreachable, 16 empty clip,
-    // 32 invalid threshold, 64 budget.
-    EXPECT_NEAR(State()["position"][0].get<float>(), 127.0f, 0.001f);
+    // 32 invalid threshold, 64 budget, 128 unknown state alias source,
+    // 256 blend sample count, 512 unsorted blend thresholds, 1024 duplicate blend clip,
+    // 2048 unsupported blend axis, 4096 conduit with clip, 8192 entry rule on
+    // content state, 16384 entry conduit without AllowConduitEntryStates,
+    // 32768 max transitions per frame out of range, 65536 additive on conduit,
+    // 131072 additive alpha without clip, 262144 cached pose with clip,
+    // 1048576 layer on conduit, 2097152 layer alpha without clip,
+    // 4194304 duplicate layer mask bone.
+    // 8388608 adds a slot mask without a slot name.
+    // 16777216 duplicate branch name, 33554432 branch clip+samples,
+    // 67108864 unresolved branch blend space, 134217728 too many branch samples,
+    // 268435456 automatic rule trigger out of range, 536870912 negative min reentry.
+    EXPECT_NEAR(State()["position"][0].get<float>(), 1073217535.0f, 0.001f);
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, TransitionSettingsDriveAutomaticReentryAndRequests)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphTransitionProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, PoseGraphReportsCachedPoseAdditiveAndSlot)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphPoseGraphProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, LayeredPoseDecisionFieldsAndValidation)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphLayerProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, StateMachineSettingsBudgetAndFirstUpdateBlend)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphSettingsProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, BlendProfileResolvesSlotWeightsAndRejectsConflicts)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphBlendProfileProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, ConduitResolvesSameFrameAndFallsBackWhenBlocked)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphConduitProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, BlendSpaceAssetResolvesToRuntimeSamples)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphBlendSpaceAssetProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, StateAliasAndVerticalSpeedDriveSharedTransition)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphAliasProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    EXPECT_NEAR(State()["position"][0].get<float>(), 1.0f, 0.001f);
+    EXPECT_NEAR(State()["position"][1].get<float>(), 1.0f, 0.001f);
+    EXPECT_NEAR(State()["position"][2].get<float>(), 1.0f, 0.001f);
+}
+
+TEST_F(ScriptLocomotionTest, BlendSpaceSelectsClipsAndWeightsOnSpeedAxis)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphBlendSpaceProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+    }
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+    }
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, PoseGraphFlattensNodesCachesAndRejectsCycles)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationPoseGraphProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, PoseNodeStateCompletedUsesEffectiveClip)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationGraphPoseStateCompletedProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, PoseNodeMontageCompletedUsesFeedbackClip)
+{
+    Prepare(Json::object(),
+        "ScriptFixtures.AnimationGraphMontageStateCompletedProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+    }
+}
+
+TEST_F(ScriptLocomotionTest, PoseGraph2DAndMontageBridge)
+{
+    Prepare(Json::object(), "ScriptFixtures.AnimationPoseGraph2DProbeBlueprint");
+    Play(); Tick();
+    EXPECT_FALSE(State()["failed"].get<bool>());
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        SCOPED_TRACE(axis);
+        EXPECT_NEAR(State()["position"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["rotation"][axis].get<float>(), 1.0f, 0.001f);
+        EXPECT_NEAR(State()["scale"][axis].get<float>(), 1.0f, 0.001f);
+    }
 }
 
 TEST_F(ScriptLocomotionTest, EchoResourceGraphDefinesClipsWithoutCharacterCode)

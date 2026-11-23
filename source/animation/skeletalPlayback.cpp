@@ -104,6 +104,13 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
         throw std::invalid_argument("Playback delta must be finite and nonnegative");
     rootMotionDelta.setZero();
     rootMotionYawDelta = 0;
+    // 分支是图级预计算：先于主状态采样求值，UseCachedPose 才能在同一帧读到。
+    EvaluateCachedPoseBranches(deltaSeconds);
+    if (useCachedPoseActive)
+    {
+        TickCachedPose(deltaSeconds);
+        return;
+    }
     // 同步组对齐先于本 tick 的时间推进应用：跳变本身不产生根位移，
     // 本帧根轨迹从对齐后的 time 到采样点，等价于 UE 的 follower 校正。
     bool syncJumped = false;
@@ -140,6 +147,9 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     pendingNotifies.clear();
     if (!playing || Duration() == 0 || deltaSeconds == 0) return;
     AdvanceSyncSourceClock(deltaSeconds);
+    AdvanceAdditiveClock(deltaSeconds);
+    AdvanceLayerClock(deltaSeconds);
+    AdvanceSlotMontageClock(deltaSeconds);
     if (syncJumped)
     {
         // 与 Seek 一样，相位跳变不补发被跳过的事件；只按新位置重建活动区间，
@@ -177,22 +187,135 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     }
     else next = std::min(next, double(rangeEnd));
     const auto epoch = discontinuity + (looping && !inPlace && wrapped ? 1 : 0);
-    const float sampleTime = static_cast<float>(next);
+    float sampleTime = static_cast<float>(next);
     const float elapsed = IsBlending() ? std::min(blendElapsed + deltaSeconds, blendDuration) : 0;
     if (sampleTime == time && epoch == discontinuity && !wrapped && !IsBlending()) return;
-    const float previousTime = time;
+    float previousTime = time;
     LocalPose locals;
+    float blendSampleTime = -1;
+    if (poseGraphActive)
+    {
+        // 图求值直接给出最终姿态；根位移/notify 仍由 rootSource Player 提供。
+        locals = EvaluatePoseGraph(deltaSeconds, meshTransform, actorPosition, actorYaw);
+        if (poseGraphRootValid)
+        {
+            const PoseGraphNode& rootNode = poseGraphNodes.at(poseGraphRoot);
+            if (rootNode.kind == PoseGraphNode::Kind::MontagePlayer)
+            {
+                const auto& montagePlayer =
+                    poseGraphStates.at(poseGraphRoot).montagePlayer;
+                if (montagePlayer)
+                {
+                    selected = montagePlayer->SelectedClip();
+                    looping = false;
+                    playbackRangeStart = montagePlayer->PlaybackRangeStart();
+                    playbackRangeEnd = montagePlayer->PlaybackRangeEnd();
+                    time = montagePlayer->Time();
+                    sampleTime = time;
+                }
+            }
+            else if (rootNode.kind == PoseGraphNode::Kind::BlendSpacePlayer)
+            {
+                const auto findClip = [&](const std::string& clip)
+                {
+                    size_t index = 0;
+                    const auto& clips = asset->AnimationAsset().clips;
+                    while (index < clips.size() && clips[index].id != clip) ++index;
+                    return index;
+                };
+                const size_t baseIndex = rootNode.samples.size() >= 3 ? 1 : 0;
+                const size_t baseClip = findClip(rootNode.samples.at(baseIndex).clip);
+                const auto& rootState = poseGraphStates.at(poseGraphRoot);
+                selected = baseClip;
+                looping = rootNode.loop;
+                playbackRangeStart = 0;
+                playbackRangeEnd = 0;
+                previousTime = poseGraphRootPreviousTime;
+                time = previousTime;
+                sampleTime = rootState.time;
+            }
+            else if (rootNode.kind == PoseGraphNode::Kind::BlendSpace2DPlayer)
+            {
+                const auto findClip = [&](const std::string& clip)
+                {
+                    size_t index = 0;
+                    const auto& clips = asset->AnimationAsset().clips;
+                    while (index < clips.size() && clips[index].id != clip) ++index;
+                    return index;
+                };
+                const auto& rootState = poseGraphStates.at(poseGraphRoot);
+                selected = findClip(rootNode.samples.front().clip);
+                looping = rootNode.loop;
+                playbackRangeStart = 0;
+                playbackRangeEnd = 0;
+                previousTime = poseGraphRootPreviousTime;
+                time = previousTime;
+                sampleTime = rootState.time;
+            }
+            else
+            {
+                size_t rootClip = 0;
+                while (rootClip < asset->AnimationAsset().clips.size() &&
+                    asset->AnimationAsset().clips[rootClip].id != rootNode.clip)
+                    ++rootClip;
+                selected = rootClip;
+                looping = rootNode.loop;
+                playbackRangeStart = 0;
+                playbackRangeEnd = 0;
+                previousTime = poseGraphRootPreviousTime;
+                time = previousTime;
+                sampleTime = poseGraphStates.at(poseGraphRoot).time;
+            }
+        }
+    }
+    else
     {
         PROFILE_SCOPE("Anim.Sample");
         locals = Sample(selected, sampleTime);
-        if (!inertialization.Empty() && elapsed < blendDuration)
+    // BlendSpace1D：第二片段按 A 的归一化相位采样，再在局部 TRS 上加权混合。
+    // 混合发生在一次性过渡混合之前，等价于 UE“状态输出 → 过渡混合”的顺序。
+    if (blendSpaceActive && blendSpaceClip < asset->AnimationAsset().clips.size())
+    {
+        const auto& blendAsset = asset->AnimationAsset().clips[blendSpaceClip];
+        const auto& blendClip = blendAsset.runtime;
+        const float phase = rangeEnd > rangeStart
+            ? std::clamp((sampleTime - rangeStart) / (rangeEnd - rangeStart), 0.0f, 1.0f)
+            : 0.0f;
+        const float blendDurationSeconds = blendClip ? blendClip->duration() : 0.0f;
+        float blendTime = phase * blendDurationSeconds * blendSpaceRate;
+        if (!blendSpaceSyncGroup.empty())
         {
-            const auto target = ReadKinematics(locals, asset->mesh.joints.size());
-            locals = WriteKinematics(std::move(locals), inertialization.Evaluate(target, elapsed));
+            const auto& sourceAsset = asset->AnimationAsset().clips[selected];
+            blendTime = MapBlendSpaceMarkerPhase(sourceAsset, sampleTime, blendAsset,
+                blendSpaceSyncGroup, blendTime);
         }
-        else if (!blendSource.empty() && elapsed < blendDuration)
-            locals = Crossfade(blendSource, std::move(locals), elapsed / blendDuration, asset->mesh);
+        if (blendDurationSeconds > 0 && blendTime >= blendDurationSeconds)
+            blendTime = looping ? std::fmod(blendTime, blendDurationSeconds)
+                : std::max(0.0f, blendDurationSeconds - 1e-4f);
+        else if (!looping)
+            blendTime = std::min(blendTime, std::max(0.0f, blendDurationSeconds - 1e-4f));
+        blendSampleTime = blendTime;
+        auto blendPose = Sample(blendSpaceClip, blendTime);
+        // 端点不走 ozz 混合，保证 0/1 与单独播放 A/B 的姿态逐元素一致。
+        if (blendSpaceWeight >= 1.0f) locals = std::move(blendPose);
+        else if (blendSpaceWeight > 0.0f)
+            locals = Crossfade(locals, std::move(blendPose), blendSpaceWeight, asset->mesh);
     }
+    // ApplyAdditive 属于本状态姿态的一部分：先加在状态局部姿态上，再参与过渡混合。
+    locals = ApplyAdditive(std::move(locals));
+    // LayeredBoneBlend 只改 mask 命中的关节，顺序固定在 additive 之后。
+    locals = ApplyLayered(std::move(locals));
+    // Masked Slot Montage 叠在基础姿态上，只覆盖 mask 命中的关节。
+    locals = ApplySlotMontage(std::move(locals));
+    }
+    RebuildFrameCurves(sampleTime, blendSampleTime);
+    if (!inertialization.Empty() && elapsed < blendDuration)
+    {
+        const auto target = ReadKinematics(locals, asset->mesh.joints.size());
+        locals = WriteKinematics(std::move(locals), inertialization.Evaluate(target, elapsed));
+    }
+    else if (!blendSource.empty() && elapsed < blendDuration)
+        locals = Crossfade(blendSource, std::move(locals), elapsed / blendDuration, asset->mesh);
     std::shared_ptr<const std::vector<Eigen::Matrix4f>> nextModels;
     std::vector<std::shared_ptr<const SkinPose>> nextPoses;
     {
@@ -209,31 +332,47 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
     displayedLocals.swap(locals);
     if (epoch == discontinuity)
     {
-        const auto& clip = asset->AnimationAsset().clips.at(selected);
-        rootMotionDelta = RootTranslation(clip, sampleTime) - RootTranslation(clip, time);
-        const auto rotation = RootRotation(clip, sampleTime) *
-            RootRotation(clip, time).inverse();
-        // 先放原始根 yaw；旋转 warp 只在本 tick 有激活窗口且提交了 target 旋转时
-        // 覆盖它，平移结果（rootMotionDelta）与 yaw 通道互不覆盖。
-        float yawDelta = YawFromQuaternion(rotation);
-        // 原生 modifier 在模型空间改写本 tick 的根位移/根 yaw；C# 只消费最终
-        // rootMotion/rootMotionYaw 交给 Jolt 与 Actor 旋转，不做窗口提取、
-        // target 换算或 SkewWarp 数学。
-        if (!motionWarp.Empty())
+        if (poseGraphActive && poseGraphRootMontage)
         {
-            if (meshTransform && actorPosition)
-                rootMotionDelta = motionWarp.Apply(asset->AnimationAsset().mesh, clip, time, sampleTime,
-                    rootMotionDelta, *meshTransform, *actorPosition, actorYaw, &yawDelta);
-            motionWarpState = motionWarp.DebugState(time);
+            // 图内 MontagePlayer 是其子播放器的唯一时钟；子播放器已完成段映射、
+            // notify 与 MotionWarping，父播放器只转发根通道。
+            rootMotionDelta = poseGraphMontageRootDelta;
+            rootMotionYawDelta = poseGraphMontageRootYawDelta;
         }
-        else motionWarpState.clear();
-        rootMotionYawDelta = yawDelta;
+        else
+        {
+            const auto& clip = asset->AnimationAsset().clips.at(selected);
+            rootMotionDelta = RootTranslation(clip, sampleTime) - RootTranslation(clip, time);
+            const auto rotation = RootRotation(clip, sampleTime) *
+                RootRotation(clip, time).inverse();
+            // 先放原始根 yaw；旋转 warp 只在本 tick 有激活窗口且提交了 target 旋转时
+            // 覆盖它，平移结果（rootMotionDelta）与 yaw 通道互不覆盖。
+            float yawDelta = YawFromQuaternion(rotation);
+            // 原生 modifier 在模型空间改写本 tick 的根位移/根 yaw；C# 只消费最终
+            // rootMotion/rootMotionYaw 交给 Jolt 与 Actor 旋转，不做窗口提取、
+            // target 换算或 SkewWarp 数学。
+            if (!motionWarp.Empty())
+            {
+                if (meshTransform && actorPosition)
+                    rootMotionDelta = motionWarp.Apply(asset->AnimationAsset().mesh, clip,
+                        time, sampleTime, rootMotionDelta, *meshTransform, *actorPosition,
+                        actorYaw, &yawDelta);
+                motionWarpState = motionWarp.DebugState(time);
+            }
+            else motionWarpState.clear();
+            rootMotionYawDelta = yawDelta;
+        }
     }
     time = sampleTime;
     RefreshSyncMarker();
     // notify 只在姿态求值成功后提交：异常 tick 不改变活动区间。事件按实际位置穿越触发，
     // 显式 seek/切片段不补发历史（见 Seek/Select 的清理）。
-    if (wrapped)
+    if (poseGraphActive && poseGraphRootMontage)
+    {
+        // 图内 Montage 的 notify 已由子播放器在 EvaluatePoseGraph 中追加到
+        // firedNotifies/poseGraphActiveNotifyStates；不要再按父 selected 片段扫描。
+    }
+    else if (wrapped)
     {
         ScanNotifySegment(std::max(double(previousTime), double(rangeStart)), double(rangeEnd), false);
         // 回绕时仍活跃的区间先在循环末尾补 end(interrupted)，再扫描新循环头部；
@@ -265,5 +404,308 @@ void SkeletalPlayback::Tick(float deltaSeconds, const Eigen::Matrix4f* meshTrans
 std::shared_ptr<SkeletalPlayback> SkeletalPlayback::NewInstance() const
 {
     return std::make_shared<SkeletalPlayback>(asset);
+}
+
+void SkeletalPlayback::AdvanceAdditiveClock(float deltaSeconds)
+{
+    if (!additiveActive || deltaSeconds <= 0) return;
+    const auto& animation = asset->AnimationAsset();
+    if (additiveClip >= animation.clips.size()) return;
+    const auto& clip = animation.clips[additiveClip];
+    const float duration = clip.runtime ? clip.runtime->duration() : 0.0f;
+    if (duration <= 0) return;
+    additiveTime += deltaSeconds;
+    if (additiveLoop)
+        additiveTime = std::fmod(additiveTime, duration);
+    else
+        additiveTime = std::min(additiveTime, std::max(0.0f, duration - 1e-4f));
+}
+
+LocalPose SkeletalPlayback::ApplyAdditive(LocalPose locals) const
+{
+    if (!additiveActive || additiveAlpha <= 0) return locals;
+    const auto& animation = asset->AnimationAsset();
+    if (additiveClip >= animation.clips.size()) return locals;
+    const LocalPose reference = AdditiveReferencePose(additiveClip);
+    const LocalPose sample = Sample(additiveClip, additiveTime);
+    const auto& clip = animation.clips[additiveClip];
+    if (clip.sequence.additiveAnimType == "RotationOffsetMeshSpace")
+        return ApplyMeshSpaceRotationAdditive(locals, sample, reference, additiveAlpha,
+            asset->mesh.joints);
+    return ApplyLocalSpaceAdditive(locals, sample, reference, additiveAlpha,
+        asset->mesh.joints.size());
+}
+
+namespace
+{
+float SampleFloatCurve(const FloatCurve& curve, float time)
+{
+    if (curve.times.empty()) return 0;
+    if (time <= curve.times.front()) return curve.values.front();
+    if (time >= curve.times.back()) return curve.values.back();
+    const auto upper = std::upper_bound(curve.times.begin(), curve.times.end(), time);
+    const size_t high = static_cast<size_t>(upper - curve.times.begin());
+    const size_t low = high - 1;
+    const float span = curve.times[high] - curve.times[low];
+    const float alpha = span > 0 ? (time - curve.times[low]) / span : 0;
+    return curve.values[low] + (curve.values[high] - curve.values[low]) * alpha;
+}
+}
+
+void SkeletalPlayback::RebuildFrameCurves(float baseTime, float blendTime)
+{
+    frameCurves.clear();
+    const auto& clips = asset->AnimationAsset().clips;
+    auto accumulate = [&](size_t index, float sampleTime, float weight)
+    {
+        if (index >= clips.size() || weight == 0 || sampleTime < 0) return;
+        for (const auto& curve : clips[index].sequence.curves)
+            frameCurves[curve.name] += SampleFloatCurve(curve, sampleTime) * weight;
+    };
+    if (baseTime >= 0 && selected < clips.size())
+    {
+        if (blendSpaceActive && blendSpaceClip < clips.size())
+        {
+            accumulate(selected, baseTime, 1.0f - blendSpaceWeight);
+            accumulate(blendSpaceClip, blendTime, blendSpaceWeight);
+        }
+        else accumulate(selected, baseTime, 1.0f);
+    }
+    if (additiveActive && additiveAlpha > 0)
+        accumulate(additiveClip, additiveTime, additiveAlpha);
+}
+
+void SkeletalPlayback::AdvanceLayerClock(float deltaSeconds)
+{
+    if (!layeredActive || deltaSeconds <= 0) return;
+    const auto& animation = asset->AnimationAsset();
+    if (layeredClip >= animation.clips.size()) return;
+    const auto& clip = animation.clips[layeredClip];
+    const float duration = clip.runtime ? clip.runtime->duration() : 0.0f;
+    if (duration <= 0) return;
+    layeredTime += deltaSeconds;
+    if (layeredLoop)
+        layeredTime = std::fmod(layeredTime, duration);
+    else
+        layeredTime = std::min(layeredTime, std::max(0.0f, duration - 1e-4f));
+}
+
+LocalPose SkeletalPlayback::ApplyLayered(LocalPose locals) const
+{
+    if (!layeredActive || layeredAlpha <= 0) return locals;
+    const auto& animation = asset->AnimationAsset();
+    if (layeredClip >= animation.clips.size()) return locals;
+    const LocalPose sample = Sample(layeredClip, layeredTime);
+    if (!layeredWeights.empty())
+        return ApplyLayeredWeights(locals, sample, layeredWeights, layeredAlpha,
+            asset->mesh.joints.size());
+    return ApplyLayeredPose(locals, sample, layeredMask, layeredAlpha,
+        asset->mesh.joints.size());
+}
+
+void SkeletalPlayback::AdvanceSlotMontageClock(float deltaSeconds)
+{
+    if (!slotMontageActive || slotMontageCompleted || deltaSeconds <= 0) return;
+    const auto& animation = asset->AnimationAsset();
+    if (slotMontageClip >= animation.clips.size()) return;
+    const auto& clip = animation.clips[slotMontageClip];
+    const float duration = clip.runtime ? clip.runtime->duration() : 0.0f;
+    if (duration <= 0) return;
+    const float previousTime = slotMontageTime;
+    float nextTime = previousTime + deltaSeconds * slotMontageRate;
+    if (slotMontageLoop)
+    {
+        if (nextTime >= duration)
+        {
+            nextTime = std::fmod(nextTime, duration);
+            // 回绕：先扫尾部，再扫新循环头部；与主播放器的“先尾后头”一致。
+            ScanSlotNotifies(previousTime, duration, false);
+            ScanSlotNotifies(0.0, nextTime, false);
+        }
+        else ScanSlotNotifies(previousTime, nextTime, false);
+        slotMontageTime = nextTime;
+    }
+    else if (slotMontageTime >= duration)
+    {
+        slotMontageTime = std::max(0.0f, duration - 1e-4f);
+        slotMontageCompleted = true;
+    }
+    else if (nextTime >= duration)
+    {
+        // 一次性 overlay 到末帧：允许 time==duration 的瞬时 notify，并结束活动区间。
+        ScanSlotNotifies(previousTime, duration, true);
+        EndActiveSlotNotifyStates(duration, false);
+        slotMontageTime = std::max(0.0f, duration - 1e-4f);
+        slotMontageCompleted = true;
+    }
+    else
+    {
+        ScanSlotNotifies(previousTime, nextTime, false);
+        slotMontageTime = nextTime;
+    }
+}
+
+LocalPose SkeletalPlayback::ApplySlotMontage(LocalPose locals) const
+{
+    if (!slotMontageActive || slotMontageAlpha <= 0) return locals;
+    const auto& animation = asset->AnimationAsset();
+    if (slotMontageClip >= animation.clips.size()) return locals;
+    const LocalPose sample = Sample(slotMontageClip, slotMontageTime);
+    if (!slotMontageWeights.empty())
+        return ApplyLayeredWeights(locals, sample, slotMontageWeights, slotMontageAlpha,
+            asset->mesh.joints.size());
+    return ApplyLayeredPose(locals, sample, slotMontageMask, slotMontageAlpha,
+        asset->mesh.joints.size());
+}
+
+namespace
+{
+float BranchSmoothstep(float axis, float from, float to)
+{
+    const float span = to - from;
+    const float alpha = span > 0 ? std::clamp((axis - from) / span, 0.0f, 1.0f) : 0.0f;
+    return alpha * alpha * (3 - 2 * alpha);
+}
+}
+
+void SkeletalPlayback::EvaluateCachedPoseBranches(float deltaSeconds)
+{
+    // 暂停/停止时保留上一帧的同帧缓存；delta=0 仍按当前时间求值（首帧/暂停帧）。
+    if (!playing) return;
+    frameCachedPoses.clear();
+    const auto& clips = asset->AnimationAsset().clips;
+    for (CachedPoseBranchState& branch : cachedPoseBranches)
+    {
+        const auto& definition = branch.definition;
+        if (branch.clipIndices.empty()) continue;
+        const size_t baseIndex = definition.samples.size() >= 3 ? 1 : 0;
+        const auto& baseClip = clips.at(branch.clipIndices[baseIndex]);
+        const float baseDuration = baseClip.runtime ? baseClip.runtime->duration() : 0.0f;
+        if (baseDuration <= 0) continue;
+        if (deltaSeconds > 0)
+        {
+            branch.time += deltaSeconds * definition.rate;
+            if (definition.loop)
+                branch.time = std::fmod(branch.time, baseDuration);
+            else
+                branch.time = std::min(branch.time, std::max(0.0f, baseDuration - 1e-4f));
+        }
+        const auto axisEntry = cachedPoseBranchAxes.find(definition.name);
+        const float axis = axisEntry != cachedPoseBranchAxes.end() ? axisEntry->second : 0.0f;
+        // Locomotion 状态机在低速时播 Idle，而不是 BlendSpace 的首 sample。
+        if (branch.idleClipIndex < clips.size() && axis <= definition.idleThreshold)
+        {
+            const auto& idle = clips.at(branch.idleClipIndex);
+            const float idleDuration = idle.runtime ? idle.runtime->duration() : 0.0f;
+            if (idleDuration > 0)
+            {
+                if (deltaSeconds > 0)
+                {
+                    branch.idleTime += deltaSeconds * definition.rate;
+                    branch.idleTime = definition.loop
+                        ? std::fmod(branch.idleTime, idleDuration)
+                        : std::min(branch.idleTime, idleDuration - 1e-4f);
+                }
+                frameCachedPoses[definition.name] = Sample(branch.idleClipIndex, branch.idleTime);
+                continue;
+            }
+        }
+        size_t first = baseIndex;
+        size_t second = baseIndex;
+        float target = 0;
+        if (definition.samples.size() == 1)
+            first = second = 0;
+        else if (baseIndex == 0)
+        {
+            first = 0;
+            second = 1;
+            target = BranchSmoothstep(axis,
+                definition.samples[0].threshold, definition.samples[1].threshold);
+        }
+        else if (axis <= definition.samples[1].threshold)
+        {
+            first = 1;
+            second = 0;
+            target = 1 - BranchSmoothstep(axis,
+                definition.samples[0].threshold, definition.samples[1].threshold);
+        }
+        else
+        {
+            first = 1;
+            second = 2;
+            target = BranchSmoothstep(axis,
+                definition.samples[1].threshold, definition.samples[2].threshold);
+        }
+        if (!branch.weightValid)
+        {
+            branch.weight = target;
+            branch.weightValid = true;
+        }
+        else
+        {
+            const float step = 5 * std::max(0.0f, deltaSeconds);
+            branch.weight = std::clamp(target, branch.weight - step, branch.weight + step);
+        }
+        LocalPose pose = Sample(branch.clipIndices[first], branch.time);
+        if (first != second && branch.weight > 0)
+        {
+            const auto& otherClip = clips.at(branch.clipIndices[second]);
+            const float otherDuration = otherClip.runtime ? otherClip.runtime->duration() : 0.0f;
+            const float phase = std::clamp(branch.time / baseDuration, 0.0f, 1.0f);
+            float otherTime = phase * otherDuration;
+            if (!definition.loop)
+                otherTime = std::min(otherTime, std::max(0.0f, otherDuration - 1e-4f));
+            LocalPose other = Sample(branch.clipIndices[second], otherTime);
+            if (branch.weight >= 1.0f) pose = std::move(other);
+            else pose = Crossfade(pose, std::move(other), branch.weight, asset->mesh);
+        }
+        frameCachedPoses[definition.name] = std::move(pose);
+    }
+}
+
+void SkeletalPlayback::TickCachedPose(float deltaSeconds)
+{
+    firedNotifies = std::move(pendingNotifies);
+    pendingNotifies.clear();
+    const auto frame = frameCachedPoses.find(useCachedPoseName);
+    const auto found = cachedPoses.find(useCachedPoseName);
+    if (frame == frameCachedPoses.end() && found == cachedPoses.end())
+        throw std::runtime_error("Cached pose disappeared: " + useCachedPoseName);
+    AdvanceAdditiveClock(deltaSeconds);
+    AdvanceLayerClock(deltaSeconds);
+    AdvanceSlotMontageClock(deltaSeconds);
+    auto locals = frame != frameCachedPoses.end() ? frame->second : found->second;
+    locals = ApplyAdditive(std::move(locals));
+    locals = ApplyLayered(std::move(locals));
+    locals = ApplySlotMontage(std::move(locals));
+    RebuildFrameCurves(-1, -1);
+    const float elapsed = IsBlending() ? std::min(blendElapsed + deltaSeconds, blendDuration) : 0;
+    if (!inertialization.Empty() && elapsed < blendDuration)
+    {
+        const auto target = ReadKinematics(locals, asset->mesh.joints.size());
+        locals = WriteKinematics(std::move(locals), inertialization.Evaluate(target, elapsed));
+    }
+    else if (!blendSource.empty() && elapsed < blendDuration)
+        locals = Crossfade(blendSource, std::move(locals), elapsed / blendDuration, asset->mesh);
+    std::shared_ptr<const std::vector<Eigen::Matrix4f>> nextModels;
+    auto nextPoses = Evaluate(locals, discontinuity, nextModels);
+    poses.swap(nextPoses);
+    jointModels.swap(nextModels);
+    preIkModels = jointModels;
+    motionModels = jointModels;
+    visualLocals.clear();
+    slopeWarpedLocals.clear();
+    footPlacementSource.reset();
+    displayedLocals.swap(locals);
+    // 缓存姿态不推进片段时钟，也不贡献根位移；过渡混合仍按真实 delta 收尾。
+    rootMotionDelta.setZero();
+    rootMotionYawDelta = 0;
+    blendElapsed = elapsed;
+    if (IsBlending() && elapsed >= blendDuration)
+    {
+        blendSource.clear();
+        inertialization.Clear();
+        ClearSyncSourceClock();
+    }
 }
 }

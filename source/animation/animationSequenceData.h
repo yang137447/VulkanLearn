@@ -95,6 +95,10 @@ struct SequenceData
     bool forceRootLock = false;
     std::string rootMotionRootLock = "RefPose";
     std::string additiveAnimType = "None";
+    // UE ABPT_RefPose / ABPT_LocalAnimFrame；外部 RefPoseSeq 的 AnimFrame 不导入。
+    std::string additiveReferencePoseType = "RefPose";
+    // UE AAT_LocalSpaceBase 的 RefFrameIndex；-1 表示资产未声明。
+    int additiveReferenceFrame = -1;
     // 作者轨道名，导入期用于对照 SK 关节；不参与采样。
     std::vector<std::string> tracks;
     std::vector<FloatCurve> curves;

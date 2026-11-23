@@ -18,7 +18,8 @@ public:
     {
         if (!config.is_object()) throw std::invalid_argument("gameplayInput requires an object");
         auto nextActions = config.value("actions", nlohmann::json{
-            {"Jump", {"Space"}}, {"Interact", {"F"}}, {"Fire", {"MouseLeft"}}, {"Sprint", {"Left Shift"}}});
+            {"Jump", {"Space"}}, {"Interact", {"F"}}, {"Fire", {"MouseLeft"}},
+            {"Sprint", {"Left Shift"}}, {"Walk", {"Left Shift"}}});
         auto nextAxes = config.value("axes", nlohmann::json{
             {"MoveForward", {{{"key", "W"}, {"scale", 1}}, {{"key", "S"}, {"scale", -1}}}},
             {"MoveRight", {{{"key", "D"}, {"scale", 1}}, {{"key", "A"}, {"scale", -1}}}},

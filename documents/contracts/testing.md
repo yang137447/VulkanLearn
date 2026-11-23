@@ -165,7 +165,7 @@ $env:NUGET_SCRATCH = "<worktree>\.nuget-scratch"
 | 可执行文件 | 测试数 | 覆盖 |
 | --- | --- | --- |
 | `editor_ui_tests` | 当前全量（不写死计数；以 `--gtest_list_tests` 为准） | 编辑器 UI：组件、停靠、布局持久化、内容浏览器、JSON 资产库、标准资产修改、actor 树、属性编辑、场景持久化、保存确认、可视化、颜色转换、右键菜单、RmlUi GPU 缩略图桥接、C# 放置/蓝图资产拖放、组件 Details、独立蓝图配置标签、3D 拾取/变换/辅助图示/吸附、文档历史、类型化属性与实例权限、物理配置、编译入口、逻辑组件、Quaternion 原子编辑、Time Scale、Log 页签、Performance 页（冻结快照、5 Hz 节流、空状态、图序表格、CPU 阶段表与 `other` 对账）、四处递归自定义数据编辑、冻结 HUD 文本绑定、HUD 卡片收缩与长 gameplay 换行、C# 类浏览/源码打开请求、一类多 BP 配置创建及骨骼预览值请求/资产校验；公共 DrawDebug 投影/裁剪/叠层顺序、可选深度、转义文字、过滤菜单；Motion 值请求/布局、特征表和 MM 冻结候选/代价刷新、被聚焦控制器时间轴 seek/play/pause 与离线/无播放器禁用、查询回放历史帧选择/回显/禁用；SpringArm 字段刷新、默认值与编辑提交、组件/末端挂接空间、图示/拾取/gizmo 一致性、多层 Mesh section 空间与重挂父级；TressFX 类型识别、标准保存保留半径与场景引用；retarget source/profile 保存保留与引用/源类型拒绝；参考姿态校准、ozz 索引、SK 身份/根路径边界、冻结发布/失败清空、独立页签/轴向/选骨/取景/辅助骨和多尺寸布局；成对动画身份发布、控制/seek、模式切换、重载隔离和首次取景区域；共用 DocumentTab 稳定 key/独立关闭、临时最大化/恢复、跨类型关闭与 MI 异步确认；粒子标签选择/模块持久化、结构按钮、曲线/Flipbook 表格、键盘 Delete/Alt+方向键/Ctrl+Z/Y 与输入框焦点隔离 |
-| `script_tests` | 当前注册 450（当前构建 list 实测；含 2 项成对原地动画预览及本批 2 项普通/游戏冻结时钟；SpringArm 运行时共 40 项；C# ON；注册数不等于实跑数；本轮范围见 Retarget 动画页验证及 TressFX 物理交互记录。OFF 先前实测注册 89 项） | 蓝图场景/资产/组件校验、实例权限、地面放置、输入映射、源码 URI 边界；ON 时使用真实 hostfxr/CLR 验证生命周期、Spawn、运行时组件/代际句柄、异步加载/取消/租约、Jolt 层与掩码/compound/静态 mesh/约束/扫球、角色控制、计时器/事件、故障隔离、World 换代、冻结快照、类型化属性、灯光、程序集重载、资源源码编译/监视及 DLL/PDB 完整字节确定性、PDB 空类/partial 源码定位、私有运行时部署、自定义逻辑组件、Tick/LateTick 每帧时序/时钟/性能采样、递归自定义数据、显式播放中深值迁移、增量同步/空回调过滤/千实例负载、HUD 所有权/回滚/迁移、受控程序集限定类名及混合 CLR/Jolt/WorldSnapshot 负载；SpringArm schema/编辑保存/实例覆写、同帧物理/晚更新、旋转继承、位置/旋转 lag 与子步、碰撞/移动墙体、诊断/传送复位、重载与回滚、非相机子级/子局部偏移与嵌套碰撞空间、CLR/原生含 shear 矩阵一致性；动画请求/原生反馈、独立时钟、状态机及实际运动/碰墙回归、Actor 有界转向与世界关节/相机连续性、正式控制器稳态步频开关与原根行程对照及曲线筛选踝漂移诊断；静态接地探测过滤、18° 横坡参考点/法线独立测量与 pre-IK/MM 隔离；走跑双参考点动态支撑、台阶边缘单支点、惯性化与视觉根偏移、冻结源支撑窗滑移/漂移/穿入质量夹具；足部 Auto/Ball/Ankle 支点模式与 C# `FootLock`；Motion 调试历史回放（帧选择、不追加、退出恢复）；被聚焦脚本控制器时间轴的 seek/play/pause 身份隔离、代数/片长/动作校验；历史 Pause/Stop、实际碰撞轨迹与近似预测；DrawDebug 十形状、生命周期/发布者清理、批次回滚和深度参数跨桥；成对预览 clip/时钟、原地根变换、section 去重和场景门控 |
+| `script_tests` | 当前注册 541（C# ON；2026-11-16 实测 532 通过 + 1 跳过 + 8 个既有沙箱/主干不稳失败） | 蓝图场景/资产/组件校验、实例权限、地面放置、输入映射、源码 URI 边界；ON 时使用真实 hostfxr/CLR 验证生命周期、Spawn、运行时组件/代际句柄、异步加载/取消/租约、Jolt 层与掩码/compound/静态 mesh/约束/扫球、角色控制、计时器/事件、故障隔离、World 换代、冻结快照、类型化属性、灯光、程序集重载、资源源码编译/监视及 DLL/PDB 完整字节确定性、PDB 空类/partial 源码定位、私有运行时部署、自定义逻辑组件、Tick/LateTick 每帧时序/时钟/性能采样、递归自定义数据、显式播放中深值迁移、增量同步/空回调过滤/千实例负载、HUD 所有权/回滚/迁移、受控程序集限定类名及混合 CLR/Jolt/WorldSnapshot 负载；SpringArm schema/编辑保存/实例覆写、同帧物理/晚更新、旋转继承、位置/旋转 lag 与子步、碰撞/移动墙体、诊断/传送复位、重载与回滚、非相机子级/子局部偏移与嵌套碰撞空间、CLR/原生含 shear 矩阵一致性；动画请求/原生反馈、独立时钟、状态机（Alias/Conduit/转移设置/BlendSpace/分层/Additive/曲线/同帧分支/Slot）、Actor 有界转向与世界关节/相机连续性、正式控制器稳态步频开关与原根行程对照及曲线筛选踝漂移诊断；静态接地探测过滤、18° 横坡参考点/法线独立测量与 pre-IK/MM 隔离；走跑双参考点动态支撑、台阶边缘单支点、惯性化与视觉根偏移、冻结源支撑窗滑移/漂移/穿入质量夹具；足部 Auto/Ball/Ankle 支点模式与 C# `FootLock`；Motion 调试历史回放；脚本时间轴 seek/play/pause 身份隔离；DrawDebug 十形状与批次回滚；成对预览 clip/时钟与场景门控。8 项失败为 7 个 `ScriptBuildTest` 临时目录拒绝与既有 `FormalGaspFootPlacementDynamicQualityUsesFrozenRawRootStanceWindows`；`ScriptLocomotionTest.*` 41/41 通过 |
 | `debug_draw_tests` | 27 | 十形状展开、生命周期、冻结、身份/过滤/预算、默认 Overlay 与可选深度传播、投影近远面及屏幕裁剪深度、Console 控制 |
 | `hair_asset_tests` | 254 | `.tfx` 字节/属性/预算校验、文件读取、坐标与逆质量保留、静态切线/rest length/ribbon 拓扑、SM 半径/身份与导入流、simulation CPU/GPU backend 解析、源原生调度（n=0/1/2 × 0.0125 s、`StepFrame`）、旧 `Step` 的 `maxDt` clamp、`bendStiffness`/四角风/global shape/VSP 作者字段与 816-byte 参数打包、已删除 `fixedStep`/`maxSubsteps`/`windGust`/`windFrequency` 的拒绝、`simulation.skinning` 作者校验（source/rootBone/backend/未知键/缓存身份）、根骨解析（命中/缺骨/缺骨架，错误带骨名+资产路径）、不可移动点 `M*rest` 纯数学、五个 pass 的纯数学（距离约束 4 种 multiplier、物理阻力方向与段长无关性、四角锥形生成与 mixer 权重、阻尼系数直接指数、global shape range 门控与拉回、VSP 端点/线性 stiffness、strand 变换与伪加速度阈值、直/弯 rest 的 local-shape 旋转、速度 clamp）、胶囊投影/固定点/长步数接触与 collision 校验、胶囊 `bone` 解析/身份/缺骨错误、骨骼旋转移动端点/未绑定胶囊保持静态；`collision.mesh` 解析（path/cellSize/margin 范围、未知键、backend 限制、缓存身份、OBJ 顶点/多边形/负索引/行号错误、缺失代理）；有符号 SDF 网格 CPU 镜像（magnitude-first FloatFlip 编码、每帧变形域/退化 extent 钳制/固定 48..64 分辨率、clear+splat、三线性采样、中心差分梯度、退化梯度跳过、2 cm 内部点被推到表面外、0.5 cm 外部点只在 margin 内移动、盒/球/远点、蒙皮矩阵带动场）；代理权重转移（空间哈希最近点、等距下标确定性、归一化、全影响保留、超距拒绝、逐顶点 LBS 与单骨矩阵等价）；离线 SDF 生成（球/盒解析距离、角度加权伪法线、锐尖顶点、开放边报告、字节确定性、1 vs 4 线程并行字节一致、文件往返与截断/损坏拒绝）；离线碰撞代理（规则立方体聚类与绕序、退化/重复三角形剔除、区域包含规则、输出字节确定性、开盒开放边、最小三角形下限）；新增 10 项复位计划/事件消费/缺失恢复/800B 参数、6 项相对 palette/冻结帧时钟、5 项世界历史换基/惯性（含 90 帧独立世界 Verlet oracle）、17 项源调度/阻尼/VSP/胶囊量纲、9 项原生 substep/reset 计划、12 项作者刚度曲线（解析/UBO/CPU/shader 语义）及 5 项 hair trace v3 文件往返/截断测试（含每帧 hairModel 与 SDF/胶囊穿透统计）；合成夹具，模块套件不含真实女性资产或 GPU dispatch（GPU 路径由 main 启动烟测覆盖） |
 | `vl_offline_adapter_tests` | 101 | 离线场景/网格/显示/相机适配 |
@@ -180,7 +180,7 @@ $env:NUGET_SCRATCH = "<worktree>\.nuget-scratch"
 | `physics_runtime_tests` | 13 | Jolt 静态 proxy、投射物/attached/free shard/ground 的 role/contact/profile 事件、投射物生命周期与碎片落地 |
 | `audio_runtime_tests` | 21 | 32 voice、pan/距离/低通、WAV 解码边界、重采样/切片与混音 |
 | `game_export_tests` | 19 | Scene/BP/SM/MI/T 依赖闭包、动态资产清单、模型 sidecar、包内配置、PE 原生依赖、私有运行时、源路径约束与失败保留 |
-| `animation_preflight_tests` | 291（285 后加 6 项 skin bounds：逐关节预计算比对、快/精确路径包含性、跨关节混合、空关节/空 section 与退化 palette；动画工具 ON） | SK/Sequence/Montage 三层资产与播放：SK 拓扑/槽位/曲线注册表、`skinning.root` 拒绝与强制 `skeleton`（`AnimationSkeleton` 17）、sidecar 帧信息/曲线/notify/采样（`AnimationSequenceData` 14）、Montage 解析/跨文件绑定/缓存键/`rotationMethod`（`AnimationMontage` 24）、catalog/窗口装配/`PlayMontage` 拒绝矩阵/旋转透传/Static pose/section link/入口 startTime（`AnimationScriptData` 30）、notify/notifyState 区间执行/feedback（`NotifyPlayback` 11）、旋转与 Static warp point（`MotionWarping` 28）、完整权重导入 30；ozz 采样、只读 UE 盘点、FBX 审计、动态/保守 bounds 与导入期逐关节 AABB 比对、播放/暂停/seek/循环、原地根 TRS 消除、一次性完成、无效请求保持、独立时钟、冻结姿态及实际渲染提交历史；Motion 特征空间/速度/SE(3) 循环/完整窗口、总体统计、输入身份/失效、固定频率历史/epoch/重置与预测；精确搜索、继续/重选策略、运行时关节速度搬运、局部姿态交叉混合、原根周期均速与有界步频、按实际速率采样的继续候选；两骨 IK、ball/heel 双参考点、静态锚点/坡面法线、走跑滚动支点/释放、Auto/Ball/Ankle 显式支点与重置、摆动脚骨盆间隙、pre-IK/混合源/旧快照隔离；有限时惯性化 C1/端点/重复中断、有界视觉根偏移与查询隔离；显式 retarget 映射/拓扑、不同骨长/rest axes、target palette/混合、source Montage/catalog 与不兼容 source/profile/MM 拒绝；参考姿态偏移解析/拒绝、源参考旋转差及未映射骨继承 |
+| `animation_preflight_tests` | 412（动画工具 ON；2026-11-16 Release 实跑 412/412） | SK/Sequence/Montage 三层资产与播放：SK 拓扑/槽位/曲线注册表、`skinning.root` 拒绝与强制 `skeleton`（`AnimationSkeleton` 17）、sidecar 帧信息/曲线/notify/采样与 `refFrameIndex`/`refPoseType`（`AnimationSequenceData` 17）、Montage 解析/跨文件绑定/缓存键/`rotationMethod`（`AnimationMontage` 24）、catalog/窗口装配/`PlayMontage` 拒绝矩阵/旋转透传/Static pose/section link/入口 startTime（`AnimationScriptData` 30）、notify/notifyState 区间执行/feedback（`NotifyPlayback` 11）、旋转与 Static warp point（`MotionWarping` 28）、完整权重导入 30；ozz 采样、只读 UE 盘点、FBX 审计、动态/保守 bounds 与导入期逐关节 AABB 比对、播放/暂停/seek/循环、原地根 TRS 消除、一次性完成、无效请求保持、独立时钟、冻结姿态及实际渲染提交历史；Motion 特征空间/速度/SE(3) 循环/完整窗口、总体统计、输入身份/失效、固定频率历史/epoch/重置与预测；精确搜索、继续/重选策略、运行时关节速度搬运、局部姿态交叉混合、原根周期均速与有界步频、按实际速率采样的继续候选；两骨 IK、ball/heel 双参考点、静态锚点/坡面法线、走跑滚动支点/释放、Auto/Ball/Ankle 显式支点与重置、摆动脚骨盆间隙、pre-IK/混合源/旧快照隔离；有限时惯性化 C1/端点/重复中断、有界视觉根偏移与查询隔离；显式 retarget 映射/拓扑、不同骨长/rest axes、target palette/混合、source Montage/catalog 与不兼容 source/profile/MM 拒绝；参考姿态偏移解析/拒绝、源参考旋转差及未映射骨继承；BlendSpace 1D/2D 双线性权重、per-sample rate/syncGroup 与非法网格拒绝、声明顺序 2D 根源、资产 weightSpeed、曲线累加/同帧分支；Pose Graph 入口根源/时钟、替换图清旧入口、一次性完成与 Crossfade、MontagePlayer section/notify/warp/入口时间/正值上升沿重播/持续正值不自动循环/非根源 overlay 不改 base 时钟/活动 target 与 InPlace 更新、双输入 Slot 空权重全身与白名单遮罩、Save/Use 反向声明依赖；LocalSpaceBase reference frame、RefPoseType、LocalSpaceBase 与 RotationOffsetMeshSpace 的 FastLerp 部分权重、平移父空间差值 |
 
 `ctest` 用套件前缀选择：
 
@@ -391,7 +391,9 @@ World/Graph gate 退出码 0、stderr 为空并正常 teardown。
 同套件还区分地面当前受阻的实际水平速度预测、自由移动 desired 和空中 desired，
 不把其通过解释为未来碰撞预测完成。
 `SkeletalBlend` 验证 ozz 局部 TRS 混合、旋转归一化、混合打断、时钟/完成状态、
-inPlace 与冻结姿态所有权。模块通过不等同于正式控制器的动作效果通过。
+inPlace 与冻结姿态所有权。`SkeletalBlendSpace` 验证 BlendSpace1D 的第二片段按 A
+的归一化相位采样、端点权重与单片段逐元素一致、权重夹紧与切片段清理。
+模块通过不等同于正式控制器的动作效果通过。
 
 `ScriptAnimationWorld` 验证导入字节身份不匹配和批次失败原子性；
 真实 CLR/Jolt 的 `ScriptAnimationTest` 验证正式统计绑定、冻结查询/排名、
@@ -399,6 +401,39 @@ inPlace 与冻结姿态所有权。模块通过不等同于正式控制器的动
 `FormalGaspControllerPublishesNativeSelectionsForGroundedAndAirborneActions`
 实际执行资源侧 `Gasp.CharacterBlueprint` 并记录原生选帧，区别于旧的
 `LegacyLocomotion*` 直接选片段夹具；动作类别曾出现不证明长时间稳态或碰墙策略。
+`ScriptLocomotionTest` 验证图级 State Alias、`VerticalSpeed`、BlendSpace1D 的
+sample/权重选择，以及 Conduit 的同帧落地、入口规则回落、链、环与入口 conduit；
+`MaxTransitionsPerFrame` 预算与 `SkipFirstUpdateTransition` 的首帧不混合语义
+也在同一套件覆盖；`AutomaticRule`、`MinTimeBeforeReentry` 与
+`TransitionRequest` 的一次消费语义同样由该套件验证；Pose Graph 探针验证
+`UseCachedPose`/`AdditiveClip`/`Slot` 的
+决策输出与互斥校验，`LayeredBoneBlend` 探针验证 `LayerClip`/`LayerAlpha`/
+`LayerMask` 的透传与拒绝项，masked Slot montage 探针验证 `Slot`/`SlotMask`/
+`SlotAlpha`；原生 `SkeletalSlotMontage` 验证命中/未命中关节、alpha 与完成语义。
+原生 `SkeletalCachedPose` 另验证命名分支的同帧求值、blend 轴权重与回退到快照。
+`AnimationScriptData` 验证 `BS_*.json` 解析、sample/clip 校验与 catalog 发布，
+包括 2D 的 `axisX/axisY`、四角 `x/y`、矩形网格与缺角拒绝；图探针验证
+`BlendSpace` 名称解析成运行期 samples（未知/未解析引用被拒绝）。
+`SkeletalBlendSpace2D` 验证四角/中心双线性权重、per-sample rate 相位对齐与
+非矩形网格拒绝；`SkeletalPoseGraph.MontageSlot*` 验证 Montage section 推进、
+notify begin/end、Slot 白名单遮罩、未激活 pass-through 以及未知
+Montage/section/Slot 输入拒绝。托管
+`PoseGraph2DAndMontageBridge` 验证双轴值、四个 2D 权重、`MontageId` 透传和
+非法定义拒绝；`InPlaceStripsSequenceRootMotion` 验证原生图通过
+`SetPoseGraphInPlace(true)` 恢复绑定根，避免角色与胶囊双倍位移。
+`EntrySwitchMovesRootClockAndCrossfades` 验证入口切换同时切换到可达根源、
+从 `startPosition` 重置目标时钟并在 `blendSeconds` 内交叉淡入；
+`BlendSpaceEntryProvidesRootClockAndClip` 验证 BlendSpace 入口提供基准片段时钟
+而不是沿用 Idle；`OneShotSequenceRootReportsCompletionAtClipEnd` 验证非循环
+根源到达 duration 后在下一入口重新启动；`PoseNodeStateCompletedUsesEffectiveClip`
+验证 PoseNode 状态的 `StateCompleted` 使用实际求值片段。Third Person 的
+500 cm/s 默认移动、Shift 慢走与
+UE CDO 对齐参数由资源侧蓝图契约记录，不把图测试当成正式手感测试。
+这些测试只证明图决策与局部混合，不证明资源侧姿态观感。
+原生 `SkeletalAdditive` 验证 LocalSpaceBase 增量的平移/旋转/缩放复合与 alpha
+收缩，`SkeletalCachedPose` 验证快照冻结、无根位移与 additive 叠加。
+纯代码 `AnimationPoseGraph` 由 `PoseGraphFlattensNodesCachesAndRejectsCycles`
+验证拓扑求值、Save/Use 同帧、Blend/Additive/Layer/Slot 扁平化与环/未知输入拒绝。
 
 `EditorUiTest.MotionMatching*` 验证同代查询/代价、Selected/Continue/前五名、
 文字转义、固定槽位、展开状态的暂停静默、隐藏条件、短视口滚动/输入隔离和单行摘要；
@@ -1370,7 +1405,7 @@ UI 的 `DebugDrawOverlay`、`DebugDrawLabelTest` 与 `EditorUiTest.DebugDraw*`
 
 动画 P0 工具使用可选 `VULKANLEARN_BUILD_ANIMATION_TOOLS=ON`；
 构建 `vl_animation_probe` 和 `animation_preflight_tests` 后，运行
-`ctest --test-dir build -R "^(AnimationSampling|AnimationDependency|UnrealProjectInventory|AnimationFbxInspection|SkeletalImport|SkeletalBlend|AnimationRetarget|SkinRenderHistory|MotionHistory|MotionPrediction|MotionFeatures|MotionRuntimeQuery|MotionDatabase|MotionDatabaseInputs|MotionMatching)\." --output-on-failure`。
+`ctest --test-dir build -R "^(AnimationSampling|AnimationDependency|UnrealProjectInventory|AnimationFbxInspection|SkeletalImport|SkeletalBlend|SkeletalBlendSpace|AnimationRetarget|SkinRenderHistory|MotionHistory|MotionPrediction|MotionFeatures|MotionRuntimeQuery|MotionDatabase|MotionDatabaseInputs|MotionMatching)\." --output-on-failure`。
 它验证依赖采样、只读盘点与 FBX 审计，不替代 GASP 导出或 VL 动态渲染验收。
 范围见 [动画预检工具](animation-preflight-tools.md)。
 P1 CPU 导入与采样、九影响权重及 MikkTSpace 顶点展开由 `SkeletalImport` 覆盖，
