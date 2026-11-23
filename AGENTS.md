@@ -500,6 +500,15 @@ under the gitignored resource `Generated/` tree and is selected with
 `--initial-scene`; a fresh resources clone does not contain it until that
 publication is produced locally. Production/unattended runs of a blueprint scene
 add `--autoplay` to enter Play without pressing the editor button.
+The standard terrain map is `Maps/SC_pegasus_rvt/SC_pegasus_rvt.json`: an authored
+scene plus 16 `Terrains/TR_pegasus_rvt_tile_*.json`, with cook inputs under
+`Author/` (tile heightmaps, paint sidecars and `world.author.json`), shared layer
+texture descriptors/sources, material instances and the water mesh inside the same
+map directory. Its cooked package is the gitignored
+`VT/worldV2/SC_pegasus_rvt/`; rebuild it with
+`main_editor.exe --terrain-vt-cook --initial-scene Maps/SC_pegasus_rvt/SC_pegasus_rvt.json --exit-after-frames 2`.
+`Generated/Validation/TerrainCompositedVT/Variants/...` is validation evidence, not
+the map source.
 Default selection is not proof of complete runtime/package acceptance; check the scoped evidence
 linked from [the acceptance entry](documents/reference/rendering/terrain-composited-vt-acceptance.md).
 Gates that were explicitly deferred rather than passed (full P4 editing, authoring-mode fault
