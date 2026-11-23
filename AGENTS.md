@@ -491,14 +491,15 @@ cross-World Candidate/Active/Retiring admission use the unchanged P0Frozen hash 
 Rendering requires validated real production inputs, not dependency hashes alone. Cook, dependency identity,
 material-page residency/feedback, height atlas/LUT, budgets and publication rules belong to
 [the composited VT contract](documents/contracts/terrain-composited-vt.md).
-The default scene in `config/config.json` is unchanged from the pre-RVT baseline
-(`Generated/HoudiniPegasusIsland/SC_terrain_pegasus_4x4.json`). The RVTv2 V2 Full16
-CoverageAtlas publication lives at
+The default scene in `config/config.json` is
+`Maps/SC_lookdev_article/SC_lookdev_article.json` (the neutral lookdev article
+composition: colour calibrator mesh, lookdev camera and the neutral studio HDRI).
+The RVTv2 V2 Full16 CoverageAtlas publication lives at
 `Generated/Validation/TerrainCompositedVT/Variants/RVTv2_Full4x4_R8192_Default_CoverageAtlas/SC_composited_vt_4x4.json`
 under the gitignored resource `Generated/` tree and is selected with
-`--initial-scene`; a fresh resources clone does not contain either generated scene
-until it is produced locally. Production/unattended runs of a blueprint scene add
-`--autoplay` to enter Play without pressing the editor button.
+`--initial-scene`; a fresh resources clone does not contain it until that
+publication is produced locally. Production/unattended runs of a blueprint scene
+add `--autoplay` to enter Play without pressing the editor button.
 Default selection is not proof of complete runtime/package acceptance; check the scoped evidence
 linked from [the acceptance entry](documents/reference/rendering/terrain-composited-vt-acceptance.md).
 Gates that were explicitly deferred rather than passed (full P4 editing, authoring-mode fault
