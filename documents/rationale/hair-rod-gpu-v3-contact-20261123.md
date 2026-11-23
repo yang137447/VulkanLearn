@@ -547,6 +547,46 @@ validation 0 条消息。
 交给线搜索决定接受与否，而不会让整个 guide 掉出 KKT 秩。目标是把 2000 guide 的
 28 个失败压到个位数，再把 runtime 资产切到 V3。
 
+## 第十轮：退化点正则化兜底，以及 shader cache 的一个坑
+
+### 正则化（不再硬失败）
+
+压缩路径没有 10 宽那套 supernode 兜底，`RodKkt10Condense` 在 `A` 或 `S` 奇异时直接
+`valid=false`，整个 guide 就掉出 KKT 秩。改成三处「加相对 eps 再试一次」：
+
+- `RodV2Inverse(A)` 失败 → `A += 1e-6 * max(diag, 1) * I` 重试；
+- `abs(det S)` 过小 → `S += 1e-6 * trace(S) * I` 重试；
+- 6 宽主元失败 → `diagonal += 1e-6 * max(diag, 1)` 重试。
+
+这样退化点只得到一个近似方向，交给 merit 线搜索裁决，而不是让整个 guide 失败。
+
+| 场景 | 正则化前 | 正则化后 |
+| --- | --- | --- |
+| 200 guide / 400 帧 | 4 失败，merit 9.38 | **3 失败**，merit **0.207** |
+| 2000 guide / 120 帧 | 28 失败，merit 3.81e+04，maxBlockDefect 123.2 | **21 失败**，merit **0.79**，maxBlockDefect **0.602** |
+| 16 guide 胶囊 | 0 失败，残差 2.488e-05 | 0 失败，残差 **2.488e-05**（不变） |
+| 16 guide 胶囊+SDF | 0 失败，残差 2.486e-05 | 0 失败，残差 **2.486e-05**（不变） |
+
+### shader cache 的坑
+
+改完 `rodKkt10BandSolve.glsl`（被 `rodV2Kernel.glsl` 传递包含）之后，胶囊路径读到了新代码，
+但 `rodV3ImplicitSdf` 那条管线仍在用旧 SPV：同一场景同一帧读到 5.810e-05（旧值）而不是
+2.486e-05（新值）。加 `--shader-force-rebuild` 后立刻变成 2.486e-05。
+
+所以**改共享 hair 求解器 include 之后，SDF 管线要用 `--shader-force-rebuild` 验证一次**，
+并用残差数值确认它真的换了代码，不能只看「进程起来了」。
+
+### 成本真相（决定 A 能不能切）
+
+同一 2000 guide 规模：V1 的 hair pass 是 **6.83 ms**，V3 现在是 **607 ms**，差 **~89x**。
+第九轮的压缩求解已经把「TDR」变成「能跑」，但 60 fps 需要再降两个数量级：
+
+- 分布式 CR：约 6x（把 32 点顺序 Thomas 的 lane 冗余去掉）→ ~100 ms；
+- 再降牛顿轮数（现在难 guide 要 64 轮）→ 可能再 8x → ~12 ms。
+
+也就是说 A 的「切 runtime」还需要两步结构性的成本下降，而不是继续调求解器细节。
+在 607 ms / 帧、1.05% guide 失败的前提下切 runtime 资产是不合适的。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
