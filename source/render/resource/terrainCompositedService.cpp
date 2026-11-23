@@ -221,6 +221,10 @@ void TerrainCompositedService::SetCookMode(bool enabled) { GlobalCookMode.store(
 
 bool TerrainCompositedService::CookMode() { return GlobalCookMode.load(); }
 
+void TerrainCompositedService::SetQualityLenient(bool enabled) { GlobalQualityLenient.store(enabled); }
+
+bool TerrainCompositedService::QualityLenient() { return GlobalQualityLenient.load(); }
+
 void TerrainCompositedService::SetAuthoringMode(bool enabled) { GlobalAuthoringMode.store(enabled); }
 
 bool TerrainCompositedService::IsAuthoringMode() { return GlobalAuthoringMode.load(); }

@@ -28,6 +28,9 @@ struct LaunchOptions
     bool runWorldGraphTransactionTest = false;
     bool forceShaderRebuild = false;
     bool terrainVtCook = false;
+    // 互动运行时允许姿态质量在 10 s deadline 后继续渲染（只记录证据，不终止进程）；
+    // 验收/采集仍走默认的严格路径。
+    bool terrainQualityLenient = false;
     bool offlineRender = false;
     bool exitAfterTests = false;
     // 逐 pass GPU 计时：默认关闭以保证普通日志与逐帧路径无额外开销；

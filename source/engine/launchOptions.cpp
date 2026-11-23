@@ -236,6 +236,11 @@ LaunchOptions ParseLaunchOptions(int argc, char** argv)
             options.terrainVtCook = true;
             continue;
         }
+        if (argument == "--terrain-quality-lenient")
+        {
+            options.terrainQualityLenient = true;
+            continue;
+        }
 
         if (argument == "--worker-thread-count")
         {
@@ -451,6 +456,7 @@ void PrintLaunchUsage()
         << "       main.exe [--present-mode <auto|fifo|mailbox|immediate>]\n"
         << "       main.exe [--validation | --no-validation]\n"
         << "       main.exe [--gpu-stats]\n"
+        << "       main.exe [--terrain-quality-lenient]\n"
         << "       main.exe [--prerender-skin]\n"
         << "       main.exe [--perf-jsonl <path>]\n"
         << "       main.exe [--initial-scene <scene-path>] [--console-command \"<cmd>\"]...\n"

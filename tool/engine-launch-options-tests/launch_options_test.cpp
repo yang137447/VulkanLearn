@@ -49,6 +49,14 @@ TEST(LaunchOptions, AutoplayIsOffByDefaultAndOnlyOptsInExplicitly)
     EXPECT_FALSE(options.perfJsonlPath.has_value());
 }
 
+TEST(LaunchOptions, TerrainQualityLenientIsOffByDefaultAndOptsInExplicitly)
+{
+    EXPECT_FALSE(Parse({"main_game.exe"}).terrainQualityLenient);
+    const auto options = Parse({"main_game.exe", "--terrain-quality-lenient"});
+    EXPECT_TRUE(options.errorMessage.empty()) << options.errorMessage;
+    EXPECT_TRUE(options.terrainQualityLenient);
+}
+
 TEST(LaunchOptions, TerrainVtCookIsExplicitAndKeepsSceneOverride)
 {
     EXPECT_FALSE(Parse({"main_editor.exe"}).terrainVtCook);

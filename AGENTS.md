@@ -237,7 +237,11 @@ build\bin\main_game.exe --initial-scene Maps/SC_fracture_playground/SC_fracture_
 `quit` command requests the same clean shutdown path. `--autoplay` starts
 blueprint scenes in Play for this process only (it overrides
 `config/config.json -> scripts.autoPlay` without writing the file), which is
-how AI runs a playable map headlessly.
+how AI runs a playable map headlessly. `--terrain-quality-lenient` keeps a
+terrain pose that misses the frozen 10 s convergence budget alive: it records
+`RVT_QUALITY_TIMEOUT`, restarts the budget, and leaves the arrival gate usable
+instead of terminating the render thread. Interactive terrain play should pass
+it; acceptance/capture runs stay strict by default.
 
 Game-flavor packaging requires a Release game cache and the game binary:
 

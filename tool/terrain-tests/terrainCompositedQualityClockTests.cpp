@@ -90,6 +90,22 @@ TEST(TerrainCompositedQualityClock, InvalidClockInputAndDuplicateStartRejected)
     EXPECT_THROW(clock.SetPose(1, std::numeric_limits<double>::infinity()), std::invalid_argument);
 }
 
+TEST(TerrainCompositedQualityClock, ResetAfterTimeoutRestartsOnlyTheFailedWindow)
+{
+    TerrainCompositedQualityClock clock;
+    clock.Start(false, 0, 86748, 10000);
+    clock.SetPose(1, 1000);
+    ASSERT_TRUE(clock.Observe(2000, true));
+    clock.SetPose(2, 100000);
+    EXPECT_FALSE(clock.ResetAfterTimeout(105000));
+    ASSERT_TRUE(clock.Failed(200000));
+    EXPECT_TRUE(clock.ResetAfterTimeout(200000));
+    EXPECT_FALSE(clock.Failed(200001));
+    EXPECT_DOUBLE_EQ(clock.DeadlineMs(), 210000);
+    EXPECT_TRUE(clock.Observe(205000, true));
+    EXPECT_FALSE(clock.Failed(1000000));
+}
+
 TEST(TerrainCompositedQualityClock, ConcurrentDeadlineReadsAndValidObservations)
 {
     TerrainCompositedQualityClock clock;

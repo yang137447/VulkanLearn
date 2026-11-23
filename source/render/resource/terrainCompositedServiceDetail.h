@@ -108,6 +108,9 @@ using Baker = TerrainCompositedBakeGpu;
 
 extern std::atomic<bool> GlobalCookMode;
 
+// 互动运行时把姿态质量超时降级为非致命证据；验收默认仍走严格路径。
+extern std::atomic<bool> GlobalQualityLenient;
+
 extern std::atomic<bool> GlobalAuthoringMode;
 
 extern std::atomic<uint64_t> NextGeneration;

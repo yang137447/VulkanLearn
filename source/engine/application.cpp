@@ -50,6 +50,7 @@ static int RunApplicationBody(
     }
     const LaunchOptions launchOptions = ParseLaunchOptions(argc, argv);
     TerrainCompositedService::SetCookMode(launchOptions.terrainVtCook);
+    TerrainCompositedService::SetQualityLenient(launchOptions.terrainQualityLenient);
     if (launchOptions.showHelp)
     {
         PrintLaunchUsage();
