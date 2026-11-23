@@ -839,6 +839,58 @@ rodState.guides[slot].diagnostic = vec4(float(failure), 42.0, 43.0, float(v2Iter
 当前代码已回退到上一次验证过的状态：`SC_tressfx_rod_animated` 跑 100 帧 exit 0、
 validation 0 条消息、稳态 6 个 guide 失败。
 
+## 第十八轮：删掉死代码腾出 shared，探针终于跑通，结论反转
+
+### 死代码删除（已验证）
+
+默认路径早就是压缩 6x6 + 分布式 CR，10 宽那套整条链都是死代码。删掉
+`RodKkt10Band` / `RodKkt10AssemblePoint` / `RodKktEquilibratedPivot` /
+`RodKkt10FactorNode` / `RodKkt10FactorSupernode` / `RodKkt10SolveBand` 及其工作区，
+以及只服务它们的探针驱动和 **18 个 shared 声明**。
+
+| 指标 | 删除前 | 删除后 |
+| --- | --- | --- |
+| shared 占用 | 约 43 KB | **约 26 KB** |
+| hair pass（2000 guide） | 87–95 ms | **73.8–80.2 ms** |
+| 稳态失败率 | 0.283% | 0.289%（噪声内） |
+| 帧 118 | — | `gpuStatus=0`、0 失败、defect 9.98e-05 |
+
+16 guide 胶囊/SDF 不变且绿（5.800e-05 / 2.488e-05，0 失败），runtime 120 帧
+validation 0 条消息。
+
+### 探针跑通了，而且推翻了我原来的假设
+
+有了 shared 余量之后，merit 比探针一次就跑通（上一轮同样改动直接 device-lost），
+这本身印证了「48 KB 顶到天花板」的诊断。
+
+**两个关键读数**：
+
+1. 失败 guide 在最后一次试算的 `merit / 迭代起点 merit` 是 **0.004 – 0.76**，
+   即 **merit 确实下降了**，比值远小于 Armijo 右端（≈1）。20 个失败里 19 个如此。
+   所以「merit 不下降」这个前提是错的——我前面的推理一直建立在这个错误前提上。
+2. 用同一通道读 validity 原因码：9 个失败 guide 里 8 个 **reason = 0**（该 lane 状态合法）。
+
+### 一个具体的解释：`energies` 被第二个 kernel 覆写
+
+`rodKernel.glsl:694` 也会写 `rodState.guides[slot].energies = energy`。也就是说
+`energies` 这条字段被两个 kernel 写，sim kernel 写完会被 follow kernel 覆盖，
+所以之前几轮写进 `energies` 的探针值读出来都是 0；而 `diagnostic` 只由 sim kernel 写，
+用常量 42/43 自证 PASS。这解释了全部「通道坏掉」的假象。
+
+### 现在的矛盾点（下一轮的起点）
+
+按现存代码，试算被接受的条件是
+
+```text
+v2DomainValid != 0 && v2Merit <= (1 - 1e-4 * v2Alpha) * merit
+```
+
+而实测：merit 比 0.004（下降 99.6%）、lane 状态合法（reason 0），却仍然 `v2Accepted == 0`
+并走到 `RodFail(3u)`。说明我对这条接受路径的理解还不完整。下一轮该做的是**逐行读**
+kernel 第 1028–1091 行与 `merit` 的定义（它是不是每个 lane 各自持有的私有副本、
+是否在 trial 之间被改写），以及 `v2DomainValid` 是否走了
+`isnan(v2Merit) || isinf(v2Merit)` 那条置零分支——那是唯一不依赖 lane 合法性的置零路径。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
