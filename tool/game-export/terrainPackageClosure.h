@@ -51,7 +51,8 @@ inline fs::path Resolve(const fs::path& root, const std::string& name)
         path /= component;
         Require(!fs::is_symlink(fs::symlink_status(path)), "Terrain VT dependency must not be a symlink");
     }
-    Require(fs::is_regular_file(path), "Missing terrain VT dependency");
+    if (!fs::is_regular_file(path))
+        throw std::runtime_error("Missing terrain VT dependency: " + path.generic_string());
     const auto logical = fs::canonical(path).lexically_relative(fs::canonical(root));
     Require(!logical.empty() && *logical.begin() != "..", "Terrain VT dependency escaped resource root");
     return path;
