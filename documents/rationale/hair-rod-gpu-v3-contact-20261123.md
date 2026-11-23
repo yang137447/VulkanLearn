@@ -1039,6 +1039,58 @@ U = 0.5*k*sum_{a<b, j=1..3} |((x_a,j - x_b,j) - (x*_a,j - x*_b,j))|^2,  k = 0.1 
 这是 B 的主要架构代价）→ 2）体积项 → 3）资产字段与验收。** 第 1 步之前需要确认
 C2 的审计结论，否则会把未审计的能量形式搬上 GPU。
 
+## SDF 接触为什么在正式资产上「不做事」：带宽是被 margin 卡住的
+
+之前记录过「SDF 采样在跑但产生不了修正，26 个穿透自由点里 25 个比可用带更深」。
+本轮把这条量化清楚了，并且找到了那个唯一有效的旋钮。
+
+域布局（`source/hair/tressfxSdfGrid.cpp:83-99`）：
+
+```text
+resolution = clamp(round(maxExtent / cellSize), 48, 64)
+side       = (maxExtent + 2*margin) / (1 - 4/resolution)
+cellSize'  = side / resolution
+truncation = margin + 2*cellSize'          // 这就是可用带
+```
+
+女性身体代理的 `maxExtent = 47.752 cm`（实测 OBJ），场景给的是 `cellSize: 1`，
+于是 `resolution = 48` 被下限钳住。代入得：
+
+| margin (cm) | cellSize' | truncation（可用带） |
+| --- | --- | --- |
+| **0.05（当前）** | 1.088 | **2.225 cm** |
+| 2.0 | 1.176 | 4.352 cm |
+| **4.0** | 1.267 | **6.534 cm** |
+| 6.0 | 1.358 | 8.716 cm |
+
+关键结论：**`cellSize` 不能加宽可用带**——它只决定 resolution，而 resolution 已经被
+48 的下限钳住；`resolution` 越大反而 cellSize' 越小、带越窄（64³ 时只有 1.645 cm）。
+**只有 `margin` 能加宽带**，代价只是格子略微变粗（1.09 → 1.27 cm，48³ 体素数不变）。
+
+### 把 margin 提到 4 cm 的实测结果：能生效，但 2000 guide 撑不住
+
+用派生场景（`Generated/Validation/SC_tressfx_rod_sdf_*_margin4.json`，只改 margin）
+跑正式规模，日志确认参数确实生效：
+
+```text
+proxyTriangles=7391 resolution=48^3 cells=110592 bindCellSize=1.2671 margin=4
+(domain is rebuilt per frame)
+```
+
+`bindCellSize=1.2671` 与上面手算的 1.267 一致 ✓。但两个场景都在**帧 1 就 device-lost**
+（`-1073740791`）。
+
+合理的解释是：带宽从 2.2 cm 扩到 6.5 cm 之后，原本被「看不见」而**完全不产生接触**的
+深层点全部进入 SDF 可用带，SDF 侧活跃接触从几乎为空变成大面积存在，每个点的 3 个接触槽
+很快被填满，KKT 行数和解算量随之上升；再乘以 2000 guide 与 SDF 每帧重建域，就超过了
+提交上限。
+
+所以「让 SDF 真正生效」在机制上是通的（就是调 margin），但在当前成本水平下不可用。
+这不属于 A 的求解器缺陷，而是 C 阶段的成本问题：**margin 该取多少，要和性能预算一起定**
+（例如 margin 2 cm 先跑通、或配合降低 SDF 重建频率/活跃槽上限）。
+
+本轮未修改正式资产；派生场景只用于验证，margin 仍是 0.05。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
