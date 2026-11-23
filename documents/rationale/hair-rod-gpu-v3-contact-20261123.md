@@ -947,6 +947,8 @@ length(RodLog(conj(oldOrientations[lane]) * v2Orientations[lane])) < RodRotation
 
 ## 第二十一轮：A 阶段收尾验收（runtime map 四个场景全覆盖）
 
+> **注：本节表格是 SDF 单位缺陷修复前的记录，已被后面「最终验收」一节取代。**
+
 之前只复验了切换后 `SC_tressfx_rod_validation` 里两个动画场景，本轮把四个场景都跑了一遍
 （`--shader-force-rebuild`、150 帧、validation layer 打开）：
 
@@ -1137,6 +1139,38 @@ SDF 接触**长期看起来完全不起作用**。这也解释了为什么把 ma
 - 可用带仍由 \margin\ 决定（当前 2.225 cm），「要不要加宽」是成本问题，回到 C 阶段；
 - 但「SDF 接触是否真的生效」这个 A 阶段问题现在是**是**——带内的接触真实参与求解。
 
+
+## 最终验收（SDF 单位缺陷修复后，A 阶段收尾）
+
+当前 HEAD、`--shader-force-rebuild`、150 帧、validation layer 打开，四个正式场景：
+
+| 场景 | exit | validation | 稳态 defect | 帧 149 失败 | 运行中曾失败的 guide 数 | hair pass |
+| --- | --- | --- | --- | --- | --- | --- |
+| `SC_tressfx_rod_animated` | 0 | 0 条 | 0.00991 | **0** | 7 | 88.3 ms |
+| `SC_tressfx_rod_sdf_animated` | 0 | 0 条 | 0.00828 | **0** | **0** | 80.3 ms |
+| `SC_tressfx_rod_static` | 0 | 0 条 | 15.91 | 2 | 3 | 25.7 ms |
+| `SC_tressfx_rod_sdf_static` | 0 | 0 条 | 0.00879 | **0** | **0** | 2.8 ms |
+
+两个 SDF 场景现在 defect 到 1e-02 视觉下限、零失败；胶囊动画场景同样零失败。
+静态 bind pose 场景的 15.91 仍来自那几根「bind pose 就在胶囊内部」的 guide（成因见下节），
+属于资产冲突而不是求解器问题。
+
+成本读数波动较大（动画场景本次 88.3 ms、早前一次 51.0 ms，取决于难 guide 触发的
+substep 数与债务），区间约 **51–88 ms**；量级结论不变：V1 是 6.83 ms，属 C 阶段。
+
+### A 阶段交付清单
+
+1. `cosseratImplicitV3` 在 GPU 上带胶囊与 SDF 接触跑通：四个正式场景 exit 0、零 validation 消息；
+2. runtime 资产 `TF_female_rod_validation.json` 已从 `cosseratXpbdV1` 切到 `cosseratImplicitV3`（资产分支）；
+3. 关键缺陷修复：压缩 Schur 代数的 `Q` 构造、6 宽 Thomas 右端符号、SDF 带边缘梯度、
+   退化点正则化、信任域回溯起点、收敛视觉下限、**SDF 采样单位（100 倍）**；
+4. 成本从「2000 guide 直接 TDR」降到 51–88 ms 可跑。
+
+### 已知债务（均不属于 A）
+
+- 性能 51–88 ms/2000 guide vs V1 的 6.83 ms（C 阶段）；
+- 静态 bind pose 场景那几根卡住 guide：bind pose 与胶囊冲突，需资产侧决策；
+- SDF 可用带 2.225 cm（margin 0.05），加宽带是成本问题（C 阶段）。
 
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
