@@ -909,7 +909,13 @@ void main()
         // 每个 substep 的活跃集从空集开始（与 CPU SolveStage 一致：乘子归零、
         // excluded 位清零）。乘子只在本 substep 内连续迭代。
         if (lane == 0u)
+        {
             rodKktSubstep = substep;
+#ifdef VL_ROD_SDF
+            rodKktSdfAcceptedSamples = 0u;
+            rodKktSdfRejectedSamples = 0u;
+#endif
+        }
         barrier();
         // 深重叠先做一步位置投影修复（对应 CPU RepairInitialContactOverlap），
         // 否则隐式牛顿的 merit 线搜索只能退到极小步。
@@ -1170,10 +1176,17 @@ void main()
             float(v3CompletedLoadStages), float(v3BacktrackCount), 0);
 #endif
 #ifdef VL_ROD_KKT10_DEBUG
-        // 诊断：活跃 contact 槽数 / contact 分量残差 / 位置分量残差 / max |lambda|/F。
+        // 诊断：SDF 查询接受/拒绝次数（仅 SDF 变体）或活跃 contact 槽数，
+        // 以及 contact 分量残差 / 位置分量残差 / max |lambda|/F。
+#ifdef VL_ROD_SDF
+        rodState.guides[slot].residuals = vec4(float(rodKktSdfAcceptedSamples),
+            float(rodKktSdfRejectedSamples), uintBitsToFloat(rodKktDebug.z),
+            uintBitsToFloat(rodKktDebug.w));
+#else
         rodState.guides[slot].residuals = vec4(float(rodKktDebug.x),
             uintBitsToFloat(rodKktDebug.y), uintBitsToFloat(rodKktDebug.z),
             uintBitsToFloat(rodKktDebug.w));
+#endif
 #ifndef VL_ROD_V3_CONTINUATION
         // energies.x = 本帧累计的回溯减半次数，y = 重叠修复触发次数，
         // z = 修复前的最深重叠（米），w 保留。

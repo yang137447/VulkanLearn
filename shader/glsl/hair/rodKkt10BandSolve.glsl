@@ -162,29 +162,80 @@ mat3 RodKkt10CapsuleHessian(uint collider, vec3 position, vec3 normal)
 }
 
 #ifdef VL_ROD_SDF
-// SDF 代理场：局部厘米场 -> 世界米。gap 与梯度都换算到米，
-// 与 rodKernel.glsl 的 V1 SDF 分支（(d - range.x) * 0.01）保持一致。
+// 诊断计数：本帧 SDF 查询被接受/拒绝的次数。用来区分“带宽内没有需要处理的点”
+// 与“守卫把全部查询都拒掉了”。只在 VL_ROD_KKT10_DEBUG 下累计，生产编译零成本。
+shared uint rodKktSdfAcceptedSamples;
+shared uint rodKktSdfRejectedSamples;
+
+// SDF 代理场：局部厘米场 -> 世界米，返回**单位法向 + 几何 gap（米）**。
+//
+// 为什么不用原始梯度：栅格只在 ±truncation（= margin + 2*cellSize）带内有值，
+// 带外格子保持 clear 哨兵，`SdfTrilinear` 只要碰到任一哨兵角点就返回 1e10。
+// `SdfGradient` 的中心差分因此会在带边界附近产生 |grad| ~ 1e10 的梯度。V1 只把它
+// 归一化当法向用，所以看不出来；V3 的 KKT 里原始梯度直接进约束行/列
+// （`gᵀ dx = gap/L`、`-λ g/F`），1e10 会同时把行放大到无意义、把几何 gap 压成 0，
+// 结果是首个迭代局部丢秩。这里做三件事：
+//   1. 六个差分样本任一越界就认为该点场不可用（不猜外插），直接跳过接触；
+//   2. |grad| 必须落在真实 SDF 应有的量级（约 1），否则同样视为不可用；
+//   3. 输出单位法向 + `rawGap / |grad|` 的几何 gap，与胶囊路径统一量纲。
 bool RodKkt10SdfQuery(vec3 position, out float gap, out vec3 gradient)
 {
     gap = 0.0;
     gradient = vec3(0);
-    if ((rod.flags.w & 1u) == 0u)
-        return false;
-    vec3 local = (rod.worldToHair * vec4(position * 100.0, 1)).xyz;
-    float distanceValue = SdfTrilinear(local);
-    if (distanceValue >= SdfOutOfRangeDistance)
-        return false;
-    vec3 localGradient = SdfGradient(local);
-    if (!RodFinite(localGradient) || dot(localGradient, localGradient) <= 1.0e-12)
-        return false;
-    gap = (distanceValue - sdf.range.x) * 0.01;
-    gradient = mat3(rod.hairToWorld) * localGradient;
-    return true;
+    bool accepted = false;
+    if ((rod.flags.w & 1u) != 0u)
+    {
+        vec3 local = (rod.worldToHair * vec4(position * 100.0, 1)).xyz;
+        float distanceValue = SdfTrilinear(local);
+        // 中心差分半步长 = 0.5 * cellSize；除以 2h = cellSize 得到 cm/cm 梯度。
+        const float halfStep = 0.5 * sdf.originCell.w;
+        float negativeX = distanceValue >= SdfOutOfRangeDistance ? SdfOutOfRangeDistance :
+            SdfTrilinear(local - vec3(halfStep, 0.0, 0.0));
+        float positiveX = distanceValue >= SdfOutOfRangeDistance ? SdfOutOfRangeDistance :
+            SdfTrilinear(local + vec3(halfStep, 0.0, 0.0));
+        float negativeY = distanceValue >= SdfOutOfRangeDistance ? SdfOutOfRangeDistance :
+            SdfTrilinear(local - vec3(0.0, halfStep, 0.0));
+        float positiveY = distanceValue >= SdfOutOfRangeDistance ? SdfOutOfRangeDistance :
+            SdfTrilinear(local + vec3(0.0, halfStep, 0.0));
+        float negativeZ = distanceValue >= SdfOutOfRangeDistance ? SdfOutOfRangeDistance :
+            SdfTrilinear(local - vec3(0.0, 0.0, halfStep));
+        float positiveZ = distanceValue >= SdfOutOfRangeDistance ? SdfOutOfRangeDistance :
+            SdfTrilinear(local + vec3(0.0, 0.0, halfStep));
+        bool inRange = distanceValue < SdfOutOfRangeDistance &&
+            negativeX < SdfOutOfRangeDistance && positiveX < SdfOutOfRangeDistance &&
+            negativeY < SdfOutOfRangeDistance && positiveY < SdfOutOfRangeDistance &&
+            negativeZ < SdfOutOfRangeDistance && positiveZ < SdfOutOfRangeDistance;
+        if (inRange)
+        {
+            vec3 localGradient = vec3(positiveX - negativeX, positiveY - negativeY,
+                positiveZ - negativeZ) / sdf.originCell.w;
+            float magnitude = length(localGradient);
+            if (RodFinite(localGradient) && magnitude > 0.05 && magnitude < 20.0)
+            {
+                gradient = (mat3(rod.hairToWorld) * localGradient) / magnitude;
+                gap = (distanceValue - sdf.range.x) * 0.01 / magnitude;
+                accepted = true;
+            }
+        }
+    }
+    if (accepted)
+    {
+#ifdef VL_ROD_KKT10_DEBUG
+        atomicAdd(rodKktSdfAcceptedSamples, 1u);
+#endif
+    }
+    else
+    {
+#ifdef VL_ROD_KKT10_DEBUG
+        atomicAdd(rodKktSdfRejectedSamples, 1u);
+#endif
+    }
+    return accepted;
 }
 #endif
 
-// id -> 几何。gap 是「有符号距离 - margin」的物理米；gradient 的量纲与 gap 一致
-// （胶囊是单位向量，SDF 的 |grad| 一般不为 1）。
+// id -> 几何。gap 是几何距离（米，已扣 margin 并按 |grad| 归一），gradient 是**单位**法向。
+// 胶囊本身就是单位法向，因此两条路径在 KKT 里量纲一致。
 bool RodKkt10ContactGap(uint id, vec3 position, out float gap, out vec3 gradient)
 {
     gap = 0.0;
@@ -527,19 +578,51 @@ RodKkt10Vector RodKkt10ResidualVector(uint point)
 // 重叠修复
 // ---------------------------------------------------------------------------
 
+// 最深的几何重叠（米，<= 0 表示穿透）。只做一次场查询，不含修正。
+float RodKkt10DeepestOverlap(vec3 position)
+{
+    float deepest = 0.0;
+    for (uint collider = 0u; collider < 8u; ++collider)
+    {
+        if (collider >= params.counts.w)
+            continue;
+        float gap;
+        vec3 gradient;
+        if (!RodKkt10ContactGap(collider, position, gap, gradient))
+            continue;
+        deepest = min(deepest, gap / max(length(gradient), 1.0e-14));
+    }
+#ifdef VL_ROD_SDF
+    {
+        float gap;
+        vec3 gradient;
+        if (RodKkt10SdfQuery(position, gap, gradient))
+            deepest = min(deepest, gap / max(length(gradient), 1.0e-14));
+    }
+#endif
+    return deepest;
+}
+
 // 位置投影式接触修复，对应 CPU 的 RepairInitialContactOverlap。
 // 为什么需要它：隐式牛顿的 merit 是整根 guide 的残差平方和。当作者形状
 // 「整段穿进粗胶囊」时（本文验证资产里 chest 胶囊就会），一次到位的大位移
-// 会让相邻段的剪切/弯曲能暴涨，Armijo 只接受极小的 alpha，24 轮之后仍然停在
+// 会让相邻段的剪切/弯曲能暴涨，Armijo 只接受极小的 alpha，迭代停在
 // 「穿透但没有更差」的不动点上（实测 contact 残差 0.049 不再下降）。
-// CPU 因此在步进前单独做投影修复；这里在每个 substep 起点做同一件事，
-// 并且只在重叠超过总长 1% 时才动，避免把正常的小穿透从隐式求解手里夺走。
+// CPU 因此在步进前单独做投影修复；这里在每个 substep 起点做同一件事。
 // 代价：修复直接改位置、不携带动量，属于声明的稳定化步骤而非隐式解的一部分。
+//
+// 两个阈值分工（本轮修正）：trigger 决定「这个点值不值得修」，取总长 1%，
+// 避免把正常的小穿透从隐式求解手里夺走；target 是修到哪，取求解器自己的
+// gap 容差，即**推到贴面**。上一版用 trigger 同时当停止条件，会故意留下
+// 最多 3.4 mm 的穿透交给牛顿，而牛顿在 200-guide 规模上正是卡在这段收不掉。
 void RodKkt10RepairOverlap(uint point)
 {
     if (v2Positions[point].w == 0.0)
         return;
-    float threshold = 0.01 * v2LengthScale;
+    float trigger = 0.01 * v2LengthScale;
+    float target = RodKkt10GapTolerance();
+    if (!(RodKkt10DeepestOverlap(RodKkt10PointPosition(point)) < -trigger))
+        return;
     float deepest = 0.0;
     for (uint iteration = 0u; iteration < 16u; ++iteration)
     {
@@ -556,7 +639,7 @@ void RodKkt10RepairOverlap(uint point)
                 continue;
             float squared = max(dot(gradient, gradient), 1.0e-28);
             float geometricGap = gap / sqrt(squared);
-            if (geometricGap >= -threshold)
+            if (geometricGap >= -target)
                 continue;
             correction -= gap * gradient / squared;
             localDeepest = min(localDeepest, geometricGap);
@@ -569,7 +652,7 @@ void RodKkt10RepairOverlap(uint point)
             {
                 float squared = max(dot(gradient, gradient), 1.0e-28);
                 float geometricGap = gap / sqrt(squared);
-                if (geometricGap < -threshold)
+                if (geometricGap < -target)
                 {
                     correction -= gap * gradient / squared;
                     localDeepest = min(localDeepest, geometricGap);
@@ -577,7 +660,7 @@ void RodKkt10RepairOverlap(uint point)
             }
         }
 #endif
-        if (!(localDeepest < -threshold))
+        if (!(localDeepest < -target))
             break;
         v2Positions[point].xyz += correction;
         deepest = min(deepest, localDeepest);

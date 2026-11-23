@@ -26,15 +26,6 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     const uint32_t profileMathVersion = TressfxSupportProfileMathVersion(solverConfig.solver);
     const uint32_t kineticMathVersion = progressive ? Rod::SectionInertiaKineticMathVersion : 1;
     const uint32_t numericEncodingVersion = progressive ? 3 : 1;
-    // V3 的 10 分量 KKT 活跃集只放行胶囊接触。SDF 代理场的 path 已实现（独立 pipeline
-    // rodV3ImplicitSdf + rodKkt10BandSolve 的 SDF 分支），但在 16-guide 胶囊+SDF 场景上
-    // 仍不收敛：首次 post-reset 瞬态里 16/16 guide 失败（gpuStatus=4 局部秩亏，或
-    // 64 轮预算耗尽且回溯 744 次只接受极小步，merit 停在 1.4e4）。在它通过同一套
-    // 证据门禁之前，这里保持显式边界，避免场景静默拿到一个坏 solver。
-    if (progressive && object->HasTressfxSdfCollision())
-        throw std::runtime_error(
-            "cosseratImplicitV3 SDF contact does not converge yet; author capsules only "
-            "(see documents/rationale/hair-rod-gpu-v3-contact-20261123.md)");
     ObjectDescriptors& tressfx = EnsureObjectDescriptors(*object);
     if (tressfx.simulationOwner.HasConflict())
         return;
