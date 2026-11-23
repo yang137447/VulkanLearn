@@ -182,7 +182,11 @@ bool RodKkt10SdfQuery(vec3 position, out float gap, out vec3 gradient)
     bool accepted = false;
     if ((rod.flags.w & 1u) != 0u)
     {
-        vec3 local = (rod.worldToHair * vec4(position * 100.0, 1)).xyz;
+        // RodKkt10PointPosition 已经是厘米制（胶囊端点就是按厘米作者化并被直接比较，
+        // 残差 5.8e-05 说明这条路径的单位是对的）。V1 的 SDF 路径 positions 是米制，
+        // 所以那里采样前要 *100.0、取回后要 *0.01；这里若照抄 *100.0，实际会采样到
+        // 100 倍远的位置，栅格几乎全部落在域外，于是 SDF 接触长期「看不见」任何东西。
+        vec3 local = (rod.worldToHair * vec4(position, 1)).xyz;
         float distanceValue = SdfTrilinear(local);
         // 中心差分半步长 = 0.5 * cellSize；除以 2h = cellSize 得到 cm/cm 梯度。
         const float halfStep = 0.5 * sdf.originCell.w;
