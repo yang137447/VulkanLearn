@@ -945,6 +945,46 @@ length(RodLog(conj(oldOrientations[lane]) * v2Orientations[lane])) < RodRotation
 
 当前代码已回退到上一次验证过的状态：runtime 120 帧 exit 0、validation 0 条消息。
 
+## 第二十一轮：A 阶段收尾验收（runtime map 四个场景全覆盖）
+
+之前只复验了切换后 `SC_tressfx_rod_validation` 里两个动画场景，本轮把四个场景都跑了一遍
+（`--shader-force-rebuild`、150 帧、validation layer 打开）：
+
+| 场景 | exit | validation | 帧 148 失败 guide | maxBlockDefect | hair pass |
+| --- | --- | --- | --- | --- | --- |
+| `SC_tressfx_rod_animated` | 0 | 0 条 | 1 | 0.295 | 51.0 ms |
+| `SC_tressfx_rod_sdf_animated` | 0 | 0 条 | 2 | 0.542 | 50.1 ms |
+| `SC_tressfx_rod_static` | 0 | 0 条 | 6 | **15.91** | 26.5 ms |
+| `SC_tressfx_rod_sdf_static` | 0 | 0 条 | 1 | 0.146 | 10.0 ms |
+
+收敛下限（1e-2）对 SDF 动画场景帮助也很明显：defect 从之前的 5.09 降到 **0.542**。
+
+### 需要记下来的例外：静态场景有 7 个永久卡住的 guide
+
+`SC_tressfx_rod_static` 的 15.91 全部来自 **7 个固定 guide**（src 914 / 5013 / 4282 /
+5283 / 32997 / 39581 / 39620），它们在 138 帧里几乎每帧都失败（每帧 6–7 个），
+defect 从帧 2 起就是同一个值不再变化——即状态冻结、反复失败、永不恢复。
+
+失败码全是 3：其中一部分吃满 64 轮预算，另一部分（iters 7/12/14/20/26）是线搜索耗尽。
+这与之前记录的「作者穿模过深」属于同一类：bind pose 下这些 guide 与胶囊已经深度重叠，
+进入约束无法同时满足的状态。
+
+按当前验收口径（发型整体保住、单根 guide 失败按 guide 隔离不冻结整个物体），
+这是**已知债务**而不是回归：动画场景（真实使用形态）的 defect 在 0.3–0.5 量级，
+只有静态 bind pose 场景有这 7 根。若要处理，方向是这类 guide 的初始化/重叠预修复
+（`RodRkt10RepairOverlap` 目前对它们不起作用），而不是继续调求解器收敛条件。
+
+### A 阶段结论
+
+A 的两个子目标都已达成并复验：
+
+- 最终模型 `cosseratImplicitV3` 在 GPU 上带胶囊与 SDF 接触跑通（四个 runtime 场景
+  全部 exit 0、零 validation 消息）；
+- runtime 资产已从 `cosseratXpbdV1` 切到 `cosseratImplicitV3`（资产分支已提交）。
+
+遗留债务（不属于 A 的验收范围）：性能约 51 ms/2000 guide（V1 是 6.83 ms），
+属于 C 阶段；静态场景 7 根卡住 guide；SDF 深层穿模盲区（与 V1 共享）。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
