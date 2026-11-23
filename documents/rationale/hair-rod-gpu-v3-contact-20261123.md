@@ -1172,6 +1172,45 @@ substep 数与债务），区间约 **51–88 ms**；量级结论不变：V1 是
 - 静态 bind pose 场景那几根卡住 guide：bind pose 与胶囊冲突，需资产侧决策；
 - SDF 可用带 2.225 cm（margin 0.05），加宽带是成本问题（C 阶段）。
 
+## C 阶段起点：成本基线，以及一个必须先解决的测量口径问题
+
+### 基线（当前 HEAD，胶囊场景，只改 simulationGuideCount，follow 数不变）
+
+| 模拟 guide 数 | hairSimulation | 帧状态 |
+| --- | --- | --- |
+| 16 | 2.3 ms | 正常 |
+| 800 | 23.6 ms | exit 0，defect 15.9（那 7 根 bind-pose guide） |
+| 1600 | 30.5 ms | exit 0，同上 |
+| **2000** | **61.3 ms** | exit 0、`gpuStatus=0`、0 失败、defect 0.00999 |
+
+V1 同规模是 **6.83 ms**，所以 C 的目标量级是 **约 9x**。
+
+两条可直接用的结论：
+
+1. **follow 不是瓶颈**：16 guide 场景的 follow 数同样是 38,334，整帧只要 2.3 ms，
+   所以 follow 开销 ≤ 2.3 ms；
+2. 2000 guide 下每 guide 每帧约 **29 µs**（(61.3 − 2.3)/2000）。
+
+### 但 800 → 1600 只涨 23.6 → 30.5 ms，这不是优化成果
+
+这种次线性来自**自适应 substep 上限**：guide 越多，越多帧被判为「硬帧」，
+`RodGpuV3HardFrameSteps=1` 生效，于是每帧实际 substep 变少、成本变低，
+代价记在 `debt` 上——**仿真在慢放**，不是变快了。
+
+所以任何「成本随 guide 数缩放」的测量，都必须先固定 substep 数，否则读数没有意义。
+
+### 固定 substep 不是改一个常量
+
+`RodGpuMaxSteps` 已经烘进 UBO 布局：`RodGpuParams::capsules` 是
+`array<array<GuideColliderGpu,8>, RodGpuMaxSteps+1>`，配套还有
+`static_assert(offsetof(RodGpuParams, counts) == 768)` /
+`offsetof(capsules) == 800` 与 `sizeof == 3136`，shader 侧的
+`rod.capsules[RodGpuMaxSteps+1]` 也要同步。把它从 8 改成 4 会直接触发那两个
+static_assert。
+
+结论：C 要做成本对比，得**新增一个明确的固定 substep 诊断模式**（或把 substep 数
+做成可查询/可覆盖的调试参数），而不是改常量。这本身是 C 的第一件正事。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
