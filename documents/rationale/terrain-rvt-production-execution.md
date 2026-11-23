@@ -778,14 +778,25 @@ validation layer，也没有性能/预算结论。
   --worker-thread-count 2 --no-dev-ui` exit 0，epoch 50 进 interactive，
   `validAtRawTargetPlusOne=3271/3271`，unresolved/incorrectIdentity 0，
   rootOnly 0。
-- 一个真实的长路径缺陷：VT 输入文件名是 `inputs/<64hex>-<64hex>.bin`，叠加深层
-  资源工作树后超过 Win32 MAX_PATH（该文件完整路径 259+ 字符）。导出器
-  `TerrainPackageClosure::Resolve` 用 `std::filesystem::is_regular_file` 判为“缺失”，
-  而运行时用目录句柄读取同一文件是成功的——所以 Cook 与 Game 都正常，只有导出失败。
-  本次用 `subst R:` 把资源根临时缩成 3 字符后导出（脚本
-  `artifacts/terrain-rvt-wrapup/run_export.ps1`，导出后恢复 `config/config.json` 并
-  撤销 subst）。这是需要单独修的限制，不算已修；修法要么给导出器加长路径支持，
-  要么缩短 Cook 的输入文件名。
+- 一个真实的长路径缺陷（已修）：VT 输入文件名是 `inputs/<64hex>-<64hex>.bin`，
+  叠加深层资源工作树后超过 Win32 MAX_PATH（实测该文件完整路径 263 字符，`\\?\`
+  可访问、普通路径不可）。导出器 `TerrainPackageClosure::Resolve` 用
+  `std::filesystem` 判成“缺失”，而运行时用目录句柄读取同一文件是成功的——
+  所以 Cook 与 Game 都正常，只有导出失败。修法与验证：
+  - `terrainPackageClosure.h` 增加 `ExtendedPath`（补 `\\?\`、统一分隔符）、
+    `IsLinkedEntry`/`IsRegularFile`（`GetFileAttributesW` 属性探测）、
+    `CanonicalOrAbsolute`（长路径 canonical 失败时退回绝对+词法规范化）；
+    `Resolve` 改为逐段属性检查，不再对超长路径复算 canonical（`Relative()` 与
+    逐段链接检查已保证不逃出根）。
+  - `gameExporter.cpp::Copy` 改用 `CopyFileW` + 扩展路径，源与目标都能超长。
+  - 回归测试 `GameExportTest.TerrainClosureResolvesInputBeyondMaxPath`：在临时根下
+    造 >300 字符的目录树，断言 `Resolve` 成功、缺失项仍抛错；建树/清理只用 Win32，
+    避免 libstdc++ 的 `fs` 在超长路径上自旋（这一点在本机实际踩到过）。
+  - 验证：不用 `subst`、直接从 263 字符的真实资源根导出，得到与之前**完全相同**的
+    723 文件 / 645,727,733 B；`--verify-package` ok；`validate-game-package.ps1`
+    “passed all checks”；包内 `main_game` 120 帧 exit 0，epoch 50 进 interactive，
+    3271/3271。`TerrainCompositedRejectsManifestSymlink` 在本机因
+    `fs::create_symlink` 不可用而 skip（改动前就是这样）。
 - 与冻结包的关系：这次包是**全新资产身份 + 新 Release 二进制**，R16/R17 的
   checkpoint/收据（P5/P6、性能、故障注入）都不适用；冻结与正式验收仍按上节延期表
   处理，不改判为通过。
