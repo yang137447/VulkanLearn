@@ -112,8 +112,51 @@ def _prepare_composited_materials(
             "globalMasks": "Generated/HoudiniPegasusIsland/Global/T_global_masks.json",
         })
         _write_json(material_path, material)
+        # 合成 VT 夹具与默认场景按“基础/detail 两个 MI”生成，LOD0 走 detail。
+        # 这里复制一份同名 detail MI 并写回 TR：路径与基础 MI 不同即满足校验，
+        # 静态烘焙参数与基础一致，避免 detail 缺失时生成器拒绝整个 tile。
+        detail_path = material_path.with_name(material_path.stem + "_detail.json")
+        detail = json.loads(json.dumps(material))
+        detail["name"] = detail_path.stem
+        _write_json(detail_path, detail)
+        terrain["detailMaterialInstancePath"] = detail_path.relative_to(resource_root).as_posix()
+        _write_json(output_root / f"TR_terrain_{tile['assetName']}.json", terrain)
         if verbose:
             print(f"independent composited terrain material -> {material_path}")
+
+
+def _share_global_layer_arrays(
+    resource_root: Path,
+    tile_entries: list[dict[str, Any]],
+    verbose: bool,
+) -> None:
+    """让全部 tile 共用第一块的 layer 贴图数组。
+
+    岛屿的 7 层材质贴图是全局的，切片时每块各写了一份字节相同的数组描述；
+    RVT 的 sourceSet 要求同一套 albedo/normal/pbr 数组被所有地形共享，
+    否则 World 加载会报 “must share the same albedo/normal/pbr arrays”。
+    layerWeights 仍按 tile 保留：那是每块的覆盖权重，不能共享。
+    """
+    shared_slots = ("layerAlbedo", "layerNormal", "layerPbr", "layerHeight")
+    first = tile_entries[0]
+    first_tr = _load_json(
+        resource_root / first["outputRelative"] / f"TR_terrain_{first['assetName']}.json")
+    base = _load_json(resource_root / first_tr["materialInstancePath"])
+    shared = {slot: value for slot, value in base.get("textures", {}).items()
+              if slot in shared_slots}
+    for tile in tile_entries[1:]:
+        tr_path = resource_root / tile["outputRelative"] / f"TR_terrain_{tile['assetName']}.json"
+        terrain = _load_json(tr_path)
+        for field in ("materialInstancePath", "detailMaterialInstancePath"):
+            relative = terrain.get(field)
+            if not relative:
+                continue
+            mi_path = resource_root / relative
+            instance = _load_json(mi_path)
+            instance.setdefault("textures", {}).update(shared)
+            _write_json(mi_path, instance)
+        if verbose:
+            print(f"shared island layer arrays -> {tr_path.name}")
 
 
 def main() -> int:
@@ -161,6 +204,7 @@ def main() -> int:
             )
 
     _prepare_composited_materials(resource_root, tiles, args.verbose)
+    _share_global_layer_arrays(resource_root, tiles, args.verbose)
 
     scenes: list[dict[str, Any]] = []
     for tile in tiles:

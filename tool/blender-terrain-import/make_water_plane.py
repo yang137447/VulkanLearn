@@ -9,6 +9,7 @@ adding vertex cost.
 from __future__ import annotations
 
 import argparse
+import json
 from pathlib import Path
 
 
@@ -100,12 +101,56 @@ def main() -> None:
     )
     parser.add_argument("--segments", type=int, default=16)
     parser.add_argument("--material-name", default="Water")
+    # 引擎的 modelPath 只认 SM 描述文件；obj 旁边必须同时有描述文件，
+    # 否则 assemble/场景加载会找不到海面模型。路径写成资源根相对形式。
+    parser.add_argument(
+        "--mesh-descriptor",
+        type=Path,
+        help="optional SM_*.json path to write next to the .obj",
+    )
+    parser.add_argument(
+        "--resource-root",
+        type=Path,
+        help="resources worktree root; required with --mesh-descriptor",
+    )
+    parser.add_argument(
+        "--material-instance",
+        default="Common/Materials/MI_water.json",
+        help="materialInstancePath stored in the mesh descriptor",
+    )
     args = parser.parse_args()
 
     positions, tex_coords, faces = build_plane(
         args.half_extent_cm, args.segments
     )
     write_obj(args.output, positions, tex_coords, faces, args.material_name)
+    if args.mesh_descriptor:
+        if not args.resource_root:
+            parser.error("--mesh-descriptor requires --resource-root")
+        root = args.resource_root.resolve()
+        model_path = args.output.resolve().relative_to(root).as_posix()
+        descriptor_path = args.mesh_descriptor.resolve()
+        descriptor_path.parent.mkdir(parents=True, exist_ok=True)
+        # 海面只有一条河道材质；slot 名与 obj 的 usemtl 保持一致。
+        descriptor_path.write_text(
+            json.dumps(
+                {
+                    "type": "mesh",
+                    "name": "Water Plane",
+                    "modelDataPath": model_path,
+                    "materialSlots": [
+                        {
+                            "name": args.material_name,
+                            "materialInstancePath": args.material_instance,
+                        }
+                    ],
+                },
+                ensure_ascii=False,
+                indent=2,
+            )
+            + "\n",
+            encoding="utf-8",
+        )
     print(
         f"wrote {args.output} "
         f"({len(positions)} verts, {len(faces)} quads, "
