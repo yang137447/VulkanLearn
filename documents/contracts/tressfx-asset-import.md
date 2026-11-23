@@ -20,7 +20,17 @@ tag 的配置可接受性不等于求解器质量放行。
 两者都只接受**场可用**的接触——SDF 栅格只在 `margin + 2*cellSize` 的截断带内有值，
 更深的作者穿模对 V1 与 V3 同样不可见（证据见
 `documents/rationale/hair-rod-gpu-v3-contact-20261123.md`）。
-本轮 runtime 场景仍使用 `cosseratXpbdV1`。
+runtime 的 rod 隔离验证资产
+`Maps/SC_tressfx_rod_validation/Meshes/TF_female_rod_validation.json` 现在
+`simulationDefaults.solver` 是 `cosseratImplicitV3`、`solverProfile` 是
+`effectiveBundleV1`；该 map 下四个场景（static/animated 与两个 SDF 变体）都引用它。
+
+这次切换只声明**正确性范围**：接触活跃集、胶囊解析 Hessian、SDF 代理场都已接上，
+`SC_tressfx_rod_animated` 与 `SC_tressfx_rod_sdf_animated` 无 validation 消息地跑完，
+稳态帧的组分残差在 1e-04 量级。它**不**声明性能验收：
+2000 根模拟 guide 时 hair pass 约 80 ms（RTX 3070 Laptop），不满足 60 fps；
+稳态约 1% 的 guide 会因牛顿预算耗尽而失败，失败按 guide 隔离并在下一帧重试，
+不会冻结整个物体。全头风/回正/成本验收属于后续阶段。
 
 `simulationDefaults.solver` 接受 `tressfx`（缺省）、`cosseratXpbdV1`
 或 `cosseratImplicitV3`。两个 Rod tag 的 `solverProfile` 仅接受
