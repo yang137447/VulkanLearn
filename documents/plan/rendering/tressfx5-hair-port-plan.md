@@ -521,6 +521,11 @@ V0 只加 `hairForward`；V1 加 `hairDeepShadow`；V2 加 `hairSimulation`。
 - 验收：UE 参考图 ROI 像素误差在约定阈值内；目标分辨率下帧时间达标；
   LOD 切换无明显跳变。
 
+> 验收指标的“硬门槛 / 产品目标 / 诊断”分类见
+> [hair-acceptance-metrics.md](hair-acceptance-metrics.md)（2026-11-23）。
+> 旧行为带 `Ddyn ∈ [.02, .08] L` 与 `Trec` 已退役为诊断/目标，不再单独判 FAIL；
+> 历史 FAIL 记录不追溯重判。
+
 > 工期是粗估，取决于资产导出、UE 参考环境、以及是否已有 TAA。
 > 本轮按用户授权先推进 M3 物理交互，渲染里程碑暂缓；不得把基础模拟落地等同于 M3 质量验收完成。
 
