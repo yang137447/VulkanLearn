@@ -1649,6 +1649,42 @@ SDF 根本不会被建起来（`sdfObjects=0`），所以「SDF 单独成本」�
 并决定 splat 直接写图像还是每帧从缓冲上传。这是一整轮的活，且必须重跑
 SDF 单位核对（历史上这里错过一次 100 倍）。
 
+### 把 SDF 链逐环摘掉：四环全部无罪，10.7 ms 仍无归属
+
+上一节把「SDF ≈10 ms」归到查询上，并打算改成 `sampler3D`。**先做了一个更便宜的判决**：
+把 SDF 查询整个短路（`VL_ROD_SDF_SKIP_QUERY`，直接 `return false`）。
+
+| 变体（2000 guide、1 substep、GPU 时间戳） | GPU hair |
+| --- | --- |
+| 基线（中心差分 7 次采样） | 15.13 ms |
+| **SDF 查询整个跳过** | **15.12 ms** |
+| 前向差分 4 次采样（少 43% 读取） | 15.32 ms，defect 从 0.00851 变差到 0.00994 |
+| 跳过 `SdfSplat` | 15.92 ms（对照 15.95） |
+| 跳过 `SdfCollide` | 15.29 ms（对照 15.21） |
+| 跳过 `SdfClear` | 15.77 ms（对照 15.53） |
+
+也就是说：**查询、splat、collide、clear 逐个摘掉都没有任何变化**，但「声明了
+`collisionMesh`」这件事本身仍然值约 10.7 ms（caps_only 3.5–4.4 ms vs 15.1 ms）。
+前向差分那条已回退（没提速、defect 还变差），也说明**梯度采样不是成本来源，
+原本要做的 `sampler3D` 改造会是无用功**——这是本轮最有价值的一次「先量再做」。
+
+四环都无罪、总量却存在，说明成本落在「SDF 存在才会发生、但不在这些 dispatch 里」的地方：
+
+- 有 SDF 时 guide 求解走的是**另一条 pipeline**（`rodV3ImplicitSdf.comp`，带 `VL_ROD_SDF`），
+  它比 `rodV3ImplicitCrCompensated.comp` 慢的原因可能不是查询，而是别的东西
+  （更宽的描述符集、额外的屏障、`rodKktDebug` 写入等）；
+- 或者 `hairSimulationPassTrace.cpp` 里那段「所有 dispatch 写完后、transfer 前」的
+  **copy + 两侧显式屏障**在 SDF 路径上多走了一次；
+- 或者代理网格每帧的**顶点/索引流上传**在 SDF 路径上才有。
+
+### 下一步：先给每个 dispatch 加 GPU 分段，别再猜
+
+`GpuPassTimer` 目前只把整条 hair 链当一个 `hairSimulation` 段。下一步是给
+`SdfClear` / `SdfSplat` / `SdfCollide` / guide solve / follow 各自加 `BeginPass`
+（或在 `hairSimulationPassTrace` 里按 dispatch 计数），让 GPU 表直接给出每一环的毫秒，
+再决定改哪里。**这是纯诊断、无行为风险**，且能一次性结束这轮反复出现的
+「摘掉一环却毫无变化」的僵局。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 

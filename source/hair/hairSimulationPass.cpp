@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "hair/hairSimulationPass.h"
 
 #include <algorithm>
@@ -643,12 +644,26 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             GuideSimulationWorkgroupSize;
         if (sdfDomainValid)
         {
-            RecordPass(commandBuffer, GuideSimulationPass::SdfClear,
-                state.sets[PassIndex(GuideSimulationPass::SdfClear)][frameSlot],
-                sdfCellGroupCount, anyDispatch, objectDispatchCount);
-            RecordPass(commandBuffer, GuideSimulationPass::SdfSplat,
-                state.sets[PassIndex(GuideSimulationPass::SdfSplat)][frameSlot],
-                sdfTriangleGroupCount, anyDispatch, objectDispatchCount);
+            // Diagnostic only: VL_ROD_SKIP_SDF_CLEAR measures the clear cost.
+            static const bool skipSdfClear =
+                std::getenv("VL_ROD_SKIP_SDF_CLEAR") != nullptr;
+            if (!skipSdfClear)
+            {
+                RecordPass(commandBuffer, GuideSimulationPass::SdfClear,
+                    state.sets[PassIndex(GuideSimulationPass::SdfClear)][frameSlot],
+                    sdfCellGroupCount, anyDispatch, objectDispatchCount);
+            }
+            // Diagnostic only: VL_ROD_SKIP_SDF_SPLAT skips the splat dispatch so the
+            // clear cost and the splat cost can be measured separately. Never set
+            // this in normal runs; the distance field stays cleared.
+            static const bool skipSdfSplat =
+                std::getenv("VL_ROD_SKIP_SDF_SPLAT") != nullptr;
+            if (!skipSdfSplat)
+            {
+                RecordPass(commandBuffer, GuideSimulationPass::SdfSplat,
+                    state.sets[PassIndex(GuideSimulationPass::SdfSplat)][frameSlot],
+                    sdfTriangleGroupCount, anyDispatch, objectDispatchCount);
+            }
         }
 
         // 源主路径：每帧 0/1/2 个 substep，每个 pass 收到的 dt 恒为 0.0125。
@@ -686,7 +701,12 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
                     state.sets[PassIndex(GuideSimulationPass::Collision)][frameSlot],
                     strandGroupCount, anyDispatch, objectDispatchCount);
             // 源 SDF collide 每个 substep 一次，在长度/胶囊之后。
-            if (sdfDomainValid)
+            // Diagnostic only: VL_ROD_SKIP_SDF_COLLIDE measures the per-point SDF
+            // collide cost. Never set this in normal runs; hair passes through the
+            // distance field without correction.
+            static const bool skipSdfCollide =
+                std::getenv("VL_ROD_SKIP_SDF_COLLIDE") != nullptr;
+            if (sdfDomainValid && !skipSdfCollide)
                 RecordPass(commandBuffer, GuideSimulationPass::SdfCollide,
                     state.sets[PassIndex(GuideSimulationPass::SdfCollide)][frameSlot],
                     strandGroupCount, anyDispatch, objectDispatchCount);
