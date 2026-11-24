@@ -938,12 +938,21 @@ RodKkt6Condensed RodKkt10Condense(uint point)
         appliedTransposed[slot] = RodKktApplyTranspose(inverseA, result.gradient[slot]);
     }
     // S = G^T A^-1 G；未用槽位补单位对角线，使 S 恒可逆且多余 dlambda 恒为 0。
+    // S[k][l] = g_k · a_l，未用槽位补单位对角。这里把 9 个元素用**常量下标**展开，
+    // 不再用 row/column 双循环对 mat3 做动态索引（那会进 local memory）。
+    bool used0 = result.count > 0u;
+    bool used1 = result.count > 1u;
+    bool used2 = result.count > 2u;
     mat3 s = mat3(0);
-    for (uint column = 0u; column < 3u; ++column)
-        for (uint row = 0u; row < 3u; ++row)
-            s[column][row] = row < result.count && column < result.count ?
-                RodKktDot(result.gradient[row], applied[column]) :
-                (row == column ? 1.0 : 0.0);
+    s[0][0] = used0 ? RodKktDot(result.gradient[0], applied[0]) : 1.0;
+    s[1][1] = used1 ? RodKktDot(result.gradient[1], applied[1]) : 1.0;
+    s[2][2] = used2 ? RodKktDot(result.gradient[2], applied[2]) : 1.0;
+    s[1][0] = used1 ? RodKktDot(result.gradient[1], applied[0]) : 0.0;
+    s[2][0] = used2 ? RodKktDot(result.gradient[2], applied[0]) : 0.0;
+    s[0][1] = used1 ? RodKktDot(result.gradient[0], applied[1]) : 0.0;
+    s[2][1] = used2 ? RodKktDot(result.gradient[2], applied[1]) : 0.0;
+    s[0][2] = used2 ? RodKktDot(result.gradient[0], applied[2]) : 0.0;
+    s[1][2] = used2 ? RodKktDot(result.gradient[1], applied[2]) : 0.0;
     float determinantS = determinant(s);
     if (!(abs(determinantS) > 1.0e-24) || isnan(determinantS) || isinf(determinantS))
     {
@@ -970,38 +979,51 @@ RodKkt6Condensed RodKkt10Condense(uint point)
     // Q g = g - (1/s) g (g^T A^-1 g) = 0 是解析恒等式，探针实测却给出 |Q G| ~ 0.74，
     // 说明用 RodKktOuter 拼出来的矩阵不是 g t^T。显式写 index 后
     // 「单接触点 |Q G| 必须为 0」就成了这条构造的已知答案自检。
-    RodV2Matrix q = RodV2Identity();
-    for (uint i = 0u; i < 6u; ++i)
-        for (uint j = 0u; j < 6u; ++j)
-        {
-            float value = i == j ? 1.0 : 0.0;
-            for (uint row = 0u; row < 3u; ++row)
-                for (uint column = 0u; column < 3u; ++column)
-                {
-                    float weight = inverseS[column][row];
-                    if (weight == 0.0)
-                        continue;
-                    float gValue = i < 3u ? result.gradient[row].linear[i] :
-                        result.gradient[row].angular[i - 3u];
-                    float tValue = j < 3u ? appliedTransposed[column].linear[j] :
-                        appliedTransposed[column].angular[j - 3u];
-                    value -= weight * gValue * tValue;
-                }
-            RodV2Set(q, i, j, value);
-        }
+    // Q = I - G S^-1 G^T A^-1，逐 (k,l) 项展开、全部用常量下标与 outerProduct，
+    // 不再用 i/j/row/column 四重循环对 RodV2Matrix 做动态索引。
+    // 存储约定：inverseS[col][row] 是元素 (row, col)，所以 Si[k][l] = inverseS[l][k]。
+    // g_k 的角向分量为 0，因此 Q 的 AL 块为 0、AA 块为单位阵。
+    vec3 g0 = result.gradient[0].linear;
+    vec3 g1 = result.gradient[1].linear;
+    vec3 g2 = result.gradient[2].linear;
+    vec3 t0Linear = appliedTransposed[0].linear;
+    vec3 t1Linear = appliedTransposed[1].linear;
+    vec3 t2Linear = appliedTransposed[2].linear;
+    vec3 t0Angular = appliedTransposed[0].angular;
+    vec3 t1Angular = appliedTransposed[1].angular;
+    vec3 t2Angular = appliedTransposed[2].angular;
+    float s00 = inverseS[0][0];
+    float s01 = inverseS[1][0];
+    float s02 = inverseS[2][0];
+    float s10 = inverseS[0][1];
+    float s11 = inverseS[1][1];
+    float s12 = inverseS[2][1];
+    float s20 = inverseS[0][2];
+    float s21 = inverseS[1][2];
+    float s22 = inverseS[2][2];
+    mat3 qLinearLinear = mat3(1)
+        - s00 * outerProduct(g0, t0Linear) - s01 * outerProduct(g0, t1Linear)
+        - s02 * outerProduct(g0, t2Linear) - s10 * outerProduct(g1, t0Linear)
+        - s11 * outerProduct(g1, t1Linear) - s12 * outerProduct(g1, t2Linear)
+        - s20 * outerProduct(g2, t0Linear) - s21 * outerProduct(g2, t1Linear)
+        - s22 * outerProduct(g2, t2Linear);
+    mat3 qLinearAngular = -(s00 * outerProduct(g0, t0Angular)
+        + s01 * outerProduct(g0, t1Angular) + s02 * outerProduct(g0, t2Angular)
+        + s10 * outerProduct(g1, t0Angular) + s11 * outerProduct(g1, t1Angular)
+        + s12 * outerProduct(g1, t2Angular) + s20 * outerProduct(g2, t0Angular)
+        + s21 * outerProduct(g2, t1Angular) + s22 * outerProduct(g2, t2Angular));
+    RodV2Matrix q = RodV2Matrix(qLinearLinear, qLinearAngular, mat3(0), mat3(1));
     result.lower = RodV2Multiply(q, baseLower);
     result.upper = RodV2Multiply(q, baseUpper);
     // 额外项 G S^-1 h，其中 h = -(gap/L)，即 -gapRow。
-    RodV2Vector extra = RodV2Vector(vec3(0), vec3(0));
-    for (uint row = 0u; row < 3u; ++row)
-    {
-        float weight = 0.0;
-        for (uint column = 0u; column < 3u; ++column)
-            weight -= inverseS[column][row] * result.gapRow[column];
-        extra = RodV2Add(extra, RodV2Vector(
-            result.gradient[row].linear * weight,
-            result.gradient[row].angular * weight));
-    }
+    // extra = G S^-1 h，h = -gapRow。写成三次加权和，不引入任何新的块/元素约定，
+    // 也不对 result.gradient[] 做动态索引（原实现是 row/column 双循环）。
+    vec3 projectedGap = inverseS * (-result.gapRow);
+    RodV2Vector extra = RodV2Vector(
+        result.gradient[0].linear * projectedGap.x +
+            result.gradient[1].linear * projectedGap.y +
+            result.gradient[2].linear * projectedGap.z,
+        vec3(0));
     result.right = RodV2Add(RodV2Multiply(q, baseB), extra);
     return result;
 }
