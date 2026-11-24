@@ -2042,6 +2042,59 @@ retired/frame = steps / 240                                             rodGpuRe
   否则唯一的减压阀是传送式 reset（也就是那个可见的头发跳变）。
 - 把 `substeps` / `maxIterationsLastFence` 写进诊断 CSV：现在帧费用的主要自变量完全不可观测。
 
+### 探针 bug 修复后：36 个 pass 重新可见，hair 确实是帧成本主体
+
+之前「只有 15 个监控阶段」不是引擎只有这么多 pass，而是**探针泄漏**：
+`GpuPassTimer` 只有一个不可重入的 `passOpen` 闸，而 `renderFrameRecorder.cpp` 里
+`VolumetricFog` / `ParticleSoftDepth` / `LightCulling` 三个分支 `continue` 前**没有 `EndPass`**，
+闸从此保持为真，之后所有 pass 的 `BeginPass` 静默失败。因为 pass 顺序把这三个
+排在 geometry 之前，所以**几何、deferred、forward、sky、fog、bloom、toneMapping 全部不可见**。
+
+修复后（已提交 `5f63f20d`），同一场景的 GPU 表变成 **36 个图形 pass +
+hairSimulation + skinnedDeform，共 38 行**，且 `lightCulling` 不再是 `n/a`。
+
+修复后的 bind-pose 帧内分布（窗口 1–120）：
+
+```text
+hairSimulation 23.30 ms | skinnedDeform 1.30 | geometry 0.28 | deferredLighting 0.17 |
+forwardTransparent 1.06 | forwardOpaque 0.08 | toneMapping 0.12 | 其余均 <0.05 | total 26.98 ms
+```
+
+**所以头发 pass 确实占了整帧的绝大部分（23.3 / 27.0）**——这与前面几轮
+「hair GPU 只有 0.2 ms」的结论相反；那个 0.2 ms 来自两个错误：
+
+1. 分段模式下上层不开整链分段，而当时又只把 `RecordPass` 和影子包了进去；
+2. **我自己把 `hair.rodSolve` 写错了**：`BeginPass` 后紧接 `EndPass`，而 `RecordRod`
+   在二者之后（`hairSimulationPass.cpp:493-499`），所以那个「0.00 ms」是假的。
+
+### 同时更正：`renderRecord` 的 27→63 ms 不是 CPU 录制
+
+新增的 `[RecordCPU]`（`VL_ROD_RECORD_STAGE_TIMING` 门控）直接量到：
+
+| 项 | bind pose | 动画角色 |
+| --- | --- | --- |
+| 整段 pass 录制循环 | 0.95 ms/帧 | 1.03 ms/帧 |
+| `RecordSkinDeform`（含 palette 上传） | 0.037 ms/帧 | 0.043 ms/帧 |
+| 合计 | **0.99 ms/帧** | **1.04 ms/帧** |
+
+两边只差 **0.05 ms**，而 `renderRecord` 差了 +36.9 ms。原因：单工作线程下
+`renderRecord` 包住了 `RenderLatestSnapshotOrLastGood()`，其第一步就是
+`BeginFrame → WaitForFence`（`rendererBackendVulkan.cpp:450-453`），**它测的是 GPU 帧时间而非 CPU 工作**。
+双工作线程对照：`renderRecord` 两边都是 0.002 ms，同一个差值转移到 `submitPresent`
+（28.9 vs 53.6–57.7 ms）。
+
+**因此那 +35 ms 是 GPU 头发求解工作，不是录制书记。** 在固定 8 个子步下直接对比：
+hair GPU **bind 30.6 ms vs 动画 104.5 ms（约 3.4x）**——动画角色让**求解器本身**贵了 3.4 倍。
+
+### C 阶段的真正结论（经三次推翻后）
+
+1. 帧成本主体是**头发 GPU 求解器**（23–60 ms），不是录制、不是蒙皮、不是 SDF、不是后处理。
+2. 它的成本 = `子步数 × 每子步迭代代价`，而**子步数由无上限的 debt 驱动**（每帧最多退休 33.3 ms）；
+   迭代代价随根骨运动量上升（固定子步下 3.4x）。
+3. bind pose 之所以也慢，是因为**一个不收敛的 guide 把整个 2000-guide 对象
+   钉在 1 个子步**（门取 guide 最大值），于是 debt 只能单调上涨，
+   唯一的减压阀是传送式 Reset。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
