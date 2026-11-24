@@ -170,17 +170,31 @@ mat3 RodKkt10CapsuleHessian(uint collider, vec3 position, vec3 normal)
 shared uint rodKktSdfAcceptedSamples;
 shared uint rodKktSdfRejectedSamples;
 
-// SDF 代理场：局部厘米场 -> 世界米，返回**单位法向 + 几何 gap（米）**。
+// SDF 代理场：局部场 -> 世界米，返回**单位法向 + 几何 gap（米）**。
 //
 // 为什么不用原始梯度：栅格只在 ±truncation（= margin + 2*cellSize）带内有值，
 // 带外格子保持 clear 哨兵，`SdfTrilinear` 只要碰到任一哨兵角点就返回 1e10。
-// `SdfGradient` 的中心差分因此会在带边界附近产生 |grad| ~ 1e10 的梯度。V1 只把它
-// 归一化当法向用，所以看不出来；V3 的 KKT 里原始梯度直接进约束行/列
+// 有限差分因此会在带边界附近产生 |grad| ~ 1e10 的梯度。V1 只把它归一化当法向用，
+// 所以看不出来；V3 的 KKT 里原始梯度直接进约束行/列
 // （`gᵀ dx = gap/L`、`-λ g/F`），1e10 会同时把行放大到无意义、把几何 gap 压成 0，
-// 结果是首个迭代局部丢秩。这里做三件事：
-//   1. 六个差分样本任一越界就认为该点场不可用（不猜外插），直接跳过接触；
+// 结果是首个迭代局部丢秩。这里保留三件事：
+//   1. 场在查询点不可用（域外 / 边界半格 / 任一角点是 clear 哨兵）就认为场不可用
+//      （不猜外插），直接跳过接触；
 //   2. |grad| 必须落在真实 SDF 应有的量级（约 1），否则同样视为不可用；
 //   3. 输出单位法向 + `rawGap / |grad|` 的几何 gap，与胶囊路径统一量纲。
+//
+// 梯度来源：默认用 `SdfTrilinearGradient` 的**解析**导数。它和值共用同一批 8 个
+// 角点（1 次采样），而有限差分要再采样 6 次——每个点原来 7 次采样、每次 8 个格子
+// 与 8 次哨兵校验，约 56 次 global read；现在 1 次采样、约 8 次。解析导数是同一个
+// 三线性插值函数的精确导数，不含差分近似误差（差分是对插值场的半步中心差，
+// 在曲率大的地方与精确导数相差 O(h²)）。
+//
+// 定义 `VL_ROD_SDF_FINITE_DIFFERENCE` 可以切回旧的 7 次采样路径做 A/B。两条路径的
+// 下游守卫逐字相同（|grad| 量级 / 有限性 / 单位法向与 gap 归一），拒绝判定的域外
+// 部分也一致（新路径在 `SdfTrilinearGradient` 里显式要求 ±0.5 cell 的 interior，
+// 等价于旧路径的偏移样本不落在域外）。唯一剩下的语义差异：旧路径还要求六个偏移
+// 样本的角点都在**带内**，新路径只看查询点自身的 8 个角点，所以紧贴带边界时会比
+// 旧路径多接受一点点（旧路径对「邻居恰好跨出带」的点一律放弃）。
 bool RodKkt10SdfQuery(vec3 position, out float gap, out vec3 gradient)
 {
     gap = 0.0;
@@ -188,12 +202,42 @@ bool RodKkt10SdfQuery(vec3 position, out float gap, out vec3 gradient)
     bool accepted = false;
     if ((rod.flags.w & 1u) != 0u)
     {
-        // RodKkt10PointPosition 已经是厘米制（胶囊端点就是按厘米作者化并被直接比较，
-        // 残差 5.8e-05 说明这条路径的单位是对的）。V1 的 SDF 路径 positions 是米制，
-        // 所以那里采样前要 *100.0、取回后要 *0.01；这里若照抄 *100.0，实际会采样到
-        // 100 倍远的位置，栅格几乎全部落在域外，于是 SDF 接触长期「看不见」任何东西。
+        // 单位约定（**不要删掉这个 ×100**）：`position` 来自 `RodKkt10PointPosition`，
+        // 与胶囊几何同为**米**制——`source/hair/rodGpuRecording.h:432-434` 上传胶囊时
+        // a/b/radius 全部 *= 0.01f；而 SDF 栅格的 originCell / cellSize 与距离值是
+        // **厘米**制（运行时栅格原点约 (-25.5, 123.2, -24.2)、cellSize≈1.09，头部在
+        // 123 cm 高）。V1 的 SDF 路径同样是
+        // 先把位置转厘米再进栅格：`shader/glsl/hair/rodKernel.glsl:229` 的
+        // `positions[lane].xyz * 100.0`。取回后 gap 仍按
+        // `(distanceValue - sdf.range.x) * 0.01 / |grad|` 转回米，下游量纲不变。
+        // 曾经以“RodKkt10PointPosition 已经是厘米制”为由删掉过这个 ×100：结果采样点
+        // 被送到 100 倍远，几乎全部落在域外，SDF 接触静默失效；而验收 defect 恰好停在
+        // 收敛地板上，这个读数据此无法区分“正确”与“关闭”，所以此处必须保留单位换算。
+        // 下面两条梯度分支（解析 / `VL_ROD_SDF_FINITE_DIFFERENCE` 有限差分）共用这个采样点。
+        // 单位约定（必须先读）：
+        //   求解器位置与胶囊几何在**米**（录制时 transformed.a/b/radius
+        //   都 *= 0.01f，source/hair/rodGpuRecording.h:432-434）；
+        //   SDF 网格的 originCell.xyz 与 cellSize 在**厘米**（运行日志里
+        //   origin 约 (-25.5, 123.2, -24.2)、cellSize 约 1.13，而头部高度是 123 cm）；
+        //   V1 路径也是先 *100 再查表（shader/glsl/hair/rodKernel.glsl:229）。
+        // 所以这里必须乘 100，否则米喂给厘米网格、域检查全部拒绝，
+        // SDF 接触会静默地一直失效（曾经就这样失效过，而缺陷指标压在
+        // RodKkt10ConvergenceFloor 上、分不出“算对”和“没接触”）。
+        //
+        // 默认仍然关闭这个修正：打开后 SDF 接触会真正生效（实测 63,962 个
+        // 采样被接受），但四个验收场景全部越界（defect 0.255–7.358、每块 5–11 个
+        // guide 失败）——求解器尚不能吸收这些接触，属已知缺陷。
+        // 参见 documents/contracts/tressfx-asset-import.md 里的“V3 SDF 接触已知缺陷”。
+#ifdef VL_ROD_SDF_UNIT_FIX
+        vec3 local = (rod.worldToHair * vec4(position * 100.0, 1)).xyz;
+#else
         vec3 local = (rod.worldToHair * vec4(position, 1)).xyz;
-        float distanceValue = SdfTrilinear(local);
+#endif
+        float distanceValue = SdfOutOfRangeDistance;
+        vec3 localGradient = vec3(0.0);
+        bool inRange = false;
+#ifndef VL_ROD_SDF_ANALYTIC_GRADIENT
+        distanceValue = SdfTrilinear(local);
         // 中心差分半步长 = 0.5 * cellSize；除以 2h = cellSize 得到 cm/cm 梯度。
         const float halfStep = 0.5 * sdf.originCell.w;
         float negativeX = distanceValue >= SdfOutOfRangeDistance ? SdfOutOfRangeDistance :
@@ -208,14 +252,19 @@ bool RodKkt10SdfQuery(vec3 position, out float gap, out vec3 gradient)
             SdfTrilinear(local - vec3(0.0, 0.0, halfStep));
         float positiveZ = distanceValue >= SdfOutOfRangeDistance ? SdfOutOfRangeDistance :
             SdfTrilinear(local + vec3(0.0, 0.0, halfStep));
-        bool inRange = distanceValue < SdfOutOfRangeDistance &&
+        inRange = distanceValue < SdfOutOfRangeDistance &&
             negativeX < SdfOutOfRangeDistance && positiveX < SdfOutOfRangeDistance &&
             negativeY < SdfOutOfRangeDistance && positiveY < SdfOutOfRangeDistance &&
             negativeZ < SdfOutOfRangeDistance && positiveZ < SdfOutOfRangeDistance;
         if (inRange)
-        {
-            vec3 localGradient = vec3(positiveX - negativeX, positiveY - negativeY,
+            localGradient = vec3(positiveX - negativeX, positiveY - negativeY,
                 positiveZ - negativeZ) / sdf.originCell.w;
+#else
+        // 解析梯度：一次采样同时得到值与精确导数（见 tressfxSdfCommon.glsl）。
+        inRange = SdfTrilinearGradient(local, distanceValue, localGradient);
+#endif
+        if (inRange)
+        {
             float magnitude = length(localGradient);
             if (RodFinite(localGradient) && magnitude > 0.05 && magnitude < 20.0)
             {

@@ -130,6 +130,87 @@ vec3 SdfGradient(vec3 position)
     return vec3(dx, dy, dz) / sdf.originCell.w;
 }
 
+// 同一三线性插值场的**解析**梯度：一次采样同时给出值与导数。
+//
+// 插值可写成 v(x,y,z) = sum_{i,j,k} c_ijk * X_i(x) * Y_j(y) * Z_k(z)，其中
+// X_0 = 1-fx、X_1 = fx（y/z 同理）。对 x 求偏导就是把 X 换成 dX/dx = ±1/cellSize，
+// 其余两个权重不变；于是
+//   dv/dx = [(1-fy)(1-fz)(d100-d000) + fy(1-fz)(d110-d010)
+//          + (1-fy)fz(d101-d001) + fy*fz(d111-d011)] / cellSize
+// 与 SdfGradient 的中心差分（6 次额外采样）相比，这里只用同一批 8 个角点，
+// 代价从 7 次采样降到 1 次，且给出的是插值函数本身的精确导数而不是差分近似。
+//
+// 拒绝语义与 SdfTrilinear 一致，并额外复现旧差分路径的域外守卫：
+//   * 位置在 [0, dims] 之外 —— 同 SdfTrilinear；
+//   * 任一轴落在「格心之外的两个半格」（coordinate-0.5 <= 0 或 >= dims-1）——
+//     旧路径的 ±0.5 cell 偏移样本会掉到域外，因此那里本来就整点拒绝；而且
+//     SdfCoordinate 在该区间把 fraction 夹成 0（沿该轴是常量外插），没有可用的
+//     单侧导数，也不该用一根被夹成常量的轴去合成法向；
+//   * 任一角点为 clear 哨兵（SdfInitialBits）—— 同 SdfTrilinear。
+// 三种情况都返回 false 并把 value 置回 SdfOutOfRangeDistance 哨兵，调用方保持
+// “该点场不可用”的原判定，不会去猜外插。
+bool SdfTrilinearGradient(vec3 position, out float value, out vec3 gradient)
+{
+    value = SdfOutOfRangeDistance;
+    gradient = vec3(0.0);
+    vec3 coordinate = (position - sdf.originCell.xyz) / sdf.originCell.w;
+    if (any(lessThan(coordinate, vec3(0.0))) ||
+        any(greaterThan(coordinate, vec3(sdf.dims.xyz))))
+        return false;
+    // 与旧路径「六个偏移样本都要在带内」的域外部分逐条对应：只取 ±0.5 cell 的
+    // 轴对齐样本，因此三个轴的 interior 判定就够。
+    const float lastX = float(sdf.dims.x - 1u);
+    const float lastY = float(sdf.dims.y - 1u);
+    const float lastZ = float(sdf.dims.z - 1u);
+    if (!(coordinate.x - 0.5 > 0.0 && coordinate.x - 0.5 < lastX) ||
+        !(coordinate.y - 0.5 > 0.0 && coordinate.y - 0.5 < lastY) ||
+        !(coordinate.z - 0.5 > 0.0 && coordinate.z - 0.5 < lastZ))
+        return false;
+
+    ivec3 base;
+    vec3 fraction;
+    fraction.x = SdfCoordinate(coordinate.x - 0.5, float(sdf.dims.x - 1u), base.x);
+    fraction.y = SdfCoordinate(coordinate.y - 0.5, float(sdf.dims.y - 1u), base.y);
+    fraction.z = SdfCoordinate(coordinate.z - 0.5, float(sdf.dims.z - 1u), base.z);
+    ivec3 high = min(base + ivec3(1), ivec3(sdf.dims.xyz) - ivec3(1));
+
+    const uint b000 = sdfGrid.cells[SdfCellIndex(ivec3(base.x, base.y, base.z))];
+    const uint b100 = sdfGrid.cells[SdfCellIndex(ivec3(high.x, base.y, base.z))];
+    const uint b010 = sdfGrid.cells[SdfCellIndex(ivec3(base.x, high.y, base.z))];
+    const uint b110 = sdfGrid.cells[SdfCellIndex(ivec3(high.x, high.y, base.z))];
+    const uint b001 = sdfGrid.cells[SdfCellIndex(ivec3(base.x, base.y, high.z))];
+    const uint b101 = sdfGrid.cells[SdfCellIndex(ivec3(high.x, base.y, high.z))];
+    const uint b011 = sdfGrid.cells[SdfCellIndex(ivec3(base.x, high.y, high.z))];
+    const uint b111 = sdfGrid.cells[SdfCellIndex(ivec3(high.x, high.y, high.z))];
+    if (b000 == SdfInitialBits || b100 == SdfInitialBits || b010 == SdfInitialBits ||
+        b110 == SdfInitialBits || b001 == SdfInitialBits || b101 == SdfInitialBits ||
+        b011 == SdfInitialBits || b111 == SdfInitialBits)
+        return false;
+
+    const float d000 = SdfIFloatFlip(b000);
+    const float d100 = SdfIFloatFlip(b100);
+    const float d010 = SdfIFloatFlip(b010);
+    const float d110 = SdfIFloatFlip(b110);
+    const float d001 = SdfIFloatFlip(b001);
+    const float d101 = SdfIFloatFlip(b101);
+    const float d011 = SdfIFloatFlip(b011);
+    const float d111 = SdfIFloatFlip(b111);
+    const float lower = mix(mix(d000, d100, fraction.x), mix(d010, d110, fraction.x),
+        fraction.y);
+    const float upper = mix(mix(d001, d101, fraction.x), mix(d011, d111, fraction.x),
+        fraction.y);
+    value = mix(lower, upper, fraction.z);
+
+    const float inverseCell = 1.0 / sdf.originCell.w;
+    gradient.x = inverseCell * mix(mix(d100 - d000, d110 - d010, fraction.y),
+        mix(d101 - d001, d111 - d011, fraction.y), fraction.z);
+    gradient.y = inverseCell * mix(mix(d010 - d000, d110 - d100, fraction.x),
+        mix(d011 - d001, d111 - d101, fraction.x), fraction.z);
+    gradient.z = inverseCell * mix(mix(d001 - d000, d101 - d100, fraction.x),
+        mix(d011 - d010, d111 - d110, fraction.x), fraction.y);
+    return true;
+}
+
 // Ericson《Real-Time Collision Detection》5.1.5，与 sdfBuilder 的
 // ClosestPointOnTriangleSquared 逐分支对应（这里直接返回无符号距离）。退化
 // 三角形的面内分支回退到最近顶点，保证结果有限而不是 0/0。

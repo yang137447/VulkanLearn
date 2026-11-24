@@ -1094,6 +1094,33 @@ substeps, maxIterationsLastFence, hardGuides, droppedSeconds   <-- 追加列
   `1/120 s × 4` 后那两根（源 strand 39581、39620）在启动段内收敛，债务消失。
   **不要把它当"已知失败"例外重新引入**。
 
+### V3 SDF 接触已知缺陷（当前行为：它不生效）
+
+**当前 V3（`cosseratImplicitV3`）的 SDF 接触不会被触发。** `RodKkt10SdfQuery`
+（`shader/glsl/hair/rodKkt10BandSolve.glsl`）把求解器位置直接送进网格变换，但：
+
+- 求解器位置与胶囊几何在**米**（录制时 `transformed.a/b/radius *= 0.01f`，
+  `source/hair/rodGpuRecording.h:432-434`）；
+- SDF 网格的 `originCell.xyz` 与 `cellSize` 在**厘米**（`shader/glsl/hair/tressfxSdfCommon.glsl:22`）；
+- V1 路径也是先 `* 100.0` 再查表（`shader/glsl/hair/rodKernel.glsl:229`）。
+
+因此域检查会拒绝全部采样。实测：修正前 **0 个采样被接受**（sdf_animated，2000 guides，
+133,353 个拒绝）。
+
+**这意味着：下面那张验收基线表里的四个 `SC_tressfx_rod_*` 场景，虽然声明了
+`hairCollision.mesh`，它们的绿色基线实际上是「只有胶囊接触」的求解结果。
+不要把它们当成 SDF 接触已工作的证据。**
+
+\`VL_ROD_SDF_UNIT_FIX\` 会打开正确的量纲（`position * 100.0`）。开启后 SDF 接触真正生效
+（实测 63,962 个采样被接受），**但求解器尚不能吸收这些接触**：四个场景全部
+越界（static 0.00997 → 1.0446，sdf_static 0.00879 → 1.0979，animated 0.0098–0.0100 → 7.358，
+sdf_animated 0.0095–0.0100 → 0.255），每块 5–11 个 guide 在 fence 上失败，每毫秒仿真成本贵
+2.6–13.4×。因此它**默认关闭**，仅供后续开发使用。
+
+要修好它，需要先定位为什么求解器吸收不了真实 SDF 接触（候选：代理网格在 bind pose
+时就包住发根导致撞突不可调和、三槽活跃集容不下同时生效的多个接触、SDF 梯度粗糙导致
+法向跳变），并先把它当作正确性问题而非性能问题处理。
+
 ### 跳变与 ResetPositions
 
 `GuideSimulationHistory` 只保存最后一次已录制的 pose 身份与不连续代数，
