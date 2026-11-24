@@ -1101,6 +1101,18 @@ uint RodKkt10SolveCondensed(uint lane, out RodKkt10Vector direction)
     // 条指令，CR 把它变成常数轮（每轮一次 6x6 求逆 + 两次块乘）。
     RodV2Vector solution = RodV2Vector(vec3(0), vec3(0));
 #ifdef VL_ROD_CR_SHUFFLE
+#ifdef VL_ROD_CR_DOUBLE
+    {
+        // 判别性探针：同样的求解跑两遍（第二遍结果覆盖第一遍，物理不变）。
+        // 成本若翻倍 → 指令量主导；几乎不变 → 延迟/带宽主导（第二遍命中缓存）。
+        RodV2Vector discarded = RodV2Vector(vec3(0), vec3(0));
+        RodCrSolveBandShuffle(lane, condensed.lower, condensed.diagonal,
+            condensed.upper, condensed.right, discarded);
+        // 防止第二次求解被整体消除：运行期永假、编译期不可知地引用结果。
+        if (params.counts.x == 0xFFFFFFFFu)
+            direction.values[9] += discarded.linear.x;
+    }
+#endif
     if (!RodCrSolveBandShuffle(lane, condensed.lower, condensed.diagonal,
             condensed.upper, condensed.right, solution))
         return 3u;
