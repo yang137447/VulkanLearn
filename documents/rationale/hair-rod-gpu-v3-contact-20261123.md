@@ -1593,6 +1593,46 @@ orientations 等）从 shared 挪到**寄存器**，邻点访问统统走 `subgr
 `barrier()` 范围、per-guide 共享数组索引），必须先锁住 16 guide 的 defect 0.00979
 再谈性能。
 
+### 把「接触」再拆开：SDF 查询占 14.4 ms 里的约 10 ms
+
+上一节「有碰撞体 14.38 ms / 无碰撞体 0.63 ms」把**胶囊和 SDF 混在一起**了。
+派生场景把两者分开后（2000 guide、1 substep、GPU 时间戳）：
+
+| 场景 | GPU hairSimulation |
+| --- | --- |
+| 4 胶囊 + SDF 网格 | **14.38 ms** |
+| 只有 4 胶囊（删掉 `collisionMesh`） | **3.52 / 4.41 ms**（两次运行） |
+| 只有 SDF 网格（删掉 `capsules`） | 0.63 ms，但 `sdfObjects=0` —— **SDF 没被启用** |
+
+顺带记一个引擎现状：只声明 `hairCollision.collisionMesh` 而不带 `capsules` 时，
+SDF 根本不会被建起来（`sdfObjects=0`），所以「SDF 单独成本」无法用这种方式隔离。
+但对照已经足够：**胶囊约 3.5–4.4 ms，SDF 路径约 10 ms**。
+
+### 为什么 SDF 查询这么贵
+
+`SdfTrilinear`（`tressfxSdfCommon.glsl`）是**手写三线性**：每次采样要读 8 个
+`SdfCellIndex` 单元、做 `SdfInitialBits` 校验、再解 `SdfIFloatFlip`。
+`RodKkt10SdfQuery` 用 1 次中心采样 + 6 次 ±0.5·cell 偏移做中心差分求梯度，
+一次查询就是 **7 × 8 = 56 次全局缓冲读取**（中心采样越界时会短路，所以远处点只花 1 次）。
+
+在「每个 SM 只驻留极少 warp」的前提下，这 56 次读取的延迟基本裸露，
+这与「加 ALU 免费、加访存变慢」的实测性质一致。
+
+### 下一步（按收益/风险排序，都不需要动 workgroup 布局）
+
+1. **把 SDF 网格改成 `sampler3D` + 硬件三线性**：一次采样 1 个纹理取指，
+   7 次采样取代 56 次缓冲读取，理论上是 8x 的访存削减。代价是要新增 3D 图像
+   （R32F、48³ ≈ 442 KB）、采样器与描述符，并且 splat 要么直接写图像、
+   要么每帧从缓冲上传。
+2. **把 7 次采样减到 4 次**（前向差分：中心 + 三个轴向），立省 43%，
+   但梯度精度从二阶降为一阶，必须重新验 defect 与失败数。
+3. 中心采样加**带宽早退**：目前 `distanceValue >= SdfOutOfRangeDistance` 只跳过偏移采样，
+   距离表面较远但仍在带内的点依然付 56 次读取；可加「距表面 > k·cellSize 直接返回」
+   的阈值。
+
+这三条都先锁 16 guide defect 0.00979 和四场景 0 失败，再谈性能。SDF 单位那条
+历史坑（`position * 100.0`）已经修过，改这段必须重新确认量纲不变。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
