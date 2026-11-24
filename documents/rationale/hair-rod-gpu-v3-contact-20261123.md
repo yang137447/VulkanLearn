@@ -1752,6 +1752,33 @@ SDF 单位核对（历史上这里错过一次 100 倍）。
 3. 顺便查 `GpuPassTimer` 为何让一个包含多个 dispatch 的分段多出 15 ms（已知分段之和
    才 0.21 ms）——这个工具得先可信，否则后面还会被它带偏。
 
+### `GpuPassTimer` 本身不可信，先别拿它做判据
+
+上一节之后又做了一次对照：perf jsonl 里只有 15 个受监控阶段，
+2000 guide 那一行把 **76.44 ms** 算在 `hairSimulation` 名下（16 guide 同场景只有 0.81 ms）。
+但同一构建实测：CPU `HairSimulationPass::Record` **2.5 ms**（含 rod 2.45 ms），
+GPU 分段之和 **0.2–0.8 ms**。
+
+三个口径又一次不可能同时成立，而这次矛盾指向**工具本身**：
+`GpuPassTimer` 的 Begin/End 两端都在 `eBottomOfPipe`，这个位置上写入的时间戳
+不保证两次写入之间只有本范围的命令：如果有其他队列的提交或
+GPU 调度切换插在中间，它们的耗时会被计入这个分段。已知事实：
+一个包多个 dispatch 的分段读到 15–76 ms，而同一批 dispatch 各自分段相加只有 0.2 ms。
+
+**所以在搞清 `GpuPassTimer` 为什么会吮到外部耗时之前，不能再用它判定
+「哪一段贵」。** 这也是这几轮反复出错的根源：工具本身没有先被验证。
+
+### 下一步：先验证工具，再测性能
+
+1. **验证 `GpuPassTimer`**：在一个已知耗时的 compute 前后写时间戳
+   （例如人为循环一定次数），对比时间戳差与 CPU 侧壁钟；若不一致，
+   就把 Begin/End 改成 `eComputeShader`→`eComputeShader` 而非 `eBottomOfPipe`；
+2. **不依赖它重建一个可信基准**：fps / 帧时间 + `HairSimulationPass::Record` 的 CPU 壁钟（已有
+   `VL_ROD_CPU_STAGE_TIMING`）；这两个至少自洽。
+3. 然后才能回答「2000 guide 为什么 10 fps」——目前知道的只是：
+   模拟链路 CPU 2.5 ms / GPU 0.2–0.8 ms，所以 92 ms 在别处，而现有仪表把它错记到了
+   `hairSimulation` 头上。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
