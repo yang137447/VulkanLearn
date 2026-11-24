@@ -76,6 +76,13 @@ RodV2Matrix RodV2Tangent(uint row, uint column);
 #endif
 shared uint v2Iterations;
 shared uint v2Accepted;
+
+#ifdef VL_ROD_SHARED_PAD_BYTES
+// 占用率标定用：故意占用 VL_ROD_SHARED_PAD_BYTES 字节 shared。
+// 当前 workgroup 数/SM = floor(48 KB / 总 shared)，所以逐步加大 pad 直到性能掉档，
+// 就能反推出「现在到底驻留几个 workgroup」。
+shared vec4 rodSharedPad[VL_ROD_SHARED_PAD_BYTES / 16];
+#endif
 shared float v2Alpha;
 shared uint v2DomainValid;
 shared uint v3ContinuationUsed;
@@ -1209,8 +1216,19 @@ void main()
             publishedLocal : currentPositions.positions[publishedPoint];
         currentPositions.positions[publishedPoint] = publishedLocal;
     }
+#ifdef VL_ROD_SHARED_PAD_BYTES
+    // 防止 pad 被死代码消除：写入后读回，并用运行期永假但编译期不可知的条件引用它。
+    if (lane == 0u)
+        rodSharedPad[0] = positions[0];
+    barrier();
+    float padProbe = rodSharedPad[0].x;
+#endif
     if (lane == 0u)
     {
+#ifdef VL_ROD_SHARED_PAD_BYTES
+        if (params.counts.x == 0xFFFFFFFFu)
+            rodState.guides[slot].energies.x = padProbe;
+#endif
         rodState.guides[slot].diagnostic = vec4(float(failure), v2Maximum, v2Merit, float(v2Iterations));
 #ifdef VL_ROD_V3_CONTINUATION
         rodState.guides[slot].energies = vec4(float(v3ContinuationUsed),
