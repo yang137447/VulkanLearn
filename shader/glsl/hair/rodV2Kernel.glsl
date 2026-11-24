@@ -952,6 +952,15 @@ void main()
             RodV2Vector direction;
 #ifdef VL_ROD_V3_KKT10_SOLVE
             // 活跃集每轮重选：保留正乘子身份 + 按几何 gap 补足新穿透的接触。
+#ifdef VL_ROD_ACTIVESET_DOUBLE
+            // 判别性探针：激活集更新双跑一遍（第二次以第一次结果为输入，基本幂等）。
+            {
+                RodKkt10UpdateActiveSet(lane);
+                barrier();
+                if (params.counts.x == 0xFFFFFFFFu)
+                    rodKktFeasible += 0u;
+            }
+#endif
             RodKkt10UpdateActiveSet(lane);
             RodKkt10UpdateAxial(lane);
             barrier();
