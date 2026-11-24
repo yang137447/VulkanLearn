@@ -17,9 +17,10 @@ double GuideSimulationCpuSeconds()
 
 struct GuideSimulationCpuStages
 {
-    double skinning = 0.0;
-    double collect = 0.0;
-    double objects = 0.0;
+    // 全部字段都是「自上次打印以来这个窗口」的累计秒数，统一除以同一帧数后打印，
+    // 所以 total / setup / rest / rod 可以直接相加比较，不再混入本帧值与累计均值。
+    double total = 0.0;
+    double setup = 0.0;
     double rod = 0.0;
     uint32_t frames = 0;
 };
@@ -826,16 +827,25 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     if (cpuStageTiming)
     {
         const double cpuMarkEnd = GuideSimulationCpuSeconds();
+        guideSimulationCpuStages.total += cpuMarkEnd - cpuMark0;
+        guideSimulationCpuStages.setup += cpuMarkSkinning - cpuMark0;
         ++guideSimulationCpuStages.frames;
-        if (guideSimulationCpuStages.frames % 120u == 0u)
+        if (guideSimulationCpuStages.frames >= 120u)
         {
-            const double n = static_cast<double>(guideSimulationCpuStages.frames);
-            std::cout << "[HairCPU] frames=" << guideSimulationCpuStages.frames
-                      << " total=" << ((cpuMarkEnd - cpuMark0) * 1000.0) << " ms"
-                      << " setup+skinning=" << ((cpuMarkSkinning - cpuMark0) * 1000.0) << " ms"
-                      << " rest=" << ((cpuMarkEnd - cpuMarkSkinning) * 1000.0) << " ms"
-                      << " rod=" << (guideSimulationCpuStages.rod / n * 1000.0) << " ms/frame"
+            // 所有列都是同一窗口的每帧均值（窗口 = 自上次打印起的帧数）。
+            // 之前 total/setup/rest 是本帧值而 rod 是从进程启动累计的均值，两套
+            // 口径混在一行里不可比；现在统一为窗口均值，打印后清零开新窗口。
+            const double window = static_cast<double>(guideSimulationCpuStages.frames);
+            std::cout << "[HairCPU] window=" << guideSimulationCpuStages.frames
+                      << " frames, mean ms/frame: total=" <<
+                        guideSimulationCpuStages.total / window * 1000.0
+                      << " setup+skinning=" <<
+                        guideSimulationCpuStages.setup / window * 1000.0
+                      << " rest=" << (guideSimulationCpuStages.total -
+                        guideSimulationCpuStages.setup) / window * 1000.0
+                      << " rod=" << guideSimulationCpuStages.rod / window * 1000.0
                       << std::endl;
+            guideSimulationCpuStages = GuideSimulationCpuStages{};
         }
     }
 }

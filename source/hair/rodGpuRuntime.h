@@ -4,6 +4,7 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <cstdlib>
 #include <cstring>
 #include <deque>
 #include <memory>
@@ -27,8 +28,35 @@ inline constexpr double RodGpuStepSeconds = 1.0 / 240.0;
 // （vk::DeviceLostError）。稳态（0–8 轮）仍然是满 8 个 substep。
 inline constexpr uint32_t RodGpuV3HardFrameIterations = 12;
 inline constexpr uint32_t RodGpuV3HardFrameSteps = 1;
+// 对象级「硬帧」判据的稳健化（默认路径）：统计上一批读回里牛顿轮数超过
+// RodGpuV3HardFrameIterations 的 guide 数，只有超过 guide 总数的 1%（至少 1 个）
+// 才降为单 substep。旧的 max-over-guides 判据会让一个永久不收敛的 guide 把其余
+// 上千 guide 一起钉在 1 substep——bind pose 实测因此长期只有 1.04 substep/帧。
+inline constexpr uint32_t RodGpuV3HardFrameGuidePermille = 10;
+inline constexpr uint32_t RodGpuV3HardFrameGuideFloor = 1;
+// 时间债上限：超过部分主动丢弃（见 RecordRod 的 debt ceiling）。每帧最多退休
+// RodGpuMaxSteps × 1/240 = 33.3 ms，而每帧最多加入 100 ms，所以没有上限时
+// debt 只能单调增长，唯一泄压阀是 Reset（一次可见的头发跳变）。
+// 0.5 s 的含义：允许半秒的追赶余量，超出的仿真时间直接放弃，宁可头发比角色慢。
+inline constexpr double RodGpuMaxDebtSeconds = 0.5;
 inline constexpr uint32_t RodGpuGuideVec4Count = 32 * 5 + 31 * 8 + 4;
 inline constexpr uint32_t RodGpuReferenceVec4Count = 96;
+
+// 只读一次环境变量：VL_ROD_GATE_MODE=legacy 恢复旧的对象级 max 判据，仅用于 A/B
+// 对比；默认走上面的 guide 计数判据。进程内字符串常量只解析一次，热路径零成本。
+inline bool RodGpuLegacyGateMode()
+{
+    // 默认 legacy（max-over-guides）。实测说明「超阈值 guide 计数」判据在 bind pose 下
+    // 会把帧费用从 22.7 ms 拉到 45.4 ms：它让更多 substep 跑起来，而那几个
+    // maxIterations = 64 的 guide 会在每个 substep 里重算，拖慢整个对象。
+    // 因此新判据保留为可选实验：VL_ROD_GATE_MODE=new。
+    static const bool legacy = [] {
+        const char* mode = std::getenv("VL_ROD_GATE_MODE");
+        return !(mode != nullptr && mode[0] == 'n' && mode[1] == 'e' && mode[2] == 'w');
+    }();
+    return legacy;
+}
+
 
 struct alignas(16) RodGpuParams
 {
@@ -154,6 +182,9 @@ struct RodGpuObject
     std::array<bool, GuideSimulationParamBufferCount> readbackPending{};
     std::array<uint64_t, GuideSimulationParamBufferCount> readbackFrame{};
     std::array<uint64_t, GuideSimulationParamBufferCount> readbackGeneration{};
+    // 与 readbackFrame 同槽记录该帧实际派发的 substep 数，供诊断 CSV 精确对齐
+    // 「这一次读回属于多少个子步」——不能事后读当前 steps，那已经是更晚的帧了。
+    std::array<uint32_t, GuideSimulationParamBufferCount> readbackSteps{};
     vk::DescriptorPool pool = nullptr;
     RendererBackendVulkan* backend = nullptr;
     vk::Buffer current = nullptr;
@@ -171,11 +202,18 @@ struct RodGpuObject
     double receivedSeconds = 0.0;
     double dispatchedSeconds = 0.0;
     double debtSeconds = 0.0;
+    // 累计被 debt ceiling 主动丢弃的仿真秒数。它只增不减（ClearTimeline 归零），
+    // 用来区分「头发比角色慢」是本帧负载造成的，还是丢弃策略造成的。
+    double droppedSeconds = 0.0;
     double acceptedSeconds = 0.0;
     uint32_t gpuStatus = 0;
     // 上一批读回里单 guide 的最大牛顿轮数（UINT32_MAX = 还没有读回，按“硬帧”处理，
     // 因此 reset 后的头两帧一定走保守的 1 substep）。见 RodGpuV3HardFrameIterations。
     uint32_t maxIterationsLastFence = UINT32_MAX;
+    // 上一批读回里「牛顿轮数超过 RodGpuV3HardFrameIterations」的 guide 数
+    // （UINT32_MAX 同样是“还没有读回”的保守哨兵）。默认门判据是它，旧判据是
+    // maxIterationsLastFence；两者都在 ClearTimeline 里重置。
+    uint32_t hardGuidesLastFence = UINT32_MAX;
     RodGpuPose previousPose;
     RodGpuPose referencePose;
     bool poseInitialized = false;
@@ -204,6 +242,7 @@ struct RodGpuObject
         receivedSeconds = 0.0;
         dispatchedSeconds = 0.0;
         debtSeconds = 0.0;
+        droppedSeconds = 0.0;
         acceptedSeconds = 0.0;
         gpuStatus = 0;
         ++simulationGeneration;
@@ -211,6 +250,11 @@ struct RodGpuObject
         sdfHistoryValid = false;
         // reset 之后重新进入瞬态：把硬帧判据恢复成保守值（未知）。
         maxIterationsLastFence = UINT32_MAX;
+        hardGuidesLastFence = UINT32_MAX;
+        readbackSteps.fill(0);
+        // 失败证据按 reset epoch 重新采集：否则每个对象生命周期内只能拿到一次，
+        // 而 reset 之后的状态是新起点，值得再抓一份。
+        failureEvidenceWritten = false;
     }
 
     RodGpuPose Sample(double time) const

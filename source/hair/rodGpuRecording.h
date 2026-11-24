@@ -200,6 +200,8 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
         float maxPredictorDefect = 0.0f;
         uint32_t failedGuides = 0;
         uint32_t maxIterations = 0;
+        // 超过硬帧轮数阈值的 guide 数：默认门判据（单个 guide 不再能钉住整个对象）。
+        uint32_t hardGuides = 0;
         std::ofstream failures("artifacts/hair-landing-20261119/gpu-failed-guides.csv", std::ios::app);
         const auto& section = object->GetImported()->modelResource.sections[
             object->GetImportedSectionIndex()];
@@ -211,6 +213,8 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
             maxBlockDefect = std::max(maxBlockDefect, diagnostic[1]);
             maxPredictorDefect = std::max(maxPredictorDefect, diagnostic[2]);
             maxIterations = std::max(maxIterations, static_cast<uint32_t>(diagnostic[3]));
+            hardGuides += static_cast<uint32_t>(diagnostic[3]) >
+                RodGpuV3HardFrameIterations ? 1u : 0u;
             failedGuides += diagnostic[0] != 0.0f ? 1 : 0;
             if (diagnostic[0] != 0.0f)
             {
@@ -223,6 +227,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
         }
         state.acceptedSeconds = accepted;
         state.maxIterationsLastFence = maxIterations;
+        state.hardGuidesLastFence = hardGuides;
         if (failedGuides != 0 && !state.failureEvidenceWritten &&
             state.captureFailureSlot != UINT32_MAX &&
             values[state.captureFailureSlot * 16] != 0.0f)
@@ -251,10 +256,20 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
         // 旧策略把“有一个 guide 失败”折算成整个对象的时间债，再配合下面的
         // `gpuStatus == 0` 门控把 steps 归零。现在单 guide 失败由 shader 侧
         // 不发布 + 下帧重试处理，债只反映调度（收到多少时间、派发多少步）。
+        // 列序（前缀不可变，脚本按位置读）：
+        //   frame,guides,gpuStatus,maxBlockDefect,maxPredictorDefect,accepted,
+        //   received,dispatched,debt,failedGuides
+        // 之后是本轮新增的可观测量：
+        //   substeps（本行读回所属帧实际派发的 substep 数）,
+        //   maxIterationsLastFence（本行读回里单 guide 最大牛顿轮数）,
+        //   hardGuides（轮数 > RodGpuV3HardFrameIterations 的 guide 数，默认门判据）,
+        //   droppedSeconds（累计被 debt ceiling 丢弃的仿真秒数）。
         output << state.readbackFrame[frameSlot] << ',' << state.guides << ',' <<
             state.gpuStatus << ',' << maxBlockDefect << ',' << maxPredictorDefect << ',' <<
             accepted << ',' << state.receivedSeconds << ',' << state.dispatchedSeconds << ',' <<
-            state.debtSeconds << ',' << failedGuides << '\n';
+            state.debtSeconds << ',' << failedGuides << ',' <<
+            state.readbackSteps[frameSlot] << ',' << maxIterations << ',' <<
+            hardGuides << ',' << state.droppedSeconds << '\n';
         if (trace.active)
         {
             std::ofstream binary("artifacts/hair-landing-20261119/gpu-first-guide-" +
@@ -298,6 +313,25 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
                 state.previousPose, pose});
             state.receivedSeconds += delta;
             state.debtSeconds += delta;
+            // debt ceiling：超出部分主动丢弃，而不是无限追赶。每帧最多只能退休
+            // RodGpuMaxSteps × RodGpuStepSeconds = 33.3 ms，而单帧加入上限是 100 ms，
+            // 没有上限时 debt 只能单调增长，唯一泄压阀是 Reset（可见的头发跳变）。
+            // 丢弃是有意的取舍：头发总量上会比角色慢一点，但帧时间不再锯齿上涨。
+            if (state.debtSeconds > RodGpuMaxDebtSeconds)
+            {
+                const bool firstDrop = state.droppedSeconds == 0.0;
+                const double dropped = state.debtSeconds - RodGpuMaxDebtSeconds;
+                state.droppedSeconds += dropped;
+                state.debtSeconds = RodGpuMaxDebtSeconds;
+                // 丢弃必须可观测；逐帧打印会成为新的噪声源，所以首帧一次、
+                // 之后每 120 帧最多一行。完整逐帧计数在诊断 CSV 的 droppedSeconds 列。
+                if (firstDrop || (renderScene.frameIndex % 120u) == 0u)
+                    std::cout << "[RodGPU] debt ceiling: droppedThisFrame=" <<
+                        dropped * 1000.0 << " ms droppedTotal=" <<
+                        state.droppedSeconds * 1000.0 << " ms debt=" <<
+                        state.debtSeconds * 1000.0 << " ms frame=" <<
+                        renderScene.frameIndex << std::endl;
+            }
         }
         state.previousPose = pose;
         state.lastFrame = renderScene.frameIndex;
@@ -307,8 +341,15 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     // 另外按上一批读回的牛顿轮数限制单帧 substep：还在瞬态（硬帧）时只派发
     // RodGpuV3HardFrameSteps，把“每 guide 数十轮 × 8 substep × 数千 guide”摊到多帧，
     // 避免单次 dispatch 超过 OS 提交上限；稳态（0–8 轮）仍是满 RodGpuMaxSteps。
-    const uint32_t substepBudget = progressive &&
-        state.maxIterationsLastFence > RodGpuV3HardFrameIterations ?
+    // 默认判据用「超阈值 guide 计数 > 1%（至少 1 个）」，而不是 max-over-guides：
+    // 后者在 bind pose 下被一个永不收敛的 guide 永久钉死为 1 substep。
+    // VL_ROD_GATE_MODE=legacy 可恢复旧判据做 A/B。
+    const uint32_t hardGuideThreshold = std::max(RodGpuV3HardFrameGuideFloor,
+        (state.guides * RodGpuV3HardFrameGuidePermille + 999u) / 1000u);
+    const bool hardFrame = RodGpuLegacyGateMode() ?
+        state.maxIterationsLastFence > RodGpuV3HardFrameIterations :
+        state.hardGuidesLastFence > hardGuideThreshold;
+    const uint32_t substepBudget = progressive && hardFrame ?
         RodGpuV3HardFrameSteps : RodGpuMaxSteps;
     uint32_t steps = newFrame && delta > 0.0f &&
         !(progressive && state.reset) ? std::min(substepBudget,
@@ -552,6 +593,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     state.readbackPending[frameSlot] = true;
     state.readbackFrame[frameSlot] = renderScene.frameIndex;
     state.readbackGeneration[frameSlot] = state.simulationGeneration;
+    state.readbackSteps[frameSlot] = steps;
     state.dispatchedSeconds += steps * RodGpuStepSeconds;
     state.debtSeconds -= steps * RodGpuStepSeconds;
     while (!state.intervals.empty() && state.intervals.front().end <= state.dispatchedSeconds + 1.0e-9)
