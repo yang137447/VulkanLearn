@@ -1557,6 +1557,42 @@ orientations 等）从 shared 挪到**寄存器**，邻点访问统统走 `subgr
 （如果只有极少数 guide 差很多，就是长尾）；否则按「prologue 双跑」和「UpdateAxial
 双跑」继续切。注意长尾情形下，优化平均路径没有意义，必须削掉病态分支。
 
+### GPU 时间戳：14.38 ms 是真实 GPU 执行，而且这个 kernel 是延迟受限
+
+用仓库现成的 `GpuPassTimer`（`renderFrameRecorder.cpp` 里已经有
+`BeginPass(commandBuffer, "hairSimulation")`，控制台命令 `gpustats`）直接读 GPU 分段，
+不再依赖 CPU 括号：
+
+| 场景（2000 guide，固定 1 substep） | GPU hairSimulation | CPU 括号 |
+| --- | --- | --- |
+| 有碰撞体 | **14.38 ms** | 17.22 ms |
+| 无碰撞体 | **0.63 ms** | 0.69 ms |
+
+所以 17.22 ms 里约 **14.4 ms 是真实 GPU 执行**，其余约 2.8 ms 是 CPU/队列开销。
+而无碰撞体时同样是 2000 个 workgroup、同样的状态装载与写回，只要 **0.63 ms**——
+**差别完全在接触相关的代码路径上**。
+
+把它和「所有可双跑的 kernel 阶段都免费」放在一起，这个 kernel 的性质就确定了：
+**它是延迟受限（latency-bound），不是吞吐受限**。加 ALU 工作量会被访存停顿的空档吃掉，
+所以双跑任何阶段都测不出差别；而接触路径一旦开启，多出来的 shared/global 访问
+（接触槽、残差缓冲、接触数组）在**每个 SM 只驻留极少 warp** 时全部裸露延迟。
+
+这也调和了前面两个否证实验：加 24 KB shared 不变（shared 不是把占用率压到 1 的原因）、
+删 36 个 float 不变（寄存器压力也不是主因）——但**占用率低**这个事实仍成立，
+只是限制它的既不是 shared 也不是那 36 个 float。
+
+### 下一步：提高并发，而不是继续减指令
+
+1. **改 workgroup 布局**：把 `local_size_x` 从 32 提到 128，让一个 workgroup 含 4 个 warp、
+   每个 warp 处理一个 guide（per-guide 共享状态变成 4 份并存）。若 GPU 能同时驻留多个
+   workgroup，这就直接给出 4x 的延迟隐藏；若 shared 装不下 4 份，退到 64（2 个 warp）。
+2. **把接触路径的 shared 访问搬进寄存器**（`subgroupShuffle` 已验证可行），
+   缩短必须串行等待的依赖链。
+
+两者都是结构性改动（`gl_WorkGroupID`/`gl_LocalInvocationID` 到 guide 的映射、
+`barrier()` 范围、per-guide 共享数组索引），必须先锁住 16 guide 的 defect 0.00979
+再谈性能。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
