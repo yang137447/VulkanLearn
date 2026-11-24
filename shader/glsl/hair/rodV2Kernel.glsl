@@ -936,7 +936,10 @@ void main()
         barrier();
         // 深重叠先做一步位置投影修复（对应 CPU RepairInitialContactOverlap），
         // 否则隐式牛顿的 merit 线搜索只能退到极小步。
+#ifndef VL_ROD_SKIP_OVERLAP_REPAIR
+        // 诊断：VL_ROD_SKIP_OVERLAP_REPAIR 用于测量重叠修复的成本（会改变物理，仅测量用）。
         RodKkt10RepairOverlap(lane);
+#endif
         for (uint contactSlot = 0u; contactSlot < 3u; ++contactSlot)
             rodKktContacts[contactSlot] = vec4(-1, 0, 0, 0);
         rodKktExcludedContacts = 0u;
@@ -952,6 +955,15 @@ void main()
             RodKkt10UpdateActiveSet(lane);
             RodKkt10UpdateAxial(lane);
             barrier();
+#ifdef VL_ROD_MEASURE_DOUBLE
+            // 判别性探针：Measure 幂等，双跑一次即可量它的成本。
+            {
+                RodActiveMeasure(lane, true);
+                barrier();
+                if (params.counts.x == 0xFFFFFFFFu)
+                    v2Merit += 0.0 * v2Maximum;
+            }
+#endif
             RodActiveMeasure(lane, true);
 #else
             RodActiveMeasure(lane, true);

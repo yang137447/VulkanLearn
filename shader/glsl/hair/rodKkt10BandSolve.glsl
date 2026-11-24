@@ -243,22 +243,66 @@ bool RodKkt10SdfQuery(vec3 position, out float gap, out vec3 gradient)
 
 // id -> 几何。gap 是几何距离（米，已扣 margin 并按 |grad| 归一），gradient 是**单位**法向。
 // 胶囊本身就是单位法向，因此两条路径在 KKT 里量纲一致。
-bool RodKkt10ContactGap(uint id, vec3 position, out float gap, out vec3 gradient)
+// ---------------------------------------------------------------------------
+// 接触几何缓存：同一个位置只求一次 9 个（8 胶囊 + SDF）gap 与单位法向。
+//
+// 动机：同一位置原来被反复求值——`RodKkt10UpdateActiveSet`（每迭代）、
+// `RodKkt10BuildContacts`（压缩 / 残差 / measure 各自都调）、
+// `RodKkt10DeepestOverlap`（每 substep）。每次都是「8 个胶囊距离 + SDF 的 7 次
+// 三线性采样」。实测把碰撞体去掉后整帧从 27 ms 掉到 0.8 ms，说明这部分几乎就是
+// 全部成本，所以去重是当前收益最大的一刀。
+//
+// 语义：位置与缓存一致时直接取；不一致就整体重算 9 个。试算循环每个 alpha 都是新
+// 位置，会各自刷新一次——这是必须的，merit 依赖新位置的 gap。
+// ---------------------------------------------------------------------------
+vec3 rodKktProbePosition;
+bool rodKktProbeReady;
+float rodKktProbeGap[9];
+vec3 rodKktProbeNormal[9];
+bool rodKktProbeValid[9];
+
+void RodKkt10RefreshProbe(vec3 position)
 {
-    gap = 0.0;
-    gradient = vec3(0);
-    if (id < 8u)
+    rodKktProbePosition = position;
+    rodKktProbeReady = true;
+    for (uint slot = 0u; slot < 9u; ++slot)
     {
+        rodKktProbeGap[slot] = 0.0;
+        rodKktProbeNormal[slot] = vec3(0.0, 1.0, 0.0);
+        rodKktProbeValid[slot] = false;
+    }
+    for (uint collider = 0u; collider < 8u; ++collider)
+    {
+        if (collider >= params.counts.w)
+            continue;
         vec3 normal;
-        gap = RodKkt10CapsuleDistance(id, position, normal);
-        gradient = normal;
-        return true;
+        rodKktProbeGap[collider] = RodKkt10CapsuleDistance(collider, position, normal);
+        rodKktProbeNormal[collider] = normal;
+        rodKktProbeValid[collider] = true;
     }
 #ifdef VL_ROD_SDF
-    return RodKkt10SdfQuery(position, gap, gradient);
-#else
-    return false;
+    {
+        float gap;
+        vec3 gradient;
+        if (RodKkt10SdfQuery(position, gap, gradient))
+        {
+            rodKktProbeGap[8] = gap;
+            rodKktProbeNormal[8] = gradient;
+            rodKktProbeValid[8] = true;
+        }
+    }
 #endif
+}
+
+// id -> 几何。gap 是几何距离（已按 |grad| 归一），gradient 是**单位**法向。
+// 胶囊本身就是单位法向，因此两条路径在 KKT 里量纲一致。
+bool RodKkt10ContactGap(uint id, vec3 position, out float gap, out vec3 gradient)
+{
+    if (!rodKktProbeReady || any(notEqual(position, rodKktProbePosition)))
+        RodKkt10RefreshProbe(position);
+    gap = rodKktProbeGap[id];
+    gradient = rodKktProbeNormal[id];
+    return rodKktProbeValid[id];
 }
 
 // 接触的二阶项（几何刚度）。
@@ -338,7 +382,7 @@ void RodKkt10UpdateActiveSet(uint point)
     {
         float gap;
         vec3 gradient;
-        if (RodKkt10SdfQuery(position, gap, gradient))
+        if (RodKkt10ContactGap(8u, position, gap, gradient))
         {
             rodKktCandidateId[8u] = 8u;
             rodKktCandidateGap[8u] = gap / max(length(gradient), 1.0e-14);
@@ -596,7 +640,7 @@ float RodKkt10DeepestOverlap(vec3 position)
     {
         float gap;
         vec3 gradient;
-        if (RodKkt10SdfQuery(position, gap, gradient))
+        if (RodKkt10ContactGap(8u, position, gap, gradient))
             deepest = min(deepest, gap / max(length(gradient), 1.0e-14));
     }
 #endif
@@ -648,7 +692,7 @@ void RodKkt10RepairOverlap(uint point)
         {
             float gap;
             vec3 gradient;
-            if (RodKkt10SdfQuery(position, gap, gradient))
+            if (RodKkt10ContactGap(8u, position, gap, gradient))
             {
                 float squared = max(dot(gradient, gradient), 1.0e-28);
                 float geometricGap = gap / sqrt(squared);
