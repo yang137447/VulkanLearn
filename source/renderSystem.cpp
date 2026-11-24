@@ -33,6 +33,7 @@
 #include "renderGraph.h"
 #include "hair/hairSimulationPass.h"
 #include "render/skinning/skinDeformPass.h"
+#include "render/frame/recordCpuStageTiming.h"
 #include "render/backend/rendererObjectResourceRegistry.h"
 #include "render/resource/rendererResourceCache.h"
 #include "render/resource/placementBindingResolver.h"
@@ -1548,6 +1549,10 @@ void RenderSystem::PrepareEnvironmentResources(
 
 void RenderSystem::RecordSkinDeform(vk::CommandBuffer commandBuffer, uint32_t swapchainImageIndex)
 {
+    // 仅诊断：RecordSkinDeform（含 palette 上传）的 CPU 墙钟时间；RAII 覆盖
+    // 下面所有提前 return，每帧只累计一次，未开开关时零开销。
+    VL::RecordCpuStageScope skinDeformCpuScope(
+        VL::RecordCpuStageState().skinDeformSeconds);
     if (!prerenderSkinEnabled)
         return;
     const auto& skinDeform = RenderGraph::GetInstance().GetSkinDeform();

@@ -28,6 +28,7 @@
 #include "render/offline/offlineWorldAssets.h"
 #include "render/offline/offlineDisplayExposure.h"
 #include "render/backend/gpuPassTimer.h"
+#include "render/frame/recordCpuStageTiming.h"
 #include "render/backend/rendererFrameResources.h"
 #include "render/backend/resolvedRenderScene.h"
 #include "render/camera/cameraExposure.h"
@@ -713,6 +714,10 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
         ctx.recordParticleSimulation(commandBuffer, frameIndex);
 
         const auto& renderPassOrdered = renderGraph.GetRenderpassesOrdered();
+        // 仅诊断：整段 pass 录制循环的 CPU 墙钟时间；只在开关打开时读时钟。
+        const bool recordLoopCpuTimed = RecordCpuStageTimingEnabled();
+        const double recordLoopCpuStart =
+            recordLoopCpuTimed ? RecordCpuStageSeconds() : 0.0;
         for (size_t passIndex = 0; passIndex < renderPassOrdered.size(); ++passIndex)
         {
             const auto& renderPassName = renderPassOrdered[passIndex];
@@ -767,6 +772,10 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                     volumetricFog->Record(
                         commandBuffer, ctx.swapChainImageIndex, renderPass);
                 }
+                // 这三条特殊分支不走 RecordPass 的公共收尾，必须在这里显式闭合
+                // 计时区间；否则 passOpen 会一直保持为 true，导致后续所有 pass 的
+                // BeginPass 静默失败并整体从 gpustats 表中消失。
+                ctx.gpuTimer.EndPass(commandBuffer, passTimed);
                 continue;
             }
             if (renderPass.type ==
@@ -778,6 +787,7 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                     passIndex,
                     ctx.swapChainImageIndex);
                 ctx.recordParticleSoftDepth(commandBuffer, renderPass);
+                ctx.gpuTimer.EndPass(commandBuffer, passTimed);
                 continue;
             }
             // tile 光照聚类：compute 只写帧拥有的 SSBO，没有 framebuffer。
@@ -796,6 +806,7 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
                     lightCulling->Record(
                         commandBuffer, ctx.swapChainImageIndex, renderPass);
                 }
+                ctx.gpuTimer.EndPass(commandBuffer, passTimed);
                 continue;
             }
             VL::PassRuntimeContext passContext{
@@ -826,6 +837,13 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
             }
             ctx.gpuTimer.EndPass(commandBuffer, passTimed);
         }
+        if (recordLoopCpuTimed)
+        {
+            RecordCpuStageState().passLoopSeconds +=
+                RecordCpuStageSeconds() - recordLoopCpuStart;
+        }
+        // 仅诊断：与 GPU 表同为 120 帧窗口；标签 [RecordCPU]，与 [HairCPU] 同风格。
+        RecordCpuStageFrameEnd();
 
         // 与 GPU 表同周期（120 帧）输出；只有 --gpu-stats 打开时才打印。
         if (ctx.gpuPassStatsLoggingEnabled)
