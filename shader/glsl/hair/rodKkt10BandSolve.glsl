@@ -298,6 +298,24 @@ void RodKkt10RefreshProbe(vec3 position)
 // 胶囊本身就是单位法向，因此两条路径在 KKT 里量纲一致。
 bool RodKkt10ContactGap(uint id, vec3 position, out float gap, out vec3 gradient)
 {
+#ifdef VL_ROD_NO_PROBE_CACHE
+    // 对照路径：直算，不经缓存数组。缓存数组是动态索引的，会落 local memory，
+    // 在延迟受限的 kernel 里可能反而更慢——这个开关就是用来验证这一点的。
+    gap = 0.0;
+    gradient = vec3(0);
+    if (id < 8u)
+    {
+        vec3 normal;
+        gap = RodKkt10CapsuleDistance(id, position, normal);
+        gradient = normal;
+        return true;
+    }
+#ifdef VL_ROD_SDF
+    return RodKkt10SdfQuery(position, gap, gradient);
+#else
+    return false;
+#endif
+#endif
     if (!rodKktProbeReady || any(notEqual(position, rodKktProbePosition)))
         RodKkt10RefreshProbe(position);
     gap = rodKktProbeGap[id];
