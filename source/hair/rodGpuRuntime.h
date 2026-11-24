@@ -19,25 +19,60 @@
 
 namespace VL::Hair
 {
+// UBO/着色器数组容量，不是策略上限：RodGpuParams::roots / capsules 和
+// shader 的 mat4 roots[9] / capsules[9][8] 都按它定长。改它必须同时改
+// shader 布局并重新验证 sizeof/offsetof 静态断言，因此策略不要直接用它。
 inline constexpr uint32_t RodGpuMaxSteps = 8;
 inline constexpr uint32_t RodGpuSweeps = 16;
-// 子步长。正常是 1/240 s。诊断开关 VL_ROD_STEP_HZ 允许换成别的频率（例如 120），
-// 用来测「大时间步 × 少子步」的成本/稳定性；默认路径行为不变。
+// 单帧可退休仿真时间的不变式（retirement ceiling）：每帧最多把仿真推进这么多。
+// 它由「步长 × 每帧策略子步上限」共同满足，默认 1/120 s × 4 = 33.3 ms，
+// 与旧的 1/240 s × 8 完全相同。单独改其中一项会破坏这个上限，因此默认值
+// 由下面的 static_assert 在编译期锁死；VL_ROD_* 覆盖只用于诊断 A/B。
+inline constexpr double RodGpuRetirementCeilingSeconds = 1.0 / 30.0;
+inline constexpr double RodGpuDefaultStepHz = 120.0;
+inline constexpr uint32_t RodGpuDefaultSubstepCap = 4;
+static_assert(RodGpuDefaultSubstepCap / RodGpuDefaultStepHz ==
+    RodGpuRetirementCeilingSeconds, "default step x substep cap must keep the 33.3 ms ceiling");
+// 子步长。默认 1/120 s；诊断开关 VL_ROD_STEP_HZ 可覆盖（例如 240 复原旧步长）。
 // 做成函数而不是 constexpr，是为了让环境变量在首次调用时解析，并避免跨 TU
 // 的静态初始化顺序问题（所有调用点都在函数体内）。
 inline double RodGpuStepSeconds()
 {
     static const double seconds = [] {
         const char* value = std::getenv("VL_ROD_STEP_HZ");
-        const double hertz = value != nullptr ? std::strtod(value, nullptr) : 240.0;
-        return 1.0 / (hertz > 0.0 ? hertz : 240.0);
+        const double hertz = value != nullptr ? std::strtod(value, nullptr) : RodGpuDefaultStepHz;
+        return 1.0 / (hertz > 0.0 ? hertz : RodGpuDefaultStepHz);
     }();
     return seconds;
 }
+// 每帧策略子步上限。与 RodGpuMaxSteps（UBO 容量）分开：默认 4 × 1/120 s
+// = 33.3 ms，保持退休上限不变。VL_ROD_SUBSTEP_CAP 可覆盖（配合
+// VL_ROD_STEP_HZ=240 VL_ROD_SUBSTEP_CAP=8 可完整复原旧的 8 × 1/240 行为）；
+// 上限被夹在 [1, RodGpuMaxSteps]，否则会越界写 roots/capsules 与 shader 数组。
+inline uint32_t RodGpuSubstepCap()
+{
+    static const uint32_t cap = [] {
+        const char* value = std::getenv("VL_ROD_SUBSTEP_CAP");
+        long requested = static_cast<long>(RodGpuDefaultSubstepCap);
+        if (value != nullptr && value[0] != '\0')
+        {
+            // 只在整串都是合法整数时采用；拼写错误不能让上限静默掉到 1。
+            char* end = nullptr;
+            const long parsed = std::strtol(value, &end, 10);
+            if (end != value && *end == '\0')
+                requested = parsed;
+        }
+        if (requested < 1)
+            return 1u;
+        return requested >= static_cast<long>(RodGpuMaxSteps) ?
+            RodGpuMaxSteps : static_cast<uint32_t>(requested);
+    }();
+    return cap;
+}
 // V3 带接触的“硬帧”判据：上一批读回里某个 guide 用了超过这么多轮牛顿，就说明
 // 它还在首个瞬态里。此时单帧只派发 1 个 substep，把瞬态摊到多帧——2000 guide
-// 实测「8 substep × 每 guide 数十轮」会让单次 dispatch 超过 OS 的提交上限
-// （vk::DeviceLostError）。稳态（0–8 轮）仍然是满 8 个 substep。
+// 实测「满子步上限 × 每 guide 数十轮」会让单次 dispatch 超过 OS 的提交上限
+// （vk::DeviceLostError）。稳态（0–8 轮）仍然派发到每帧策略子步上限。
 inline constexpr uint32_t RodGpuV3HardFrameIterations = 12;
 inline constexpr uint32_t RodGpuV3HardFrameSteps = 1;
 // 对象级「硬帧」判据的稳健化（默认路径）：统计上一批读回里牛顿轮数超过
@@ -47,8 +82,8 @@ inline constexpr uint32_t RodGpuV3HardFrameSteps = 1;
 inline constexpr uint32_t RodGpuV3HardFrameGuidePermille = 10;
 inline constexpr uint32_t RodGpuV3HardFrameGuideFloor = 1;
 // 时间债上限：超过部分主动丢弃（见 RecordRod 的 debt ceiling）。每帧最多退休
-// RodGpuMaxSteps × 1/240 = 33.3 ms，而每帧最多加入 100 ms，所以没有上限时
-// debt 只能单调增长，唯一泄压阀是 Reset（一次可见的头发跳变）。
+// RodGpuRetirementCeilingSeconds = 33.3 ms（默认 1/120 s × 4），而每帧最多加入
+// 100 ms，所以没有上限时 debt 只能单调增长，唯一泄压阀是 Reset（一次可见的头发跳变）。
 // 0.5 s 的含义：允许半秒的追赶余量，超出的仿真时间直接放弃，宁可头发比角色慢。
 inline constexpr double RodGpuMaxDebtSeconds = 0.5;
 inline constexpr uint32_t RodGpuGuideVec4Count = 32 * 5 + 31 * 8 + 4;

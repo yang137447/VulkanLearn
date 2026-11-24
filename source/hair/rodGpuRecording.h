@@ -314,9 +314,10 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
             state.receivedSeconds += delta;
             state.debtSeconds += delta;
             // debt ceiling：超出部分主动丢弃，而不是无限追赶。每帧最多只能退休
-            // RodGpuMaxSteps × 1/240 s = 33.3 ms，而单帧加入上限是 100 ms，
-            // 没有上限时 debt 只能单调增长，唯一泄压阀是 Reset（可见的头发跳变）。
-            // 丢弃是有意的取舍：头发总量上会比角色慢一点，但帧时间不再锯齿上涨。
+            // RodGpuRetirementCeilingSeconds = 33.3 ms（默认 1/120 s × 4），而单帧
+            // 加入上限是 100 ms，没有上限时 debt 只能单调增长，唯一泄压阀是
+            // Reset（可见的头发跳变）。丢弃是有意的取舍：头发总量上会比角色慢一点，
+            // 但帧时间不再锯齿上涨。
             if (state.debtSeconds > RodGpuMaxDebtSeconds)
             {
                 const bool firstDrop = state.droppedSeconds == 0.0;
@@ -339,8 +340,9 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     // 单 guide 的失败不再冻结整个对象：失败的 guide 因为不发布而保持上一次接受的
     // 状态，下一帧重试；其余 guide 照常推进。gpuStatus 只作报告（见上面的读回）。
     // 另外按上一批读回的牛顿轮数限制单帧 substep：还在瞬态（硬帧）时只派发
-    // RodGpuV3HardFrameSteps，把“每 guide 数十轮 × 8 substep × 数千 guide”摊到多帧，
-    // 避免单次 dispatch 超过 OS 提交上限；稳态（0–8 轮）仍是满 RodGpuMaxSteps。
+    // RodGpuV3HardFrameSteps，把“每 guide 数十轮 × 子步上限 × 数千 guide”摊到多帧，
+    // 避免单次 dispatch 超过 OS 提交上限；稳态（0–8 轮）仍是满策略子步上限
+    // RodGpuSubstepCap()（默认 4，可被 VL_ROD_SUBSTEP_CAP 覆盖）。
     // 默认判据用「超阈值 guide 计数 > 1%（至少 1 个）」，而不是 max-over-guides：
     // 后者在 bind pose 下被一个永不收敛的 guide 永久钉死为 1 substep。
     // VL_ROD_GATE_MODE=legacy 可恢复旧判据做 A/B。
@@ -350,7 +352,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
         state.maxIterationsLastFence > RodGpuV3HardFrameIterations :
         state.hardGuidesLastFence > hardGuideThreshold;
     const uint32_t substepBudget = progressive && hardFrame ?
-        RodGpuV3HardFrameSteps : RodGpuMaxSteps;
+        RodGpuV3HardFrameSteps : RodGpuSubstepCap();
     uint32_t steps = newFrame && delta > 0.0f &&
         !(progressive && state.reset) ? std::min(substepBudget,
         static_cast<uint32_t>(std::floor((state.debtSeconds + 1.0e-9) / RodGpuStepSeconds()))) : 0;
@@ -363,8 +365,10 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     {
         const long requested = std::strtol(fixed, nullptr, 10);
         // 允许 0：不派发任何 substep，但整条 pass 照跑，用于量固定开销。
+        // 夹到策略上限：固定子步只绕过「自适应上限与债务的耦合」，不能突破
+        // 每帧退休上限（也防止越界写 roots/capsules 数组）。
         if (requested >= 0)
-            steps = std::min(static_cast<uint32_t>(requested), RodGpuMaxSteps);
+            steps = std::min(static_cast<uint32_t>(requested), RodGpuSubstepCap());
     }
     RodGpuParams params;
     params.hairToWorld = draw.model;
@@ -619,6 +623,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
             profileMathVersion << " kineticMathVersion=" << kineticMathVersion <<
             " numericEncodingVersion=" << numericEncodingVersion << " guides=" << state.guides
             << " stateBytes=" << state.state.size << " step=" << RodGpuStepSeconds()
+            << " substepCap=" << RodGpuSubstepCap()
             << " maxSteps=" << RodGpuMaxSteps << " sweeps=" << RodGpuSweeps << std::endl;
         state.reported = true;
     }
