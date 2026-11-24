@@ -254,7 +254,8 @@ void GpuPassTimer::EndFrame()
 
 bool GpuPassTimer::BeginPass(
     vk::CommandBuffer commandBuffer,
-    const std::string& name)
+    const std::string& name,
+    vk::PipelineStageFlagBits stage)
 {
     if (!frameActive || passOpen)
     {
@@ -281,10 +282,7 @@ bool GpuPassTimer::BeginPass(
     // 这样 duration 才是"该 pass 的串行 GPU 时间"。若 begin 用 top-of-pipe，上一 pass
     // 尚未完成的尾部会被记到下一个 pass 上。代价是每帧多出若干次全流水线 drain，
     // 这是 GPU 统计的常规代价，且只在显式开启采集时发生。
-    commandBuffer.writeTimestamp(
-        vk::PipelineStageFlagBits::eBottomOfPipe,
-        slot.queryPool,
-        entryIndex * 2);
+    commandBuffer.writeTimestamp(stage, slot.queryPool, entryIndex * 2);
     // 复用上一帧留下的字符串容量，避免逐帧分配；名字只在 pass 集合变化时改写。
     if (entryIndex < slot.currentNames.size())
     {
@@ -299,7 +297,8 @@ bool GpuPassTimer::BeginPass(
     return true;
 }
 
-void GpuPassTimer::EndPass(vk::CommandBuffer commandBuffer, bool began)
+void GpuPassTimer::EndPass(vk::CommandBuffer commandBuffer, bool began,
+    vk::PipelineStageFlagBits stage)
 {
     if (!began || !frameActive || !passOpen)
     {
@@ -308,9 +307,7 @@ void GpuPassTimer::EndPass(vk::CommandBuffer commandBuffer, bool began)
 
     FrameSlot& slot = frameSlots[activeSlot];
     commandBuffer.writeTimestamp(
-        vk::PipelineStageFlagBits::eBottomOfPipe,
-        slot.queryPool,
-        (slot.currentCount - 1) * 2 + 1);
+        stage, slot.queryPool, (slot.currentCount - 1) * 2 + 1);
     passOpen = false;
 }
 

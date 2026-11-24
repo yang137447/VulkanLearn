@@ -66,8 +66,14 @@ public:
     // 调用方据此跳过只为统计服务的场景扫描（例如 hair HasWork）。
     bool IsFrameActive() const { return frameActive; }
     // 返回是否真的写入了 timestamp（未采集、容量耗尽或已有未闭合的 pass 时为 false）。
-    bool BeginPass(vk::CommandBuffer commandBuffer, const std::string& name);
-    void EndPass(vk::CommandBuffer commandBuffer, bool began);
+    // stage 默认保持 eBottomOfPipe（与旧行为一致）。
+    // 若一个范围只包 compute dispatch，传 eComputeShader 能避免把其他阶段/
+    // 队列的耗时算进这个分段；实测就是这个原因导致一个包多个 dispatch
+    // 的分段读到 15–76 ms，而同批 dispatch 各自分段相加只有 0.2 ms。
+    bool BeginPass(vk::CommandBuffer commandBuffer, const std::string& name,
+        vk::PipelineStageFlagBits stage = vk::PipelineStageFlagBits::eBottomOfPipe);
+    void EndPass(vk::CommandBuffer commandBuffer, bool began,
+        vk::PipelineStageFlagBits stage = vk::PipelineStageFlagBits::eBottomOfPipe);
 
 private:
     struct FrameSlot
