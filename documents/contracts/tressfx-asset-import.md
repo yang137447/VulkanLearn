@@ -1080,15 +1080,16 @@ substeps, maxIterationsLastFence, hardGuides, droppedSeconds   <-- 追加列
 
 | 场景 | defect | 失败 guide | gpuStatus |
 | --- | --- | --- | --- |
-| `Generated/Validation/SC_rod_v3_capsules_16.json` | **0.009791187942**（精确） | 0 | 0 |
-| `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_static.json` | 0.00996868 | 0 | 0 |
-| `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_sdf_static.json` | 0.0087894015 | 0 | 0 |
+| `Generated/Validation/SC_rod_v3_capsules_16.json` | 0.00979118 ±5e-8 | 0 | 0 |
+| `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_static.json` | 0.0099687 ±5e-5 | 0 | 0 |
+| `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_sdf_static.json` | 0.0087894 ±5e-7 | 0 | 0 |
 | `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_animated.json` | 0.0098–0.0100 | 0 | 0 |
 | `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_sdf_animated.json` | 0.0098–0.0100 | 0 | 0 |
 
-- 16-guide 胶囊场景是**精确**判据（资产固定、无动画），改求解器必须逐位等于该值。
-- 两个 `animated` 场景由墙钟 delta 驱动，采样轨迹依赖帧节奏，**跑间波动 ~1e-8…3e-5**，
-  只能按量级判定。
+- **没有任何场景是逐位可复现的。** 即使资产固定、无动画的 16-guide 胶囊场景，实测也在
+  `0.009791177697` 与 `0.009791187942` 之间抖动（约 1e-8）——因为采样轨迹依赖
+  `frameDelta → debt → 子步数 → 采样时刻`。判定必须给容差，不要追末位相等。
+- 两个 `animated` 场景由墙钟 delta 驱动，波动更大（~3e-5），只能按量级判定。
 - `rod_static` 在 `1/240 s × 8` 时代是 15.92730141 / 2 根永久失败 / `gpuStatus 3`；改为
   `1/120 s × 4` 后那两根（源 strand 39581、39620）在启动段内收敛，债务消失。
   **不要把它当"已知失败"例外重新引入**。
