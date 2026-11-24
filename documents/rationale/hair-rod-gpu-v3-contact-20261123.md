@@ -1977,6 +1977,71 @@ GPU 调度切换插在中间，它们的耗时会被计入这个分段。已知�
 3. 比较时必须报**同一帧数下的 CV**（实测 0.7–5.1%，在 ±10% 内）；
 4. 若要报 fps，必须标注它是否撞到 10.0 地板。
 
+### 子代理审计：debt 无上限，每帧最多退休 33.3 ms，负反馈从结构上不可能收敛
+
+以下来自只读源码审计（未编译、未运行），关键常量与算术已逐条核对：
+
+```text
+substepBudget = (progressive && maxIterationsLastFence > 12) ? 1 : 8     rodGpuRecording.h:310-312
+steps         = min(substepBudget, floor((debt + 1e-9) / (1/240)))      rodGpuRecording.h:313-315
+added/frame   = delta                                                   rodGpuRecording.h:295-301
+retired/frame = steps / 240                                             rodGpuRecording.h:555-556
+```
+
+**每帧最多只能退休 8 × 1/240 = 33.3 ms 仿真时间**（硬帧状态下只有 4.17 ms），
+而每一帧都会加入 `min(frameDelta, 0.1)`。所以只要帧慢于 30 fps，debt 就只会单调增长，
+**而清零 debt 的唯一途径是 pose 历史的 `Reset`**（即传送）。
+
+用两个常量直接算出的结果与实测列对得上（误差 < 2%）：
+
+| 场景 | 每帧加入 | 每帧退休 | 子步/帧 | 净增长 | ×178 帧 | 实测 debt |
+| --- | --- | --- | --- | --- | --- | --- |
+| bind pose | 29.7 ms | 4.33 ms | 1.04 | +25.4 ms | 4.52 s | 4.61 s |
+| 动画角色 | 49.9 ms | 14.55 ms | 3.49 | +35.3 ms | 6.29 s | 6.37 s |
+
+三个直接推论：
+
+1. **「1.0 个子步/帧」本身就证明硬帧分支常开**：约 3 帧之后 debt 就 > 8/240，
+   `floor(debt/step)` 永远 > 8，能跑出 1.04 只能是 `substepBudget == 1` 几乎每帧生效。
+   bind pose 因此**长期停在硬帧分支**，与它已知的「有 guide 永不收敛（maxIterations=64 > 12）」
+   一致——**一个坟子 guide 拖住了整个 2000-guide 对象**。
+2. 动画场景靠 8 步上限也救不回来：178 帧共收到 8.83 s，即使每帧都跑 8 步也只能退休 5.93 s，
+   ≥ 2.9 s 是不可避免的，实测 6.37 s 还多了「约 64% 帧实际只跑 1 步」那部分。
+3. **正反馈在帧循环里闭合**：头发 pass 本身约 55 ms > 33.3 ms，每帧加入都大于可退休上限，
+   唯一平衡点是 `debt → ∞`。
+
+### 锯齿的来源：动画循环回绕触发 Reset
+
+循环动画在回绕时会增加 `SkinPose::discontinuity`（`skeletalPlayback.cpp:170-178`），
+`GuideSimulationHistory::Plan` 把它变成 `Reset`（`tressfxSimulationHistory.h:60-70`），rod 路径随后调
+`ClearTimeline`（`rodGpuRuntime.h:198-214`）——**它把 received/dispatched/debt 全部归零、重新挂起硬帧门**。
+这同时给出了锯齿的下降边（debt 被抹掉、回到 1 步）与随后的重新爬升。
+
+独立旁证：`tool/hair/capture_hair_physics.py:556` 记录 Idle 循环约 **10 s** 回绕一次并触发 reset；
+`documents/rationale/tressfx5-hair-physics-record.md:459` 记录了 600 帧运行的第 479 帧出现 `reason=4 (pose-discontinuity, loop-wrap)`。
+
+### 审计顺带发现的缺陷（含我自己两个）
+
+1. `debtSeconds` **永不上限、不衰减、不丢弃**，只有 `ClearTimeline` 会清零。
+2. 硬帧门是**对象级且取 guide 最大值**：一个不收敛的 guide 就把 2000 个 guide 全部降到 1 子步。
+3. 唯一清 debt 的事件是传送：`ClearTimeline(pose)` 从当前姿态重新起算，**静默丢弃 4–6 s 永远没仿真过的时间**。
+4. 门的输入 `maxIterationsLastFence` 写了两处、**任何地方都不输出**，CSV 也没有 `substeps` / `iterations` 列。
+5. `failureEvidenceWritten` 置位后**从不复位**（连 `ClearTimeline` 也不清），于是每个对象生命周期内只会捕获一次失败证据。
+6. **我上一轮加的 `hair.rodSolve` GPU 分段测不到任何东西**：`BeginPass` 后紧接 `EndPass`，
+   而 `RecordRod` 在二者之后（`hairSimulationPass.cpp:493-499`）——那个 `0.00 ms` 是我自己造成的假象。
+7. `VL_ROD_FIXED_SUBSTEPS` **会破坏 debt 记账**（绕过 `debt/step` 限制，debt 可以变负、间隔队列被清空）——
+   **用它测成本可以，但不能用它读 debt**。
+8. `VL_ROD_ITERATION_BUDGET` 是 GLSL 编译期定义，不是环境变量，用它要重建着色器。
+9. `[HairCPU]` 把「本帧值」与「累计平均」混在一行打印，容易读错。
+
+### 审计对下一步的建议（已按性价比排序）
+
+- **把硬帧门从对象级改为逐-guide 或逐-warp**：一个坟子 guide 不应该把 2000 个 guide 拖到 1 子步。
+  这是 bind pose 帧时间的直接成因，且不改变大多数 guide 的物理。
+- **给 debt 加上限与主动丢弃策略**（宁可头发比动画慢一点，不要用帧率去追），
+  否则唯一的减压阀是传送式 reset（也就是那个可见的头发跳变）。
+- 把 `substeps` / `maxIterationsLastFence` 写进诊断 CSV：现在帧费用的主要自变量完全不可观测。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
