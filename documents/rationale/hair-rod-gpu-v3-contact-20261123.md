@@ -1720,6 +1720,38 @@ SDF 单位核对（历史上这里错过一次 100 倍）。
 下一步就是用 Tracy/NVTX 分段或直接在 `HairSimulationPass::Record` 里手工计时，
 定位到底是描述符写入、参数 UBO 上传、还是逐对象循环里的哪一步。
 
+### 结论推翻：那些 17 / 27 ms 不是 hair 的成本
+
+把 CPU 侧和 GPU 侧都补齐分段后，三个口径对不上：
+
+| 口径（2000 guide、固定 1 substep、SDF 场景） | 数值 |
+| --- | --- |
+| GPU：hair 链各分段之和（snapshot 0.00 + skinning 0.00 + rodSolve 0.00 + sdfClear 0.01 + sdfSplat 0.20） | **0.21 ms** |
+| GPU：整帧所有 pass 总和（avg over 120） | **1.71 ms** |
+| CPU：`HairSimulationPass::Record` 全函数 | **2.35 ms**（其中 rod 录制 2.5 ms/frame） |
+| perf jsonl 里的 `hairSimulation` | **15.29 ms**（中位数） |
+
+`GpuPassTimer` 的 Begin/End 都用 `eBottomOfPipe`（`gpuPassTimer.cpp` 里有注释）。
+实测结果是：**同一个构建、同一个场景，分段之和 0.21 ms，而整条链一个分段时
+读数是 15.29 ms**。这个差异既不能用 GPU 工作解释（分段证明它只有 0.2 ms），
+也不能用 CPU 录制解释（全函数只有 2.35 ms）。
+
+结论：**perf jsonl 里的 `hairSimulation` 不是 hair 的成本**，它是一个包含
+空等的时间戳区间。这意味着从 C 阶段开始到现在，所有「27 ms / 17 ms」
+的读数都不是可比的成本量，包括那些基于它做出的「瓶颈在 X」结论。
+
+已经可以确定的是：**hair pass 的真实 GPU 工作是 0.2 ms 量级，CPU 录制是
+2.4 ms 量级（其中 rod 录制占大头）**。这与「真实时」目标已经同阶，所以 C 阶段
+的性能结论必须**重新基准**。
+
+### 下一步：重新建立可信的 C 基准
+
+1. 不再用 `hairSimulation` 这个名字做判据；改用：fps / 帧时间、
+   `VL_ROD_GPU_STAGE_TIMING` 下的 GPU 总和、以及 `VL_ROD_CPU_STAGE_TIMING` 下的 CPU 录制时间；
+2. 在这三个口径下重测：1 / 4 substep、2000 guide、以及开关 SDF、开关碰撞体；
+3. 顺便查 `GpuPassTimer` 为何让一个包含多个 dispatch 的分段多出 15 ms（已知分段之和
+   才 0.21 ms）——这个工具得先可信，否则后面还会被它带偏。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 

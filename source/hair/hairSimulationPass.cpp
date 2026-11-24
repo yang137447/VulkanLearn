@@ -1,4 +1,32 @@
 #include "render/backend/gpuPassTimer.h"
+
+#include <chrono>
+#include <cstdlib>
+
+namespace VL::Hair
+{
+namespace
+{
+// 仅诊断：CPU 录制路径分段计时（由 VL_ROD_CPU_STAGE_TIMING 开关控制）。
+// GPU 侧已经证明在空等，所以要量的是 CPU 在哪一步花了时间。
+double GuideSimulationCpuSeconds()
+{
+    return std::chrono::duration<double>(
+        std::chrono::steady_clock::now().time_since_epoch()).count();
+}
+
+struct GuideSimulationCpuStages
+{
+    double skinning = 0.0;
+    double collect = 0.0;
+    double objects = 0.0;
+    double rod = 0.0;
+    uint32_t frames = 0;
+};
+GuideSimulationCpuStages guideSimulationCpuStages;
+} // namespace
+} // namespace VL::Hair
+
 #include <cstdlib>
 #include "hair/hairSimulationPass.h"
 
@@ -220,7 +248,16 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     // frameSlot 直接索引 params UBO；调用方必须传 frame-in-flight 槽（0..1）。
     if (frameSlot >= GuideSimulationParamBufferCount)
         throw std::out_of_range("TressFX guide simulation frame slot is out of range");
+    static const bool cpuStageTiming =
+        std::getenv("VL_ROD_CPU_STAGE_TIMING") != nullptr;
+    double cpuMark0 = cpuStageTiming ? GuideSimulationCpuSeconds() : 0.0;
+    // 仅诊断：快照/回读段。
+    const bool snapshotStageTimed = gpuStageTimer != nullptr &&
+        gpuStageTimer->IsFrameActive() &&
+        gpuStageTimer->BeginPass(commandBuffer, "hair.snapshot");
     FlushSnapshot(frameSlot);
+    if (snapshotStageTimed)
+        gpuStageTimer->EndPass(commandBuffer, snapshotStageTimed);
     for (auto iterator = rodObjects.begin(); iterator != rodObjects.end();)
     {
         if (iterator->second->owner.expired())
@@ -235,7 +272,16 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
     }
 
     // 与 solver 共用同一帧入口和图形读取 barrier，但不消费模拟时钟/历史/trace。
+    // 仅诊断：蒙皮录制也单独一个 GPU 分段——它在 hair 链里，
+    // 但之前没有任何分段覆盖它录制的 dispatch。
+    const bool skinningStageTimed = gpuStageTimer != nullptr &&
+        gpuStageTimer->IsFrameActive() &&
+        gpuStageTimer->BeginPass(commandBuffer, "hair.skinning");
     RecordSkinning(commandBuffer, scene, renderScene, frameSlot);
+    if (skinningStageTimed)
+        gpuStageTimer->EndPass(commandBuffer, skinningStageTimed);
+
+    double cpuMarkSkinning = cpuStageTiming ? GuideSimulationCpuSeconds() : 0.0;
 
     // BeginFrame 已经等过本槽的 fence，上一批同槽拷贝必然完成；先写文件并清
     // pending，再录制本帧新的拷贝，避免覆盖尚未读回的数据。
@@ -443,6 +489,7 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         if (IsRodSimulationSolver(config.solver))
         {
             // 仅诊断：rod 求解单独一个分段。
+            const double cpuMarkRod = cpuStageTiming ? GuideSimulationCpuSeconds() : 0.0;
             const bool rodTimed = gpuStageTimer != nullptr &&
                 gpuStageTimer->IsFrameActive() &&
                 gpuStageTimer->BeginPass(commandBuffer, "hair.rodSolve");
@@ -450,6 +497,11 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
                 gpuStageTimer->EndPass(commandBuffer, rodTimed);
             RecordRod(commandBuffer, dispatch.object, renderScene,
                 dispatch.drawPacketIndex, frameSlot, anyDispatch);
+            if (cpuStageTiming)
+            {
+                const double rodEnd = GuideSimulationCpuSeconds();
+                guideSimulationCpuStages.rod += rodEnd - cpuMarkRod;
+            }
             if (trace.active && !trace.finishing && trace.object == &object)
             {
                 const auto& rodObject = *rodObjects.at(&object);
@@ -771,6 +823,21 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
             dispatches.front().drawPacketIndex, frameSlot);
     if (anyDispatch)
         RecordPostDispatchBarrier(commandBuffer);
+    if (cpuStageTiming)
+    {
+        const double cpuMarkEnd = GuideSimulationCpuSeconds();
+        ++guideSimulationCpuStages.frames;
+        if (guideSimulationCpuStages.frames % 120u == 0u)
+        {
+            const double n = static_cast<double>(guideSimulationCpuStages.frames);
+            std::cout << "[HairCPU] frames=" << guideSimulationCpuStages.frames
+                      << " total=" << ((cpuMarkEnd - cpuMark0) * 1000.0) << " ms"
+                      << " setup+skinning=" << ((cpuMarkSkinning - cpuMark0) * 1000.0) << " ms"
+                      << " rest=" << ((cpuMarkEnd - cpuMarkSkinning) * 1000.0) << " ms"
+                      << " rod=" << (guideSimulationCpuStages.rod / n * 1000.0) << " ms/frame"
+                      << std::endl;
+        }
+    }
 }
 
 } // namespace VL::Hair
