@@ -189,7 +189,9 @@ shared uint rodKktSdfRejectedSamples;
 // 三线性插值函数的精确导数，不含差分近似误差（差分是对插值场的半步中心差，
 // 在曲率大的地方与精确导数相差 O(h²)）。
 //
-// 定义 `VL_ROD_SDF_FINITE_DIFFERENCE` 可以切回旧的 7 次采样路径做 A/B。两条路径的
+// **默认走有限差分**（七次采样，实测收敛明显更好）；定义
+// `VL_ROD_SDF_ANALYTIC_GRADIENT` 才切到解析梯度（快约 3%、但接受更多
+// 法向有问题的采样，门禁差 15–91 倍）。两条路径的
 // 下游守卫逐字相同（|grad| 量级 / 有限性 / 单位法向与 gap 归一），拒绝判定的域外
 // 部分也一致（新路径在 `SdfTrilinearGradient` 里显式要求 ±0.5 cell 的 interior，
 // 等价于旧路径的偏移样本不落在域外）。唯一剩下的语义差异：旧路径还要求六个偏移
@@ -213,7 +215,7 @@ bool RodKkt10SdfQuery(vec3 position, out float gap, out vec3 gradient)
         // 曾经以“RodKkt10PointPosition 已经是厘米制”为由删掉过这个 ×100：结果采样点
         // 被送到 100 倍远，几乎全部落在域外，SDF 接触静默失效；而验收 defect 恰好停在
         // 收敛地板上，这个读数据此无法区分“正确”与“关闭”，所以此处必须保留单位换算。
-        // 下面两条梯度分支（解析 / `VL_ROD_SDF_FINITE_DIFFERENCE` 有限差分）共用这个采样点。
+        // 下面两条梯度分支（有限差分（默认）/ 解析）共用这个采样点。
         // 单位约定（必须先读）：
         //   求解器位置与胶囊几何在**米**（录制时 transformed.a/b/radius
         //   都 *= 0.01f，source/hair/rodGpuRecording.h:432-434）；
@@ -236,6 +238,7 @@ bool RodKkt10SdfQuery(vec3 position, out float gap, out vec3 gradient)
         float distanceValue = SdfOutOfRangeDistance;
         vec3 localGradient = vec3(0.0);
         bool inRange = false;
+// 未定义 = 有限差分（默认、收敛更好）；定义 = 解析梯度。
 #ifndef VL_ROD_SDF_ANALYTIC_GRADIENT
         distanceValue = SdfTrilinear(local);
         // 中心差分半步长 = 0.5 * cellSize；除以 2h = cellSize 得到 cm/cm 梯度。

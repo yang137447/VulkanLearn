@@ -953,6 +953,12 @@ void main()
             rodKktSdfAcceptedSamples = 0u;
             rodKktSdfRejectedSamples = 0u;
 #endif
+#ifdef VL_ROD_KKT10_DEBUG
+            // 诊断计数器：与 SDF 计数一样逐 substep 归零。此前这两个量只 atomicAdd
+            // 从不初始化，shared 未定义初值被直接当统计值导出（读数可能是 1e9）。
+            rodKktRepairCount = 0u;
+            rodKktRepairDepthBits = 0u;
+#endif
         }
         barrier();
         // 深重叠先做一步位置投影修复（对应 CPU RepairInitialContactOverlap），
@@ -1293,6 +1299,16 @@ void main()
 #ifdef VL_ROD_KKT10_DEBUG
         // 诊断：SDF 查询接受/拒绝次数（仅 SDF 变体）或活跃 contact 槽数，
         // 以及 contact 分量残差 / 位置分量残差 / max |lambda|/F。
+#ifdef VL_ROD_KKT10_EXPORT_ACTIVE
+        // 临时探针（VL_ROD_KKT10_EXPORT_ACTIVE）：SDF 变体默认把 accepted /
+        // rejected 计数放在 residuals.xy，从而掩盖 rodKktDebug 的活跃集统计。
+        // 这个分支改成导出 (活跃槽数总和, max|contact 残差|, max|位置残差|,
+        // max|lambda|/F)，用于定位「失败 guide 的活跃接触画像」。仅诊断编译，
+        // 不改求解行为；读数由 .rod-diagnostics.bin 离线解码。
+        rodState.guides[slot].residuals = vec4(float(rodKktDebug.x),
+            uintBitsToFloat(rodKktDebug.y), uintBitsToFloat(rodKktDebug.z),
+            uintBitsToFloat(rodKktDebug.w));
+#else
 #ifdef VL_ROD_SDF
         rodState.guides[slot].residuals = vec4(float(rodKktSdfAcceptedSamples),
             float(rodKktSdfRejectedSamples), uintBitsToFloat(rodKktDebug.z),
@@ -1301,6 +1317,7 @@ void main()
         rodState.guides[slot].residuals = vec4(float(rodKktDebug.x),
             uintBitsToFloat(rodKktDebug.y), uintBitsToFloat(rodKktDebug.z),
             uintBitsToFloat(rodKktDebug.w));
+#endif
 #endif
 #ifndef VL_ROD_V3_CONTINUATION
         // energies.x = 本帧累计的回溯减半次数，y = 重叠修复触发次数，
