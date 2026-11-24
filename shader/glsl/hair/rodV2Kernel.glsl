@@ -598,6 +598,14 @@ void RodV2Measure(uint lane, bool incrementValid)
 void RodActiveMeasure(uint lane, bool incrementValid)
 {
 #ifdef VL_ROD_V3_KKT10_SOLVE
+#ifdef VL_ROD_KKTMEASURE_DOUBLE
+    {
+        RodKkt10Measure(lane, incrementValid);
+        barrier();
+        if (params.counts.x == 0xFFFFFFFFu)
+            rodKktFeasible += 0u;
+    }
+#endif
     RodKkt10Measure(lane, incrementValid);
 #else
     RodV2Measure(lane, incrementValid);
@@ -962,6 +970,14 @@ void main()
             }
 #endif
             RodKkt10UpdateActiveSet(lane);
+#ifdef VL_ROD_AXIAL_DOUBLE
+            {
+                RodKkt10UpdateAxial(lane);
+                barrier();
+                if (params.counts.x == 0xFFFFFFFFu)
+                    rodKktFeasible += 0u;
+            }
+#endif
             RodKkt10UpdateAxial(lane);
             barrier();
 #ifdef VL_ROD_MEASURE_DOUBLE
