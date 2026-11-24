@@ -1335,6 +1335,38 @@ shared 被 `rodCr`（约 20 KB）钉在 1 workgroup/SM 就是根因，把它让�
 这类 KKT 路径根本不用的数组，合计远超 48 KB 却仍能创建管线，说明驱动做了死代码消除，
 真实分配只能靠实测（本次用「单 warp 迭代成本」反推）。
 
+### 尝试把压缩代数也改成块形式：公式对、GPU 结果不对，已回退
+
+`RodKkt10Condense` 里 S 的 3x3 与 Q 的 6x6 都是 `for (row<3) for (column<3)` 里
+用 `RodV2Entry/Set` 逐元素写的（9 + 81 次动态索引），按同一类问题（local memory）
+本该是下一个大收益点。于是改用 mat3 块：
+
+```text
+S[k][l] = g_k · a_l      →  s = transpose(gLinear) * aLinear
+Q = [[I - G S^-1 T_lin^T,  -G S^-1 T_ang^T], [0, I]]
+extra = G S^-1 h, h = -gapRow
+```
+
+**公式先在 Python 里逐项对过**（A 随机、g_k 角向为 0）：
+
+| 量 | 块形式 vs 逐元素 |
+| --- | --- |
+| Q | **0.0**（完全一致） |
+| extra | 1.1e-12 |
+| S | 1.4e-17 |
+
+但搬到 GLSL 之后结果明显错：16 guide 的 defect 从 0.00979 变成 **3.42**，
+2000 guide 261 ms、全部 guide 失败。已 `git checkout` 回退，当前状态仍是
+16 guide defect 0.00979、0 失败。
+
+结论：公式没错，错在**代码里的块/元素约定**（`RodV2Matrix` 的 4 个 mat3 块顺序、
+`mat3(a,b,c)` 是列还是行、`transpose` 与 `RodV2Entry` 的行列对应）——这类问题 Python
+验不出来，只能靠 GPU 上逐步二分。下一轮的正确做法是**分别**替换 S、Q、extra 三段，
+每段单独验证 defect 保持 0.00979，而不是一起换。
+
+本轮净收益为 0（失败并回退），但也确认了一件事：这条路线本身仍有价值，
+只是必须逐段验证。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
