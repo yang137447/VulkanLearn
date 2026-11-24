@@ -14,4 +14,11 @@
 #define VL_ROD_RUNTIME_FAILURE_EXPORT 1
 #define VL_ROD_CR_SHUFFLE 1
 #define VL_ROD_SDF 1
+// SDF 接触质量守卫（见 rodKkt10BandSolve.glsl 的 RodKkt10SdfQuery）：
+//   DIRECTION_GUARD：穿透点沿 -g 退半格后场值必须下降，否则该采样不是外法向。
+//   DEPTH_GUARD：拒绝深度 > 2 mm 的采样——代理 splat 梯度只在表面附近可信，
+//                而实测唯一持续失败的 contact 正是 7.5 mm 深、法向差 104 度的
+//                hair tip。两者只决定「哪些样本算可用」，不改求解公式。
+#define VL_ROD_SDF_DIRECTION_GUARD 1
+#define VL_ROD_SDF_DEPTH_GUARD 1
 #include "rodV2Kernel.glsl"

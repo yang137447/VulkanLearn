@@ -73,6 +73,8 @@ shared uint rodKktRepairDepthBits;
 // 轴向上拉伸上限：与 CPU rodAxialLimit.h 的 MaximumTensileStrain 相同。
 const float RodKktMaximumTensileStrain = 0.01;
 const uint RodKktMaxContactCandidates = 9u;
+// SDF 接触允许的最大采样深度（厘米）。见 VL_ROD_SDF_DEPTH_GUARD。
+const float RodKkt10SdfMaximumContactDepthCm = 0.2;
 
 // 活跃集与可行性共用的归一化 gap 容差。
 // CPU 用 1e-9 * totalLength（double）；GPU 是 fp32 且收敛判据已经是
@@ -202,6 +204,11 @@ bool RodKkt10SdfQuery(vec3 position, out float gap, out vec3 gradient)
     gap = 0.0;
     gradient = vec3(0);
     bool accepted = false;
+#ifdef VL_ROD_SDF_SKIP_QUERY
+    // 判别性对照：整个 SDF 接触短路。用来区分「场景缺陷由 SDF 接触造成」
+    // 与「缺陷与 SDF 无关」。只在显式定义时生效，生产编译零成本。
+    return false;
+#endif
     if ((rod.flags.w & 1u) != 0u)
     {
         // 单位约定（**不要删掉这个 ×100**）：`position` 来自 `RodKkt10PointPosition`，
@@ -269,11 +276,56 @@ bool RodKkt10SdfQuery(vec3 position, out float gap, out vec3 gradient)
         if (inRange)
         {
             float magnitude = length(localGradient);
-            if (RodFinite(localGradient) && magnitude > 0.05 && magnitude < 20.0)
+            // 梯度模长带：真实 SDF 在体素内 |grad| 应约等于 1。旧带 0.05..20 会把
+            // splat 稀疏 / 带边界处的畸形梯度也放进来，而 gap = (d-margin)/|grad|
+            // 会按 |grad| 反向放大。诊断实测 99% 接受点 p50=0.994、p1=0.821，
+            // 因此默认收紧到 0.8..1.25，同时消掉带边放大。
+            // 旧带保留在 VL_ROD_SDF_LEGACY_GRADIENT_BAND 下用于 A/B 对照。
+#ifdef VL_ROD_SDF_LEGACY_GRADIENT_BAND
+            const float magnitudeMinimum = 0.05;
+            const float magnitudeMaximum = 20.0;
+#else
+            const float magnitudeMinimum = 0.8;
+            const float magnitudeMaximum = 1.25;
+#endif
+            bool sampleConsistent = true;
+            if (RodFinite(localGradient) && magnitude > magnitudeMinimum &&
+                magnitude < magnitudeMaximum)
             {
-                gradient = (mat3(rod.hairToWorld) * localGradient) / magnitude;
-                gap = (distanceValue - sdf.range.x) * 0.01 / magnitude;
-                accepted = true;
+#ifdef VL_ROD_SDF_DIRECTION_GUARD
+                // 方向一致性守卫（诊断定位到的根因）：代理网格非水密，splat 后
+                // 极少数点的三线性梯度方向与真实表面法向可差 90 度以上（hair tip
+                // 实测 93-104 度）。这类点的 gap 数值对、方向错，进入 KKT 后是无法
+                // 下降的假约束，会把整条 guide 拖成 code 3。
+                // 真 SDF 沿外法向增大，所以沿 -g 退半格再采样，场值必须**下降**：
+                // distanceBack < distanceValue；不下降（含退到 clear 哨兵 1e10，
+                // 说明半格内场已不可用）就丢弃该采样。
+                // 成本：只有穿透点（distanceValue < margin）多一次三线性采样。
+                if (distanceValue < sdf.range.x)
+                {
+                    vec3 unitLocalGradient = localGradient / magnitude;
+                    float distanceBack = SdfTrilinear(local - 0.5 * sdf.originCell.w *
+                        unitLocalGradient);
+                    sampleConsistent = distanceBack < distanceValue;
+                }
+#endif
+#ifdef VL_ROD_SDF_DEPTH_GUARD
+                // 采样深度上限：代理场是「表面附近」的 clearance 场，splat 的梯度
+                // 只有在表面附近可信。实测所有接触的深度 p90 = 0.35 mm；唯一持续
+                // 失败的 contact（TFX 914 tip）深 7.5-9.7 mm，其场法向与真实最近
+                // 三角面法向差 104 度——半格一致性抓不到这种「深穿透 + 伪法向」
+                // 样本（梯度就是同一位场的精确导数，半格内自洽）。深度超过 2 mm
+                // 的采样直接不生成约束：它不是表面接触，法向也不可信。
+                if (sampleConsistent && sdf.range.x - distanceValue >
+                    RodKkt10SdfMaximumContactDepthCm)
+                    sampleConsistent = false;
+#endif
+                if (sampleConsistent)
+                {
+                    gradient = (mat3(rod.hairToWorld) * localGradient) / magnitude;
+                    gap = (distanceValue - sdf.range.x) * 0.01 / magnitude;
+                    accepted = true;
+                }
             }
         }
     }
