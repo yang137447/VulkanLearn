@@ -1032,6 +1032,67 @@ simulationFrame += 1                       // 每渲染帧一次，同一帧所�
   正 delta 帧。复位帧不额外推进 `simulationFrame`；普通动画 `pause` 只冻结
   骨骼，风仍可驱动发丝。
 
+### V3 rod 求解器的子步、债务与诊断通道
+
+上面 `n = 0/1/2` 的源原生调度针对的是 TressFX pass 链。**`cosseratImplicitV3`
+（`solverProfile: effectiveBundleV1`）走独立的 rod 调度**，规则如下（`source/hair/rodGpuRuntime.h`、
+`source/hair/rodGpuRecording.h`）：
+
+```text
+默认步长 1/120 s，每帧策略子步上限 4      -> 单帧可退休的仿真时间上限 = 33.3 ms
+RodGpuMaxSteps = 8                         -> 只是 UBO/shader 数组容量（roots[9]/capsules[9][8]），
+                                              受 sizeof(RodGpuParams)==3136 与 offsetof 断言约束，
+                                              不是策略上限
+static_assert(4 / 120 == 1/30)              -> 默认值必须凑满 33.3 ms 退休上限
+```
+
+- 退休上限是**不变式**：改步长或子步上限必须保持 `步长 × 上限 = 33.3 ms`，否则债务记账
+  与硬帧判据的前提不成立。旧的 `1/240 s × 8` 与当前 `1/120 s × 4` 等价于同一上限。
+- 时间债 `debtSeconds` 每帧加 `min(frameDelta, 0.1)`、减 `steps × 步长`，并有 **0.5 s 上限**：
+  超出部分主动丢弃并累加到 `droppedSeconds`（首帧一次、之后每 120 帧最多一行日志）。
+  没有上限时债务在帧慢于 30 fps 时只能单调增长，唯一泄压阀是 pose 历史 `Reset`（可见跳变）。
+- 硬帧判据（决定本帧派发 1 还是上限个子步）有两种：
+  - **默认 legacy**：上一批读回里**单 guide 最大**牛顿轮数 > `RodGpuV3HardFrameIterations`(12)；
+  - `VL_ROD_GATE_MODE=new`：上一批读回里轮数超阈值的 **guide 计数** > 1%（至少 1 个）。
+    实测该判据在 bind pose 下让帧费用翻倍（更多子步 × 仍卡在 64 轮的少数 guide），
+    因此**不是默认**。
+- 诊断覆盖开关（正常运行时都不设，行为不变）：`VL_ROD_STEP_HZ`、`VL_ROD_SUBSTEP_CAP`、
+  `VL_ROD_FIXED_SUBSTEPS`（**被夹到策略上限**，做旧的 8 子步 A/B 必须同时给
+  `VL_ROD_SUBSTEP_CAP=8`）、`VL_ROD_GATE_MODE`、`VL_ROD_ITERATION_CAP`、
+  `VL_ROD_CPU_STAGE_TIMING`、`VL_ROD_GPU_STAGE_TIMING`、`VL_ROD_RECORD_STAGE_TIMING`、
+  `VL_ROD_SHARED_PAD_BYTES`。
+
+**诊断 CSV**（`artifacts/hair-landing-20261119/gpu-runtime-diagnostics.csv`，无表头）共 14 列，
+前 10 列位置固定、脚本按位置读：
+
+```text
+frame, guides, gpuStatus, maxBlockDefect, maxPredictorDefect, accepted,
+received, dispatched, debt, failedGuides,            <-- 前 10 列，位置不可变
+substeps, maxIterationsLastFence, hardGuides, droppedSeconds   <-- 追加列
+```
+
+列语义有陷阱：`received`/`dispatched`/`debt`/`droppedSeconds` 是**累计值**（非每帧值），
+`substeps`/`maxIterationsLastFence`/`hardGuides` 是该行读回所属帧的值；`maxIterationsLastFence`
+与 `droppedSeconds` 在 `ClearTimeline` 时随世代重置。用累计列做判断前必须先看首尾两行。
+
+**V3 GPU 验收基线**（`--frame-limit 60 --worker-thread-count 1 --no-dev-ui --exit-after-frames 120`，
+取最后一帧的 `maxBlockDefect` 与 `gpuStatus`）：
+
+| 场景 | defect | 失败 guide | gpuStatus |
+| --- | --- | --- | --- |
+| `Generated/Validation/SC_rod_v3_capsules_16.json` | **0.009791187942**（精确） | 0 | 0 |
+| `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_static.json` | 0.00996868 | 0 | 0 |
+| `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_sdf_static.json` | 0.0087894015 | 0 | 0 |
+| `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_animated.json` | 0.0098–0.0100 | 0 | 0 |
+| `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_sdf_animated.json` | 0.0098–0.0100 | 0 | 0 |
+
+- 16-guide 胶囊场景是**精确**判据（资产固定、无动画），改求解器必须逐位等于该值。
+- 两个 `animated` 场景由墙钟 delta 驱动，采样轨迹依赖帧节奏，**跑间波动 ~1e-8…3e-5**，
+  只能按量级判定。
+- `rod_static` 在 `1/240 s × 8` 时代是 15.92730141 / 2 根永久失败 / `gpuStatus 3`；改为
+  `1/120 s × 4` 后那两根（源 strand 39581、39620）在启动段内收敛，债务消失。
+  **不要把它当"已知失败"例外重新引入**。
+
 ### 跳变与 ResetPositions
 
 `GuideSimulationHistory` 只保存最后一次已录制的 pose 身份与不连续代数，

@@ -239,6 +239,12 @@ Performance 页的 CPU 表只消费这份快照：标题与表头把 CPU 阶段�
   `null`。
 - `--perf-jsonl` 每行一个完整 JSON、单个 `\n`、逐行 flush；`Init` 完成满 1 秒后的第一个
   更新帧写出首行，之后维持墙钟节奏，渲染变慢不补写历史行。
+- **单个 pass 的 `ms` 是「计时区间」而不是「该 pass 的指令时间」**：`BeginPass`/`EndPass`
+  两次 `writeTimestamp` 默认都落在 `eBottomOfPipe`，若区间内只有少数命令、而 GPU 在等
+  CPU 继续录制（或插入其他队列的工作），等待时间会被计入该 pass。实测一个包住整条 hair 链
+  的分段读到 15–76 ms，而同一批 dispatch 各自分段的**实际**耗时合计只有 0.2 ms。
+  因此：分段要窄（一个 dispatch 一个），需要拆分时用 `VL_ROD_GPU_STAGE_TIMING` 这类
+  逐 dispatch 开关；比较不同 pass 的 `ms` 只看相对大小，不要把它当绝对执行时间。
 
 **数值一致性**：面板、`perf json` 与 `--perf-jsonl` 共用 `PerformanceSnapshot` 和
 `FormatPerformanceNumber()`；同一个快照在三处产生相同数字。面板按 5 Hz 从自己冻结的副本
