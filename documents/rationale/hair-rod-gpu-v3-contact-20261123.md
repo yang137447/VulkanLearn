@@ -2095,6 +2095,40 @@ hair GPU **bind 30.6 ms vs 动画 104.5 ms（约 3.4x）**——动画角色让*
    钉在 1 个子步**（门取 guide 最大值），于是 debt 只能单调上涨，
    唯一的减压阀是传送式 Reset。
 
+### debt 上限已接受，新门判据改为默认关闭（A/B 为负结果）
+
+子代理实现了三件事并实测，我的整合决定是**接受两件、把第三件降级为可选**：
+
+| 改动 | 实测 | 决定 |
+| --- | --- | --- |
+| debt 上限 0.5 s（超出主动丢弃 + 计数） | debt 在 400 帧后饱和在上限，不再无限上涨 | **接受** |
+| 诊断 CSV 追加 substeps / maxIterations / hardGuides / droppedSeconds（前 10 列不变） | 成功，14 列 | **接受** |
+| 硬帧门改为「超阈值 guide 计数」判据 | bind pose **22.71 → 45.39 ms**，动画 47.07 → 61.38 ms | **默认关闭**，保留 `VL_ROD_GATE_MODE=new` |
+
+新判据变慢的原因很具体：它让更多 substep 跑起来，而那几个
+`maxIterations = 64` 的 guide 会在**每个 substep** 里重算。固定子步的对照组也印证了这点：
+
+| 配置 | bind hair | maxIterations |
+| --- | --- | --- |
+| `VL_ROD_FIXED_SUBSTEPS=8` | **32.9 ms** | 8（收敛） |
+| 新门、8 子步 | **45.4 ms** | **64**（卡住） |
+
+同样是 8 个子步，一个收敛、一个卡在 64，帧费用差 38%。
+
+**所以真正的杠杆不是门，而是「为什么那几个 guide 永远收敛不了」。**
+
+### 一个子代理推测被否定：reset 并没有被丢掉
+
+子代理在风险里提到「reset 帧 `steps` 被强制为 0，而 `RodInitialize` 只在 dispatch
+执行时才跑，所以 reset 到不了 GPU」。我逐行核对后否定了这条：
+
+- `rodGpuRecording.h:542` 的 `solver->Dispatch(commandBuffer, state.guides, 1, 1)` 是**无条件**的；
+- `steps` 只影响 `params.substeps`，也就是 shader 内部走几个子步；
+- `params.flags.x`（reset 标志）在 `rodGpuRecording.h:393` 上传，且在同一帧末尾才清除（:601）。
+
+所以 reset 帧仍会发一次 dispatch（substeps=0），`RodInitialize` 会跑。这条路径正常，
+不能用它解释卡住的 guide。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
