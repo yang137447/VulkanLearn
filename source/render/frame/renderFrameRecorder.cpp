@@ -1,3 +1,4 @@
+#include <cstdlib>
 #include "render/frame/renderFrameRecorder.h"
 #include "render/lightCulling/lightCullingRenderer.h"
 #include "render/volumetricFog/volumetricFogRenderer.h"
@@ -577,11 +578,19 @@ void RenderFrameRecorder::RecordAndSubmitCurrentRenderScene(
             ctx.gpuTimer.IsFrameActive() &&
             hairSimulation &&
             hairSimulation->HasWork(ctx.resolvedScene, ctx.renderScene);
-        const bool hairTimed = hairWillRecord &&
+        // 诊断开关：VL_ROD_GPU_STAGE_TIMING=1 时不给整条 hair 链开一个分段，
+        // 改为由 hair pass 内部给每个 dispatch 各自开分段——gpustats 表里就能
+        // 直接看到 rodSolve / sdfClear / sdfSplat / sdfCollide / follow 各多少毫秒。
+        // 未设置时行为与之前完全一致（只有一个 "hairSimulation" 分段）。
+        static const bool hairStageTiming =
+            std::getenv("VL_ROD_GPU_STAGE_TIMING") != nullptr;
+        if (hairSimulation)
+            hairSimulation->SetGpuStageTimer(hairStageTiming ? &ctx.gpuTimer : nullptr);
+        const bool hairTimed = !hairStageTiming && hairWillRecord &&
             ctx.gpuTimer.BeginPass(commandBuffer, "hairSimulation");
         ctx.hairRuntime.RecordHairSimulation(
             commandBuffer, frameIndex, ctx.resolvedScene, ctx.renderScene);
-        if (hairWillRecord)
+        if (!hairStageTiming && hairWillRecord)
         {
             ctx.gpuTimer.EndPass(commandBuffer, hairTimed);
         }

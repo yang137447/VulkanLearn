@@ -1,3 +1,4 @@
+#include "render/backend/gpuPassTimer.h"
 #include <cstdlib>
 #include "hair/hairSimulationPass.h"
 
@@ -441,6 +442,12 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
         const TressfxSimulationConfig& config = object.GetTressfxSimulationConfig();
         if (IsRodSimulationSolver(config.solver))
         {
+            // 仅诊断：rod 求解单独一个分段。
+            const bool rodTimed = gpuStageTimer != nullptr &&
+                gpuStageTimer->IsFrameActive() &&
+                gpuStageTimer->BeginPass(commandBuffer, "hair.rodSolve");
+            if (rodTimed)
+                gpuStageTimer->EndPass(commandBuffer, rodTimed);
             RecordRod(commandBuffer, dispatch.object, renderScene,
                 dispatch.drawPacketIndex, frameSlot, anyDispatch);
             if (trace.active && !trace.finishing && trace.object == &object)

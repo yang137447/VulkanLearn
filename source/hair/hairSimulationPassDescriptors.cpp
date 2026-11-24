@@ -1,3 +1,4 @@
+#include "render/backend/gpuPassTimer.h"
 #include "hair/hairSimulationPass.h"
 
 #include <algorithm>
@@ -421,6 +422,30 @@ void HairSimulationPass::RecordPass(vk::CommandBuffer commandBuffer,
     bool& anyDispatch,
     uint32_t& objectDispatchCount)
 {
+
+    // 仅诊断：每个 tressfx pass 各自一个 GPU 分段，便于在 gpustats 表里
+    // 直接看到 clear/splat/collide 这些环各自多少毫秒。
+    struct PassNameEntry { GuideSimulationPass pass; const char* name; };
+    static const PassNameEntry passNames[] = {
+        {GuideSimulationPass::Integration, "hair.integration"},
+        {GuideSimulationPass::StrandLevel, "hair.strandLevel"},
+        {GuideSimulationPass::Vsp, "hair.vsp"},
+        {GuideSimulationPass::LocalShape, "hair.localShape"},
+        {GuideSimulationPass::LengthWind, "hair.lengthWind"},
+        {GuideSimulationPass::Collision, "hair.collision"},
+        {GuideSimulationPass::SdfClear, "hair.sdfClear"},
+        {GuideSimulationPass::SdfSplat, "hair.sdfSplat"},
+        {GuideSimulationPass::SdfCollide, "hair.sdfCollide"},
+        {GuideSimulationPass::FollowInterpolation, "hair.follow"},
+    };
+    const char* passName = "hair.other";
+    for (const PassNameEntry& entry : passNames)
+        if (entry.pass == pass)
+            passName = entry.name;
+    const bool stageTimed = gpuStageTimer != nullptr &&
+        gpuStageTimer->IsFrameActive() &&
+        gpuStageTimer->BeginPass(commandBuffer, passName);
+
     const uint32_t index = static_cast<uint32_t>(pass);
     ComputePipeline& pipeline = *pipelines[index];
     // 相邻 pass 之间必须显式同步；第一个 pass 由 RecordPreDispatchBarrier 覆盖。
@@ -432,6 +457,8 @@ void HairSimulationPass::RecordPass(vk::CommandBuffer commandBuffer,
     pipeline.Dispatch(commandBuffer, groupCount, 1, 1);
     anyDispatch = true;
     ++objectDispatchCount;
+    if (stageTimed)
+        gpuStageTimer->EndPass(commandBuffer, stageTimed);
 }
 
 void HairSimulationPass::ResetDescriptorCache() noexcept

@@ -25,6 +25,7 @@ class RenderableObject;
 namespace VL
 {
 class RendererBackendVulkan;
+class GpuPassTimer;
 struct ResolvedRenderScene;
 struct RenderScene;
 
@@ -78,6 +79,10 @@ public:
     // 判断本帧是否存在 GPU guide simulation 或关闭模拟后的骨骼蒙皮。上层必须在写
     // hairSimulation 的 timestamp 之前调用：没有任何 dispatch 的帧不能占用 query 槽位，
     // 否则先写 begin、再丢弃、再复用同一 query 会违反"查询必须先重置"的规则。
+    // 上下文：上层把整条 hair 链包成一个 GPU 分段（"hairSimulation"），
+    // 粒度太粗。设置这个指针后，每个 dispatch 各自开一个分段，
+    // 供 "gpustats" 直接读到每一环的毫秒。仅诊断用；为空时行为不变。
+    void SetGpuStageTimer(VL::GpuPassTimer* timer) { gpuStageTimer = timer; }
     bool HasWork(const VL::ResolvedRenderScene& scene,
         const VL::RenderScene& renderScene) const;
     // frameSlot 是 frame-in-flight 槽；调用方在每帧 pass 循环之前调用一次。
@@ -316,6 +321,8 @@ private:
     std::optional<std::string> pendingResetObject;
     // 实时参数覆盖队列：渲染线程独占；Record 取走并清空。有界，避免无渲染帧时累积。
     std::vector<VL::Hair::HairLiveParameterRequest> pendingLiveParameters;
+    // 仅诊断：非空时每个 pass 各自开 GPU 分段（见 SetGpuStageTimer）。
+    VL::GpuPassTimer* gpuStageTimer = nullptr;
     bool initialized = false;
     bool reportedFirstDispatch = false;
 };

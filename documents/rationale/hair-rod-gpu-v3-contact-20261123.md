@@ -1685,6 +1685,41 @@ SDF 单位核对（历史上这里错过一次 100 倍）。
 再决定改哪里。**这是纯诊断、无行为风险**，且能一次性结束这轮反复出现的
 「摘掉一环却毫无变化」的僵局。
 
+### 细粒度 GPU 分段：14 ms 根本不是 GPU 在算，是 GPU 在空等
+
+上一节的疑惑（四个 SDF 环节逐个摘掉都无变化）用细粒度分段一刀解开了。
+做法：给每个 tressfx pass 和 rod 求解各自开一个 `GpuPassTimer` 分段
+（`HairSimulationPass::SetGpuStageTimer` + `RecordPass` 内 `BeginPass/EndPass`），
+并用 `VL_ROD_GPU_STAGE_TIMING=1` 让上层**不再**包一个整链分段。
+未设置时行为与之前完全一致。
+
+结果（2000 guide、固定 1 substep、SDF 场景）：
+
+```text
+[GPU] frame avg over 120: hair.rodSolve 0.00 ms | hair.sdfClear 0.00 ms |
+      hair.sdfSplat 0.20 ms | skinnedDeform 1.24 ms | ... | total 1.73 ms
+```
+
+**`hair.rodSolve` 是 0.00 ms，整条 hair 链约 0.2 ms，而整帧 GPU 总量从
+之前的 15.91 ms 掉到 1.73 ms。** 同一份场景、同一个构建，只是去掉了
+那个外层分段——如果 GPU 真在计算 14 ms，去掉分段不可能让它消失。
+
+所以那 14 ms 是**计时区间内 GPU 空等**：起始时间戳写入后，GPU 一直在等 CPU
+把剩下的命令录完。换句话说：**hair pass 是 CPU 录制嵌颈，不是 GPU 嵌颈**。
+
+这一个结论一次性解释了前面所有反常现象：
+
+- 双跑任何 shader 阶段都无变化（GPU 本来就没在跑）；
+- 摘掉 SDF 的 clear/splat/collide/查询都无变化（它们合起来只有 0.2 ms）；
+- 声明 `collisionMesh` 却多出 ~10 ms（SDF 路径多了 CPU 侧的参数写入/上传，
+  多出的是**空等时间**）；
+- `--worker-thread-count 2` 不变（录制仍在 GT）；
+- 成本随 guide 数增长（CPU 侧每帧要处理的对象/参数随规模变多）。
+
+因此 C 阶段的优化目标从「GPU kernel」彻底改为「**CPU 录制路径**」。
+下一步就是用 Tracy/NVTX 分段或直接在 `HairSimulationPass::Record` 里手工计时，
+定位到底是描述符写入、参数 UBO 上传、还是逐对象循环里的哪一步。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
