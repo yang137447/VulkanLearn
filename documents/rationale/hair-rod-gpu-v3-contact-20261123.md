@@ -1367,6 +1367,46 @@ extra = G S^-1 h, h = -gapRow
 本轮净收益为 0（失败并回退），但也确认了一件事：这条路线本身仍有价值，
 只是必须逐段验证。
 
+### 逐段二分成功：但收益只有 3%，因为常量循环本来就会被展开
+
+上一轮三段一起换导致 GPU 结果错，本轮按三分段重做，**每段单独验证**：
+
+| 步骤 | 16 guide defect | 结论 |
+| --- | --- | --- |
+| 基线 | 0.009791187942 | — |
+| 改 `extra`（三次加权和） | **0.009791187942** | 完全一致 |
+| 再改 `S`（9 个常量下标赋值） | **0.009791187942** | 完全一致 |
+| 再改 `Q`（9 个 outerProduct 项） | **0.009791187942** | 完全一致 |
+
+所以上一轮的错误就在 Q/S 的块形式本身（`transpose` 与块顺序的约定），二分法一次就把它隔离出来了。
+
+**但性能只有 27.8 → 26.9 / 27.1 ms（约 3%，在噪声内）。**
+
+原因清楚了：`for (i<6) for (j<6)` 这类循环**次数是常量**，编译器本来就会完全展开，
+下标因此变成常量，根本不进 local memory。真正触发 local memory 的是
+`RodV2Inverse` 里那个**数据相关**的索引 `augmented[selected * 12u + pivot]`——
+那才是 1.26x 的来源。
+
+**结论：动态索引已经不是剩余成本（26.9 ms vs 目标 4 ms）的解释了。**
+
+### 下一个假设：一个 workgroup 只有一个 warp，而它要占整块 shared
+
+`local_size_x = 32`，所以**一个 workgroup 就是一个 warp**。而每个 guide 的求解状态
+（`positions/velocities/orientations/...` 约 30 个 32 元素数组，粗算 10–15 KB）
+是 per-workgroup 的 shared。这意味着每个 SM 只能驻留 1–2 个 workgroup，
+也就是 **1–2 个 warp / SM，而一个 SM 本可容纳几十个**——占用率在个位数百分比。
+
+这也解释了为什么之前「让出 rodCr 的 20 KB」没有效果：剩下的 per-guide 状态
+自己就还有十几 KB，仍然只够 1–2 个 workgroup。
+
+下一轮的正路是**同一套变换再做一遍**：把 per-point 状态（positions/velocities/
+orientations 等）从 shared 挪到**寄存器**，邻点访问统统走 `subgroupShuffle`——
+这正是 CR 已经验证可行的模式。shared 降到接近 0 之后，占用率才可能从个位数
+升到几十个百分点，那才是 7x 的量级来源。
+
+验证方式：先做一个「加 dummy shared 观察性能悬崖」的标定，确认当前确实卡在
+1–2 workgroup/SM，再动手搬状态。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 
