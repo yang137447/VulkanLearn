@@ -2319,6 +2319,33 @@ shared memory**」、GPU 上只需位置/姿态分两个 pass + Jacobi 更新。
 接触改局部 barrier/投影、取消 CR 与 Schur 凝聚，V3 保留为回退。
 详细设计与分阶段迁移计划另行编写，并由独立审核体对抗性复核。
 
+### 两行漏掉的定义：SDF 管线一直在跑共享内存版 CR，补上后 −30.2%
+
+正在编写 V4 方案的子代理发现了一件下面这种事：`rodV3ImplicitSdf.comp` 自己的注释写着
+「与 `rodV3ImplicitCrCompensated.comp` 的唯一差异是 `VL_ROD_SDF`」，**但它同时缺了
+`#extension GL_KHR_shader_subgroup_shuffle` 与 `#define VL_ROD_CR_SHUFFLE` 两行**。于是：
+
+- 我们的**4 个 `SC_tressfx_rod_*` 验收场景全部声明了 `hairCollision.mesh`**，跑的是 SDF 管线；
+- 而 SDF 管线一直用的是**共享内存版 CR**，静态 shared **34,668 B**（约 2 个 workgroup/SM），
+  而不是我一直引用的 14,700 B；
+- 只有 16-guide 胶囊基准场景（`hairCollision` 只有 `capsules`）跑 14,700 B 那条。
+
+补上那两行后实测（同构建、`SC_tressfx_rod_sdf_animated`、固定 4 子步、400 帧）：
+
+| 配置 | 静态 shared（自己用 SPIR-V walker 复核） | hair 中位数 | CV |
+| --- | --- | --- | --- |
+| SDF + 共享内存 CR（原状） | 34,668 B | **107.80 ms** | 1.7% |
+| SDF + shuffle CR（+2 行） | **14,700 B** | **75.21 ms** | 0.9% |
+
+**−30.2%，而且只是补上漏掉的两行。** 这是整个 C 阶段单项最大的收益，比我这几轮磨出来的 1.3–1.5x 大得多。
+
+门禁：`cap16` 0.009791177697、`sdf_static` 0.008789401501、`static` 0.00996868033、
+`animated` 0.009974499、`sdf_animated` **0.009568191**（比原来的 0.0098–0.0100 更接近收敛，
+因为 CR 实现换了、舍入路径不同）；全部 0 失败、`gpuStatus 0`、零 validation。
+
+**教训：注释声称的「唯一差异」与实际 define 集不一致，会让整个验收集在一个从未测过的配置上跑。
+以后新增管线变体时，应当用脚本比对各 `.comp` 的 define 集，而不是相信注释。
+
 ## 复现入口
 在代码 worktree 根目录、resource worktree 已生成派生资产的前提下：
 

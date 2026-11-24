@@ -1,4 +1,5 @@
 #version 450
+#extension GL_KHR_shader_subgroup_shuffle : require
 // CosseratImplicitV3 + SDF 代理场接触。与 rodV3ImplicitCrCompensated.comp 的唯一差异是
 // VL_ROD_SDF：它额外声明 SdfGridParams(8) / SdfGrid(11) / RodSdfHistory(26) 三个绑定，
 // 因此只有声明了 hairCollision.mesh 的对象才会用这条 pipeline（见 rodGpuRecording.h）。
@@ -11,5 +12,6 @@
 #define VL_ROD_V3_LOW_DIRECTIONAL 1
 #define VL_ROD_V2_FAILURE_EXPORT 1
 #define VL_ROD_RUNTIME_FAILURE_EXPORT 1
+#define VL_ROD_CR_SHUFFLE 1
 #define VL_ROD_SDF 1
 #include "rodV2Kernel.glsl"

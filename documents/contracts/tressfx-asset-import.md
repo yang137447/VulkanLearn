@@ -1084,7 +1084,7 @@ substeps, maxIterationsLastFence, hardGuides, droppedSeconds   <-- 追加列
 | `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_static.json` | 0.0099687 ±5e-5 | 0 | 0 |
 | `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_sdf_static.json` | 0.0087894 ±5e-7 | 0 | 0 |
 | `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_animated.json` | 0.0098–0.0100 | 0 | 0 |
-| `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_sdf_animated.json` | 0.0098–0.0100 | 0 | 0 |
+| `Maps/SC_tressfx_rod_validation/SC_tressfx_rod_sdf_animated.json` | 0.0095–0.0100 | 0 | 0 |
 
 - **没有任何场景是逐位可复现的。** 即使资产固定、无动画的 16-guide 胶囊场景，实测也在
   `0.009791177697` 与 `0.009791187942` 之间抖动（约 1e-8）——因为采样轨迹依赖
