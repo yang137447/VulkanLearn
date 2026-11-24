@@ -321,7 +321,8 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     if (const char* fixed = std::getenv("VL_ROD_FIXED_SUBSTEPS"))
     {
         const long requested = std::strtol(fixed, nullptr, 10);
-        if (requested > 0 && steps != 0u)
+        // 允许 0：不派发任何 substep，但整条 pass 照跑，用于量固定开销。
+        if (requested >= 0)
             steps = std::min(static_cast<uint32_t>(requested), RodGpuMaxSteps);
     }
     RodGpuParams params;

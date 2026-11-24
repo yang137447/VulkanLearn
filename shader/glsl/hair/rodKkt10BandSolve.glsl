@@ -1093,6 +1093,15 @@ uint RodKkt10SolveCondensed(uint lane, out RodKkt10Vector direction)
 {
     for (uint component = 0u; component < 10u; ++component)
         direction.values[component] = 0.0;
+#ifdef VL_ROD_CONDENSE_DOUBLE
+    {
+        // 判别性探针：整段压缩（切向装配 + 接触几何 + 残差 + 压缩代数）做两遍。
+        // 结果用运行期永假、编译期不可知的条件引用，避免被死代码消除。
+        RodKkt6Condensed discarded = RodKkt10Condense(lane);
+        if (params.counts.x == 0xFFFFFFFFu)
+            direction.values[9] += discarded.right.linear.x;
+    }
+#endif
     RodKkt6Condensed condensed = RodKkt10Condense(lane);
     if (!condensed.valid)
         return 2u;

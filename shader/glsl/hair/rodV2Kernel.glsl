@@ -93,10 +93,15 @@ shared float v3CubicStiffness[32];
 // 牛顿更新预算。无约束的 6 分量系统 12 轮足够。带上接触活跃集后逐轮重选活跃集、
 // 建立接触力需要更多轮：16-guide 胶囊场景实测 24 轮仍有 1/16 guide 停在 1.6 mm 穿透，
 // 64 轮 16/16 收敛到 4.3e-5。预算只在难帧上真正用满（稳态 0 轮即退出）。
+// 诊断可覆盖：VL_ROD_ITERATION_BUDGET 用于成本分解（0 = 只跑装载/预测/写回 + 一次测量）。
+#ifdef VL_ROD_ITERATION_BUDGET
+const uint RodV2IterationBudget = VL_ROD_ITERATION_BUDGET;
+#else
 #ifdef VL_ROD_V3_KKT10_SOLVE
 const uint RodV2IterationBudget = 64u;
 #else
 const uint RodV2IterationBudget = 12u;
+#endif
 #endif
 
 mat3 RodV2JrInverse(vec3 angle)
