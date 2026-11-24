@@ -103,6 +103,19 @@ const uint RodV2IterationBudget = 64u;
 const uint RodV2IterationBudget = 12u;
 #endif
 #endif
+// 诊断/候选优化：VL_ROD_ITERATION_CAP 经 rod.support.w 传入（0 = 关闭）。
+// 开启后只对「上一帧已经失败」的 guide 收紧牛顿预算：这些 guide 不发布（保持
+// 上一次接受的状态），每帧从同一个冻结状态重试，吃满 64 轮完全是重复劳动，
+// 收紧它们不改变任何已发布的头发状态。首帧/瞬态（没有上一帧失败）仍拿完整
+// 预算，避免把本来能收敛的 guide 冻在 bind pose。
+// 诊断用途：设 8 可以切出「少数 guide 吃满 64 轮」的长尾成本；设大于 64 时
+// 用于回答「预算翻倍能不能让它们收敛」，上限 256。
+uint RodV2ActiveIterationBudget(uint slot)
+{
+    if (rod.support.w >= 1.0 && rodState.guides[slot].diagnostic.x != 0.0)
+        return min(uint(rod.support.w + 0.5), 256u);
+    return RodV2IterationBudget;
+}
 
 mat3 RodV2JrInverse(vec3 angle)
 {
@@ -955,7 +968,8 @@ void main()
         rodKktAxial[lane] = vec4(0);
         barrier();
 #endif
-        for (uint iteration = 0u; iteration <= RodV2IterationBudget; ++iteration)
+        uint rodV2IterationBudget = RodV2ActiveIterationBudget(slot);
+        for (uint iteration = 0u; iteration <= rodV2IterationBudget; ++iteration)
         {
             RodV2Vector direction;
 #ifdef VL_ROD_V3_KKT10_SOLVE
@@ -1009,7 +1023,7 @@ void main()
             if (failure != 0u || v2Maximum <= implicitControls.originTolerance.w)
                 break;
 #endif
-            if (iteration == RodV2IterationBudget)
+            if (iteration == rodV2IterationBudget)
             {
                 RodFail(3u);
                 barrier();

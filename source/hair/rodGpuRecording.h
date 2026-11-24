@@ -314,7 +314,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
             state.receivedSeconds += delta;
             state.debtSeconds += delta;
             // debt ceiling：超出部分主动丢弃，而不是无限追赶。每帧最多只能退休
-            // RodGpuMaxSteps × RodGpuStepSeconds = 33.3 ms，而单帧加入上限是 100 ms，
+            // RodGpuMaxSteps × 1/240 s = 33.3 ms，而单帧加入上限是 100 ms，
             // 没有上限时 debt 只能单调增长，唯一泄压阀是 Reset（可见的头发跳变）。
             // 丢弃是有意的取舍：头发总量上会比角色慢一点，但帧时间不再锯齿上涨。
             if (state.debtSeconds > RodGpuMaxDebtSeconds)
@@ -353,7 +353,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
         RodGpuV3HardFrameSteps : RodGpuMaxSteps;
     uint32_t steps = newFrame && delta > 0.0f &&
         !(progressive && state.reset) ? std::min(substepBudget,
-        static_cast<uint32_t>(std::floor((state.debtSeconds + 1.0e-9) / RodGpuStepSeconds))) : 0;
+        static_cast<uint32_t>(std::floor((state.debtSeconds + 1.0e-9) / RodGpuStepSeconds()))) : 0;
     // 成本测量的诊断开关：固定每帧 substep 数，绕开自适应上限与债务的耦合。
     // 自适应上限会在 guide 变多时把硬帧压到 1 substep、把省下的工作量记成 debt，
     // 于是「成本随 guide 数缩放」的读数会假性次线性——那是仿真在慢放，不是变快。
@@ -373,10 +373,20 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     params.material = Eigen::Vector4f(static_cast<float>(material.radius),
         static_cast<float>(material.density), static_cast<float>(material.youngModulus),
         static_cast<float>(material.shearModulus));
+    // 诊断：VL_ROD_ITERATION_CAP>0 时把每个 substep 的牛顿轮数上限定为该值
+    // （经 params.support.w 传到 shader，默认 64 不变）。用于把「少数 guide 吃满
+    // 64 轮」的长尾成本单独切出来：稳态里没有 guide 超过每 substep 1 轮，所以
+    // 8 这个上限实际上只作用于卡住的那几根。
+    static const float rodIterationCap = [] {
+        const char* value = std::getenv("VL_ROD_ITERATION_CAP");
+        const double parsed = value != nullptr ? std::strtod(value, nullptr) : 0.0;
+        return parsed >= 1.0 ? static_cast<float>(parsed) : 0.0f;
+    }();
     params.support = Eigen::Vector4f(static_cast<float>(material.supportOffsetRatio),
-        static_cast<float>(material.supportDampingRatio), static_cast<float>(material.referenceGravity), 0);
+        static_cast<float>(material.supportDampingRatio), static_cast<float>(material.referenceGravity),
+        rodIterationCap);
     params.gravityStep.head<3>() = object->GetTressfxSimulationConfig().gravity * 0.01f;
-    params.gravityStep.w() = static_cast<float>(RodGpuStepSeconds);
+    params.gravityStep.w() = static_cast<float>(RodGpuStepSeconds());
     if (progressive)
     {
         std::array<Eigen::Vector4f, 2> controls{
@@ -393,12 +403,12 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     params.flags = {state.reset ? 1u : 0u, object->HasTressfxFollowBinding() ? 1u : 0u,
         !skinning.strandBones.empty() && !pose.palette.empty() ? 1u : 0u, RodGpuSweeps << 1u};
     params.timing = Eigen::Vector4f(static_cast<float>(state.receivedSeconds),
-        static_cast<float>(state.debtSeconds - steps * RodGpuStepSeconds),
+        static_cast<float>(state.debtSeconds - steps * RodGpuStepSeconds()),
         state.sdfHistoryValid ? 1.0f : 0.0f, 0.0f);
     for (uint32_t sample = 0; sample <= steps; ++sample)
     {
         const RodGpuPose sampled = state.Sample(
-            state.dispatchedSeconds + sample * RodGpuStepSeconds);
+            state.dispatchedSeconds + sample * RodGpuStepSeconds());
         params.roots[sample] = sampled.root;
         auto* palette = static_cast<Eigen::Matrix4f*>(state.samples[frameSlot].mapped);
         for (uint32_t joint = 0; joint < state.paletteCapacity; ++joint)
@@ -438,7 +448,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
             state.fixedWorldOrigin.y(), state.fixedWorldOrigin.z()};
         metadata["snapshot"] = "post-frame; binary flushed two frame slots later";
         metadata["reset"] = state.reset;
-        metadata["stepSeconds"] = RodGpuStepSeconds;
+        metadata["stepSeconds"] = RodGpuStepSeconds();
         metadata["sweeps"] = RodGpuSweeps;
         metadata["substeps"] = steps;
         metadata["receivedSeconds"] = state.receivedSeconds;
@@ -486,7 +496,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
         for (uint32_t sample = 0; sample <= steps; ++sample)
         {
             const RodGpuPose sampled = state.Sample(
-                state.dispatchedSeconds + sample * RodGpuStepSeconds);
+                state.dispatchedSeconds + sample * RodGpuStepSeconds());
             nlohmann::json matrix = nlohmann::json::array();
             for (uint32_t entry = 0; entry < 16; ++entry)
                 matrix.push_back(sampled.root.data()[entry]);
@@ -511,7 +521,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     GuideSimulationParams oldParams = MakeGuideSkinningParams(
         object->GetTressfxGuideCount(), 32, tressfx.frameContext.skinningMatrix, params.flags[2] != 0u);
     oldParams.colliderCount = static_cast<uint32_t>(object->GetTressfxSimulationConfig().capsules.size());
-    oldParams.controls.x() = static_cast<float>(RodGpuStepSeconds);
+    oldParams.controls.x() = static_cast<float>(RodGpuStepSeconds());
     object->WriteTressfxSimulationParams(oldParams, frameSlot);
     uint32_t dispatchCount = 0;
     const bool sdfValid = object->HasTressfxSdfCollision() &&
@@ -594,8 +604,8 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
     state.readbackFrame[frameSlot] = renderScene.frameIndex;
     state.readbackGeneration[frameSlot] = state.simulationGeneration;
     state.readbackSteps[frameSlot] = steps;
-    state.dispatchedSeconds += steps * RodGpuStepSeconds;
-    state.debtSeconds -= steps * RodGpuStepSeconds;
+    state.dispatchedSeconds += steps * RodGpuStepSeconds();
+    state.debtSeconds -= steps * RodGpuStepSeconds();
     while (!state.intervals.empty() && state.intervals.front().end <= state.dispatchedSeconds + 1.0e-9)
         state.intervals.pop_front();
     state.reset = false;
@@ -608,7 +618,7 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
             " algorithmVersion=" << algorithmVersion << " profileMathVersion=" <<
             profileMathVersion << " kineticMathVersion=" << kineticMathVersion <<
             " numericEncodingVersion=" << numericEncodingVersion << " guides=" << state.guides
-            << " stateBytes=" << state.state.size << " step=" << RodGpuStepSeconds
+            << " stateBytes=" << state.state.size << " step=" << RodGpuStepSeconds()
             << " maxSteps=" << RodGpuMaxSteps << " sweeps=" << RodGpuSweeps << std::endl;
         state.reported = true;
     }

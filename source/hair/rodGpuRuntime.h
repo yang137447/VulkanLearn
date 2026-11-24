@@ -21,7 +21,19 @@ namespace VL::Hair
 {
 inline constexpr uint32_t RodGpuMaxSteps = 8;
 inline constexpr uint32_t RodGpuSweeps = 16;
-inline constexpr double RodGpuStepSeconds = 1.0 / 240.0;
+// 子步长。正常是 1/240 s。诊断开关 VL_ROD_STEP_HZ 允许换成别的频率（例如 120），
+// 用来测「大时间步 × 少子步」的成本/稳定性；默认路径行为不变。
+// 做成函数而不是 constexpr，是为了让环境变量在首次调用时解析，并避免跨 TU
+// 的静态初始化顺序问题（所有调用点都在函数体内）。
+inline double RodGpuStepSeconds()
+{
+    static const double seconds = [] {
+        const char* value = std::getenv("VL_ROD_STEP_HZ");
+        const double hertz = value != nullptr ? std::strtod(value, nullptr) : 240.0;
+        return 1.0 / (hertz > 0.0 ? hertz : 240.0);
+    }();
+    return seconds;
+}
 // V3 带接触的“硬帧”判据：上一批读回里某个 guide 用了超过这么多轮牛顿，就说明
 // 它还在首个瞬态里。此时单帧只派发 1 个 substep，把瞬态摊到多帧——2000 guide
 // 实测「8 substep × 每 guide 数十轮」会让单次 dispatch 超过 OS 的提交上限

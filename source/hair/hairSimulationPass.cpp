@@ -510,7 +510,7 @@ void HairSimulationPass::Record(vk::CommandBuffer commandBuffer,
                 traceInfo.worldGeneration = renderScene.worldGeneration;
                 traceInfo.substeps = static_cast<uint32_t>(
                     static_cast<const RodGpuParams*>(rodObject.params[frameSlot].mapped)->counts[1]);
-                traceInfo.timeStep = static_cast<float>(RodGpuStepSeconds);
+                traceInfo.timeStep = static_cast<float>(RodGpuStepSeconds());
                 traceInfo.resetReason = static_cast<const RodGpuParams*>(
                     rodObject.params[frameSlot].mapped)->flags[0] != 0 ?
                         rodObject.lastResetReason : 0;
