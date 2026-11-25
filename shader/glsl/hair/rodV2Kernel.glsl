@@ -110,10 +110,21 @@ const uint RodV2IterationBudget = 12u;
 // 预算，避免把本来能收敛的 guide 冻在 bind pose。
 // 诊断用途：设 8 可以切出「少数 guide 吃满 64 轮」的长尾成本；设大于 64 时
 // 用于回答「预算翻倍能不能让它们收敛」，上限 256。
+// 作用域：VL_ROD_ITERATION_CAP_GLOBAL 定义时对**所有** guide 生效（用于验证
+// 「少数迭代是否足够」这个前提）；否则只对上一帧已失败的 guide
+// 收紧（那些 guide 不发布、状态冻结、每帧从同一状态重试，吃满预算是重复劳动）。
+// 默认行为不变；两个开关都不定义时预算就是 RodV2IterationBudget。
 uint RodV2ActiveIterationBudget(uint slot)
 {
-    if (rod.support.w >= 1.0 && rodState.guides[slot].diagnostic.x != 0.0)
+    if (rod.support.w >= 1.0)
+    {
+#ifdef VL_ROD_ITERATION_CAP_GLOBAL
         return min(uint(rod.support.w + 0.5), 256u);
+#else
+        if (rodState.guides[slot].diagnostic.x != 0.0)
+            return min(uint(rod.support.w + 0.5), 256u);
+#endif
+    }
     return RodV2IterationBudget;
 }
 
