@@ -618,6 +618,12 @@ void RodV2Measure(uint lane, bool incrementValid)
 #include "rodKkt10BandSolve.glsl"
 #endif
 
+#ifdef VL_ROD_SPLIT_ORIENTATION
+// V4 spike Stage A1：闭式朝向更新（只验证，不改解）。必须在 RodV2StableShear 与
+// KKT include 之后——它复用同一套剪切约束与 rest 数据。
+#include "rodSplitOrientation.glsl"
+#endif
+
 // 单一测量入口：带接触 / 上拉伸约束时用 10 分量 KKT merit，否则沿用 6 分量 merit。
 void RodActiveMeasure(uint lane, bool incrementValid)
 {
@@ -1240,6 +1246,66 @@ void main()
             simulatedSeconds += step;
         barrier();
     }
+#ifdef VL_ROD_SPLIT_ORIENTATION
+    // -----------------------------------------------------------------------
+    // Stage A1：位置固定，用闭式更新从当前位置重算 31 段的朝向，并与耦合解的
+    // 朝向比较。**只测量、不发布**：v2Orientations 保持耦合解不动，闭式结果放在
+    // v2SplitOrientations（复用 v2BaseOrientations 作为 Jacobi 双缓冲）。
+    // 跳过第 0 段：它的朝向由 root 直接给定（rodV2Kernel.glsl:917-924），论文里
+    // 也是 pinned segment，不参与更新。
+    // -----------------------------------------------------------------------
+    if (lane == 0u)
+    {
+        for (uint sweep = 0u; sweep < 32u; ++sweep)
+            v2SplitSweepMax[sweep] = 0.0;
+        v2SplitMean = 0.0;
+        v2SplitPreNorm = 0.0;
+        v2SplitRaw = 0.0;
+    }
+    barrier();
+    if (failure == 0u)
+    {
+        // 第 0 段虽然不更新（root 指定），但它是 segment 1 的关节 0 的左邻居，
+        // 必须一起初始化，否则会读到 shared 的上一个 workgroup 残留。
+        if (lane < 31u)
+            v2SplitOrientations[lane] = RodSplitLocal(lane, 0u);
+        barrier();
+        for (uint sweep = 0u; sweep < VL_ROD_SPLIT_SWEEPS; ++sweep)
+        {
+            float preNormError = 0.0;
+            float rawError = 0.0;
+            if (lane >= 1u && lane < 31u)
+                v2BaseOrientations[lane] = RodSplitClosedForm(lane, 1u, preNormError, rawError);
+            barrier();
+            if (lane >= 1u && lane < 31u)
+                v2SplitOrientations[lane] = v2BaseOrientations[lane];
+            barrier();
+            float angle = (lane >= 1u && lane < 31u) ?
+                RodSplitAngle(v2SplitOrientations[lane], RodSplitLocal(lane, 0u)) : 0.0;
+            v2Metric[lane] = vec4(angle, preNormError, rawError, 0.0);
+            barrier();
+            if (lane == 0u)
+            {
+                float maximum = 0.0;
+                float sum = 0.0;
+                float preNorm = 0.0;
+                float raw = 0.0;
+                for (uint segment = 1u; segment < 31u; ++segment)
+                {
+                    maximum = max(maximum, v2Metric[segment].x);
+                    sum += v2Metric[segment].x;
+                    preNorm = max(preNorm, v2Metric[segment].y);
+                    raw = max(raw, v2Metric[segment].z);
+                }
+                v2SplitSweepMax[sweep] = maximum;
+                v2SplitMean = sum / 30.0;
+                v2SplitPreNorm = preNorm;
+                v2SplitRaw = raw;
+            }
+            barrier();
+        }
+    }
+#endif
 #ifdef VL_ROD_V2_FAILURE_EXPORT
     RodV2ExportLate(lane, slot);
     barrier();
@@ -1343,6 +1409,17 @@ void main()
             uintBitsToFloat(rodKktProbeE));
 #endif
 #endif
+#endif
+#ifdef VL_ROD_SPLIT_ORIENTATION
+        // A1 读数（口径见 rodSplitOrientation.glsl 文件头）：
+        //   energies  = 第 1/2/4/8 轮 Jacobi 扫描后 max|q_closed - q_coupled|（rad）
+        //   residuals = 第 8 轮后的段均值角、解析单位范数误差上限、归一化前长度误差上限
+        // 该写覆盖 VL_ROD_KKT10_DEBUG 的 residuals/energies：A1 是独立测量编译，
+        // 不要与旧探针同时定义（两者都要用这四个 float）。
+        rodState.guides[slot].energies = vec4(v2SplitSweepMax[0u],
+            v2SplitSweepMax[1u], v2SplitSweepMax[3u], v2SplitSweepMax[7u]);
+        rodState.guides[slot].residuals = vec4(v2SplitMean, v2SplitPreNorm,
+            v2SplitRaw, 0.0);
 #endif
         rodState.guides[slot].timing = vec4(failure == 0u ? simulatedSeconds :
             (rod.flags.x != 0u ? 0.0 : rodState.guides[slot].timing.x),
