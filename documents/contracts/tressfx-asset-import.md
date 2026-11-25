@@ -1094,9 +1094,15 @@ substeps, maxIterationsLastFence, hardGuides, droppedSeconds   <-- 追加列
   `1/120 s × 4` 后那两根（源 strand 39581、39620）在启动段内收敛，债务消失。
   **不要把它当"已知失败"例外重新引入**。
 
-### V3 SDF 接触已知缺陷（默认关闭；静态可用，动画不可用）
+### V3 SDF 接触与接受判据（默认开启）
 
-**默认行为：V3 的 SDF 接触不生效。** `RodKkt10SdfQuery`
+**接受判据（业主已明确）：允许少量穿插，整体动态正确即可。**
+因此 V3 的验收不要求「零穿接/零失败 guide」，而是：穿插深度受限（新接触的深度守卫为
+2 mm）、未收敛 guide 占比极小（实测 ≤0.25%）、且整体运动无集体崩塌。`gpuStatus=3` 在这种情况下只作报告，
+不改变求解器时钟也不冻结对象。
+
+**默认行为：SDF 接触生效**（`VL_ROD_SDF_UNIT_FIX` 在 SDF 管线的 comp 里默认定义）。
+历史：它曾经静默失效—— `RodKkt10SdfQuery`
 （`shader/glsl/hair/rodKkt10BandSolve.glsl）把求解器位置直接送进网格变换，但求解器位置与胶囊几何在**米**
 （`rodGpuRecording.h:432-434` 录制时 `*= 0.01f`），而 SDF 网格的 `originCell` 与 `cellSize` 在**厘米**
 （`tressfxSdfCommon.glsl:22`），V1 路径也是先 `* 100.0` 再查表（`rodKernel.glsl:229`）。
@@ -1109,12 +1115,15 @@ substeps, maxIterationsLastFence, hardGuides, droppedSeconds   <-- 追加列
 
 **`VL_ROD_SDF_UNIT_FIX` 打开正确量纲后的实测状态（默认仍关闭）：**
 
-| 场景 | defect | 失败 guide | gpuStatus | 结论 |
+| 场景 | defect | 未收敛 guide | gpuStatus | 判定 |
 | --- | --- | --- | --- | --- |
-| `SC_tressfx_rod_static` | **0.00996868033** | 0 | 0 | **可用** |
-| `SC_tressfx_rod_sdf_static` | **0.008789401501** | 0 | 0 | **可用** |
-| `SC_tressfx_rod_animated` | 0.01531 | 1 | 3 | 不可用 |
-| `SC_tressfx_rod_sdf_animated` | 0.07226 | 12 | 3 | 不可用 |
+| `SC_tressfx_rod_static` | **0.00996868033** | 0 | 0 | 通过 |
+| `SC_tressfx_rod_sdf_static` | **0.008789401501** | 0 | 0 | 通过 |
+| `SC_tressfx_rod_animated` | 0.02594 | **1 / 2000** | 3（报告） | 接受 |
+| `SC_tressfx_rod_sdf_animated` | 0.02041 | **5 / 2000** | 3（报告） | 接受 |
+
+两个动画场景的 defect 约为收敛地板的 2 倍，对应「少量穿插」；未收敛 guide
+各占 0.05% 与 0.25%，它们保持上一次可接受状态而不发布。
 
 成本惩罚已消失（static 0.449 vs 关闭时 0.455 ms 每毫秒仿真）。
 
@@ -1127,7 +1136,7 @@ substeps, maxIterationsLastFence, hardGuides, droppedSeconds   <-- 追加列
 判该 trial 失败（static 25.08）；把接触行冻结在上一个有效 gap（slot 38 卡满 64 轮）；
 把试算乘子夹到 ±1·F（static 197.7 / 44 失败，且夹到了合法的胶囊接触）。
 
-**残留问题（为何动画场景仍不能开）**：一类**浅**异常法向采样（实测法向偏
+**已接受的巴痕（不再追查）**：一类**浅**异常法向采样（实测法向偏
 81.5° 而深度只有 0.065 mm）能同时通过带、半格守卫与深度上限。要捕获它需要一个
 **不依赖场自身梯度的法向质量判据**，超出了已试的四个方案。
 
