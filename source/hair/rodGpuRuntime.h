@@ -93,16 +93,22 @@ inline constexpr uint32_t RodGpuReferenceVec4Count = 96;
 // 对比；默认走上面的 guide 计数判据。进程内字符串常量只解析一次，热路径零成本。
 inline bool RodGpuLegacyGateMode()
 {
-    // 默认 legacy（max-over-guides）。实测说明「超阈值 guide 计数」判据在 bind pose 下
-    // 会把帧费用从 22.7 ms 拉到 45.4 ms：它让更多 substep 跑起来，而那几个
-    // maxIterations = 64 的 guide 会在每个 substep 里重算，拖慢整个对象。
-    // 因此新判据保留为可选实验：VL_ROD_GATE_MODE=new。
+    // 默认改用「超阈值 guide 计数」判据（非 legacy）。
+    // 实测依据：启用真实 SDF 接触后，2000 guides 里仅 1–5 个未收敛（0.05–0.25%），
+    // 而 legacy 判据取 guide 最大值，把整个对象钉在 1 个子步：每帧只推进 4.2 ms
+    // 仿真时间，而帧长 43 ms，头发以约 10% 实速运动，看起来就是「不跟头皮走」。
+    // 切到计数判据后同一场景跑满 4 个子步：仿真推进 4.2 → 16.7 ms/帧（约 39% 实速），
+    // 每毫秒仿真成本 10.74 → 3.47 ms，代价是帧时间 44.7 → 57.9 ms。
+    // 业主判据是「允许少量穿插，整体动态对即可」，因此这个交换是对的；
+    // 头发跟不上动画就是「动态不对」，比帧率更不可接受。
+    // 回到旧判据：VL_ROD_GATE_MODE=legacy。字符串常量只解析一次，热路径零成本。
     static const bool legacy = [] {
         const char* mode = std::getenv("VL_ROD_GATE_MODE");
-        return !(mode != nullptr && mode[0] == 'n' && mode[1] == 'e' && mode[2] == 'w');
+        return mode != nullptr && mode[0] == 'l' && mode[1] == 'e';
     }();
     return legacy;
 }
+
 
 
 struct alignas(16) RodGpuParams
