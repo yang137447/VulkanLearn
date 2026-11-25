@@ -287,6 +287,16 @@ void HairSimulationPass::RecordRod(vk::CommandBuffer commandBuffer,
                 deltaFile.write(reinterpret_cast<const char*>(references + RodGpuReferenceVec4Count * 4), 31 * 16);
             }
         }
+        // CR3 探针取证：只有显式设置 VL_ROD_CR3_DUMP 时才落盘，默认路径零影响。
+        if (const char* probePath = std::getenv("VL_ROD_CR3_DUMP"))
+        {
+            const size_t probeOffset = state.guides * 64 +
+                (RodGpuGuideVec4Count + RodGpuReferenceVec4Count + 31) * 16;
+            std::ofstream probeFile(probePath, std::ios::binary);
+            probeFile.write(reinterpret_cast<const char*>(values) + probeOffset, 932 * 16);
+            if (probeFile)
+                std::cout << "[RodGPU] CR3 probe sidecar " << probePath << std::endl;
+        }
         state.readbackPending[frameSlot] = false;
     }
     const float delta = source ? source->simulationDeltaSeconds :

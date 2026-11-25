@@ -643,8 +643,102 @@ void RodActiveMeasure(uint lane, bool incrementValid)
 }
 
 #ifdef VL_ROD_V2_FAILURE_EXPORT
+// >>> VL_ROD_CR3_PROBE (probe evidence, inert without the define)
+#ifdef VL_ROD_CR3_PROBE
+// CR3 硬件执行探针：让 rodCrBand3Shuffle.glsl 真正在 GPU 上跑一次，并把 96 个解、
+// 状态字和原始 32 块链写进 binding 28 已经分配好的 lateMatrices（932 个 vec4）。
+// CPU 侧的 Python 镜像（artifacts/tmp/cr3x3/cr3_sim.py）用同一套整数 hash 逐位重建
+// 这条链，因此这里刻意只用 2 的幂次缩放（0.5 / 0.25）和常量对角 8.0，
+// 不出现任何会依赖舍入方向的加法，重建结果与 GPU 逐位相同。
+// 链只由 guide slot 决定；探针只在 slot == 0 执行，其它 guide 的导出数据不受影响。
+// lateMatrices 布局：0..23 = 96 个解（lane*3 + 分量）；24 = status/success/slot；
+// 25..280 = 32 个块 × 8 个 vec4（前 30 float 是 L(9) D(9) U(9) b(3)，列主序）。
+#include "rodCrBand3Shuffle.glsl"
+
+uint RodCr3ProbeHash(uint value)
+{
+    value ^= value >> 16;
+    value *= 0x7feb352du;
+    value ^= value >> 15;
+    value *= 0x846ca68bu;
+    value ^= value >> 16;
+    return value;
+}
+
+// [-1,1) 上的 24 位确定性伪随机。乘 2^-23 是精确运算，故 CPU 侧可逐位复现。
+float RodCr3ProbeRandom(uint seed, uint index)
+{
+    uint bits = RodCr3ProbeHash(index * 0x9e3779b9u + seed * 0x85ebca6bu) & 0xffffffu;
+    return float(int(bits) - 0x800000) * (1.0 / 8388608.0);
+}
+
+// 单块链的第 index 个 float（0..29）：L 0..8、D 9..17、U 18..26、b 27..29。
+// D 的对角固定 8.0、非对角 U(-0.25,0.25)，L/U 元素 U(-0.5,0.5)：每行非对角绝对值
+// 之和 <= 2*0.25 + 3*0.5 + 3*0.5 = 3.5 < 8，整条 96x96 矩阵严格行对角占优。
+float RodCr3ProbeChainEntry(uint seed, uint lane, uint entry)
+{
+    if (entry >= 9u && entry < 18u && (entry % 4u) == 1u)
+        return 8.0;
+    float value = RodCr3ProbeRandom(seed, lane * 30u + entry);
+    return entry >= 27u ? value : (entry >= 9u ? value * 0.25 : value * 0.5);
+}
+
+// 列主序组装一个 3x3 块；循环上界是编译期常量，展开后不会退化成局部内存。
+mat3 RodCr3ProbeMatrix(uint seed, uint lane, uint base)
+{
+    mat3 result = mat3(0.0);
+    for (uint column = 0u; column < 3u; ++column)
+        for (uint row = 0u; row < 3u; ++row)
+            result[column][row] = RodCr3ProbeChainEntry(seed, lane, base + column * 3u + row);
+    return result;
+}
+
+void RodCr3Probe(uint lane, uint slot)
+{
+    if (slot != 0u)
+        return;
+    uint seed = slot;
+    mat3 lower = RodCr3ProbeMatrix(seed, lane, 0u);
+    mat3 diagonal = RodCr3ProbeMatrix(seed, lane, 9u);
+    mat3 upper = RodCr3ProbeMatrix(seed, lane, 18u);
+    vec3 right = vec3(RodCr3ProbeChainEntry(seed, lane, 27u),
+        RodCr3ProbeChainEntry(seed, lane, 28u), RodCr3ProbeChainEntry(seed, lane, 29u));
+    // 原始链同时落盘：Python 侧先用它验证「逐位重建」再去求解。
+    uint blockBase = 25u + lane * 8u;
+    for (uint entry = 0u; entry < 30u; ++entry)
+        lateMatrices.values[blockBase + entry / 4u][entry % 4u] =
+            RodCr3ProbeChainEntry(seed, lane, entry);
+    vec3 solution;
+    bool success = RodCrSolveBand3Shuffle(lane, lower, diagonal, upper, right, solution);
+    for (uint component = 0u; component < 3u; ++component)
+        lateMatrices.values[(lane * 3u + component) / 4u][(lane * 3u + component) % 4u] =
+            solution[component];
+    if (lane == 0u)
+        lateMatrices.values[24u] = vec4(float(rodCr3ShuffleStatus),
+            success ? 1.0 : 0.0, float(slot), 0.0);
+#ifdef VL_ROD_CR3_PROBE_REPEAT
+    // 计时用：再跑 N 次求解。右端乘 (1 + repeat*0.01) 让每次迭代的输入确实不同，
+    // 防止编译器把循环不变求解提出循环；结果只写进 vec4[281]，不参与上面的证据值。
+    vec3 sink = vec3(0.0);
+    for (uint repeat = 0u; repeat < VL_ROD_CR3_PROBE_REPEAT; ++repeat)
+    {
+        vec3 timedSolution;
+        RodCrSolveBand3Shuffle(lane, lower, diagonal, upper,
+            right * (1.0 + float(repeat) * 0.01), timedSolution);
+        sink += timedSolution;
+    }
+    if (lane == 0u)
+        lateMatrices.values[281u] = vec4(sink, 0.0);
+#endif
+}
+#endif
+// <<< VL_ROD_CR3_PROBE
+
 void RodV2ExportLate(uint lane, uint slot)
 {
+#ifdef VL_ROD_CR3_PROBE
+    RodCr3Probe(lane, slot);
+#endif
 #ifdef VL_ROD_RUNTIME_FAILURE_EXPORT
     if (failure == 0u || implicitControls.differences.w == 0.0 ||
         slot != uint(implicitControls.differences.z))
